@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Tabs } from "../components/bits.tsx";
+import { AriaAnnouncer } from "../components/AriaAnnouncer.tsx";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,6 +13,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
+        <AriaAnnouncer />
         <div className="shell">
           <header className="top">
             <div className="brand">
