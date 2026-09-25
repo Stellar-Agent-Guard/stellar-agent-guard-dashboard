@@ -36,7 +36,9 @@ export function CommandPaletteInner({
   useEffect(() => {
     if (open) {
       inputRef.current?.focus();
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setQuery("");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setActiveIndex(0);
     }
   }, [open]);
@@ -76,6 +78,7 @@ export function CommandPaletteInner({
   }, [query, router, guard, instances, selectGuard]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setActiveIndex(0);
   }, [query, commands.length]);
 
@@ -123,12 +126,13 @@ export function CommandPaletteInner({
             placeholder="Search commands..."
             role="combobox"
             aria-expanded={open}
+            aria-controls="command-list"
             aria-autocomplete="list"
             aria-activedescendant={commands[activeIndex]?.id}
             style={{ fontSize: "16px", padding: "12px", border: "none", outline: "none", width: "100%", background: "transparent", borderBottom: "1px solid var(--line)" }}
           />
         </div>
-        <ul ref={listRef} style={{ listStyle: "none", padding: "0 0 12px 0", margin: 0, maxHeight: "400px", overflowY: "auto" }}>
+        <ul id="command-list" ref={listRef} style={{ listStyle: "none", padding: "0 0 12px 0", margin: 0, maxHeight: "400px", overflowY: "auto" }}>
           {commands.map((cmd, i) => (
             <li
               key={cmd.id}
