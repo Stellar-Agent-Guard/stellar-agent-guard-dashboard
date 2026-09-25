@@ -78,6 +78,12 @@ export type InvokeResult =
       /** Total fee paid, in stroops (inclusion fee + resource fee). */
       feeStroops?: string;
       diagnosticEvents: unknown[];
+    }
+  | {
+      /** An unsigned transaction XDR was successfully exported for external tools. */
+      kind: "exported";
+      xdr: string;
+      detail?: string;
     };
 
 export interface InvokeRequest {
@@ -87,6 +93,7 @@ export interface InvokeRequest {
   args: xdr.ScVal[];
   signer: WalletSigner;
   passphrase?: string;
+  exportOnly?: boolean;
   /**
    * A smart account whose own storage must be merged into the footprint. Only
    * needed when the call is authorized *by* the guard (its `__check_auth` reads
@@ -510,6 +517,14 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     passphrase,
     guard: request.guardForFootprint ?? null,
   });
+
+  if (request.exportOnly) {
+    return {
+      kind: "exported",
+      xdr: assembled.transaction.toXDR()
+    };
+  }
+
   promptWallet();
   const signedEnvelope = await signer.signTransaction(assembled.transaction.toXDR());
   const transaction = TransactionBuilder.fromXDR(signedEnvelope, passphrase) as Transaction;
@@ -592,7 +607,9 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
  */
 export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeResult> {
   const result = await runInvocation(request);
-  if (result.kind === "refused") {
+  if (result.kind === "exported") {
+    announce("Transaction XDR exported for offline signing");
+  } else if (result.kind === "refused") {
     announce("Transaction refused — nothing was broadcast");
   } else if (result.kind === "failed") {
     recordTx({
@@ -602,7 +619,7 @@ export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeRe
       feeStroops: result.feeStroops ?? null,
     });
     announce("Transaction failed on chain");
-  } else {
+  } else if (result.kind === "submitted") {
     recordTx({
       hash: result.hash,
       operation: request.fn,
