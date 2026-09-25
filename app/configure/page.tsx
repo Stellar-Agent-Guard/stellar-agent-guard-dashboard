@@ -1,3 +1,4 @@
+import { CommandPalette } from "../../components/CommandPalette.tsx";
 import { GuardProvider } from "../../components/GuardProvider.tsx";
 import { WalletBar } from "../../components/WalletBar.tsx";
 import { DeployPanel } from "../../components/DeployPanel.tsx";
