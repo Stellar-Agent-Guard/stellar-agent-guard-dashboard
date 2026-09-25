@@ -30,7 +30,16 @@ import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { createServer } from "../lib/guard/chain.ts";
 import { readGuardSnapshot, type GuardSnapshot } from "../lib/guard/guardOps.ts";
 import { NETWORK } from "../lib/guard/network.ts";
-import { GuardFeed } from "../lib/guard/telemetry.ts";
+import {
+  GuardFeed,
+  clearStreamRows,
+  emptyStreamBuffer,
+  eventKey,
+  ingestEvents,
+  pauseStream as pauseBuffer,
+  resumeStream as resumeBuffer,
+  type StreamBuffer,
+} from "../lib/guard/telemetry.ts";
 import { createTabSync, type TabSyncEventType } from "../lib/guard/tabSync.ts";
 import {
   KNOWN_INSTANCES,
@@ -86,6 +95,19 @@ interface GuardContextValue {
   };
   startWatching: () => void;
   stopWatching: () => void;
+  /**
+   * Stream display controls. Pausing freezes the table while polling carries on
+   * in the background; new events queue until resume.
+   */
+  stream: {
+    paused: boolean;
+    pendingCount: number;
+    /** Queued events that fell past the buffer limit during a long pause. */
+    dropped: number;
+  };
+  pauseStream: () => void;
+  resumeStream: () => void;
+  /** Empty the visible list. The poll cursor and any queued events are kept. */
   clearEvents: () => void;
   /** Surface refused-write diagnostics in the feed, labelled as diagnostics. */
   pushEvents: (events: GuardEvent[]) => void;
@@ -104,19 +126,6 @@ interface GuardContextValue {
 }
 
 const GuardContext = createContext<GuardContextValue | null>(null);
-
-/** A stable identity for an event, so re-polling the same page cannot duplicate rows. */
-function eventKey(event: GuardEvent): string {
-  return [
-    event.source,
-    event.transactionHash ?? "-",
-    event.ledger ?? "-",
-    event.topic,
-    event.decision?.result ?? "-",
-    event.decision?.reason ?? "-",
-    typeof event.data === "object" && event.data !== null ? JSON.stringify(event.data) : String(event.data),
-  ].join("|");
-}
 
 export function GuardProvider({ children }: { children: ReactNode }) {
   const server = useMemo(() => createServer(NETWORK.rpcUrl), []);
@@ -138,7 +147,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<GuardSnapshot | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [events, setEvents] = useState<GuardEvent[]>([]);
+  const [buffer, setBuffer] = useState<StreamBuffer>(emptyStreamBuffer);
   const [feed, setFeed] = useState<GuardContextValue["feed"]>({
     watching: false,
     latestLedger: null,
@@ -149,7 +158,6 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   // The feed instance is kept in a ref so a re-render never resets its cursor —
   // losing the cursor would silently re-scan and re-deliver events.
   const feedRef = useRef<GuardFeed | null>(null);
-  const seenRef = useRef<Set<string>>(new Set());
   // The active guard, readable from the (long-lived) sync listener without
   // re-subscribing on every guard change.
   const guardRef = useRef(guard);
@@ -186,7 +194,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   // fixtures never touch RPC, so this cannot fire a chain read.
   useEffect(() => {
     if (!demo) return;
-    setEvents(demoEvents());
+    setBuffer(ingestEvents(emptyStreamBuffer(), demoEvents(), { dedupe: false }));
     setFeed((current) => ({ ...current, watching: true, latestLedger: DEMO_BASE_LEDGER, error: null }));
   }, [demo]);
 
@@ -296,8 +304,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
           setGuard(next);
           setSnapshot(null);
           setSnapshotError(null);
-          setEvents([]);
-          seenRef.current = new Set();
+          setBuffer(emptyStreamBuffer());
           return;
         }
         case "FREEZE_STATE_CHANGED":
@@ -324,8 +331,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     (next: string) => {
       setGuard(next);
       setSnapshot(null);
-      setEvents([]);
-      seenRef.current = new Set();
+      setBuffer(emptyStreamBuffer());
       // Every other tab follows the operator's selection instead of continuing to
       // poll a guard they are no longer looking at.
       tabSync.broadcast("GUARD_CHANGED", { guard: next });
@@ -346,18 +352,11 @@ export function GuardProvider({ children }: { children: ReactNode }) {
 
   const pushEvents = useCallback((incoming: GuardEvent[]) => {
     if (incoming.length === 0) return;
-    setEvents((current) => {
-      const fresh = incoming.filter((event) => {
-        const key = eventKey(event);
-        if (seenRef.current.has(key)) return false;
-        seenRef.current.add(key);
-        return true;
-      });
-      if (fresh.length === 0) return current;
-      // Newest first, and bounded: the feed is a live view, not an archive.
-      return [...fresh, ...current].slice(0, 250);
-    });
+    setBuffer((current) => ingestEvents(current, incoming));
   }, []);
+
+  const pauseStream = useCallback(() => setBuffer(pauseBuffer), []);
+  const resumeStream = useCallback(() => setBuffer((current) => resumeBuffer(current)), []);
 
   const startWatching = useCallback(() => {
     if (!demo && (!feedRef.current || feedRef.current.guard !== guard)) {
@@ -370,10 +369,9 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     setFeed((current) => ({ ...current, watching: false }));
   }, []);
 
-  const clearEvents = useCallback(() => {
-    setEvents([]);
-    seenRef.current = new Set();
-  }, []);
+  const clearEvents = useCallback(() => setBuffer(clearStreamRows), []);
+  /** Drop everything, queued events and history included: a new guard or a locked session. */
+  const resetEvents = useCallback(() => setBuffer(emptyStreamBuffer()), []);
 
   // ── Operator session auto-lock ───────────────────────────────────────────
   // The countdown only runs while a wallet is connected: there is nothing to
@@ -383,8 +381,8 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   const [idleTimeoutMs, setIdleTimeoutMs] = useState<number>(() => loadIdleTimeoutMs());
   const handleIdleExpire = useCallback(() => {
     disconnect();
-    clearEvents();
-  }, [disconnect, clearEvents]);
+    resetEvents();
+  }, [disconnect, resetEvents]);
   const { state: idleState, stayConnected } = useIdleTimer({
     timeoutMs: idleTimeoutMs,
     enabled: wallet !== null,
@@ -407,7 +405,9 @@ export function GuardProvider({ children }: { children: ReactNode }) {
         if (demoCancelled) return;
         const event = syntheticDemoEvent(sequence, Date.now());
         sequence += 1;
-        setEvents((current) => [event, ...current].slice(0, 250));
+        // Demo events can repeat fields (two identical refusals), so skip
+        // dedupe: each synthetic event is a distinct occurrence.
+        setBuffer((current) => ingestEvents(current, [event], { dedupe: false }));
         setFeed((current) => ({
           ...current,
           latestLedger: DEMO_BASE_LEDGER + sequence,
@@ -469,8 +469,11 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     snapshotError,
     refreshing,
     refresh,
-    events,
+    events: buffer.rows,
     feed,
+    stream: { paused: buffer.paused, pendingCount: buffer.pending.length, dropped: buffer.dropped },
+    pauseStream,
+    resumeStream,
     startWatching,
     stopWatching,
     clearEvents,
