@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { DemoBadge } from "../components/DemoBadge.tsx";
 import { Tabs } from "../components/bits.tsx";
 import "./globals.css";
 
@@ -13,6 +14,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <div className="shell">
+          <DemoBadge />
           <header className="top">
             <div className="brand">
               <h1>Stellar Agent Guard</h1>

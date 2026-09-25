@@ -283,6 +283,21 @@ label.field .hint {
   margin-bottom: 4px;
 }
 
+.demo-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px dashed var(--warn);
+  background: #2a2010;
+  color: var(--warn);
+  border-radius: 9px;
+  padding: 9px 13px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 table.events {
   width: 100%;
   border-collapse: collapse;
