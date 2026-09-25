@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Account, Operation, Transaction } from "@stellar/stellar-sdk";
-import { buildInitialEnvelope, assembleFromSimulation } from "../../lib/guard/submit.ts";
+import { Account, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
+import { assembleFromSimulation } from "../../lib/guard/submit.ts";
 
 test("assembleFromSimulation correctly builds transaction without prompting for signature", async () => {
-  const source = new Account("GAOBCRXTCO4ZCBNHALJUMJJ5JDXNOUZ7U6VZJX4UBTXAHQEO66IPU6PH", "12345");
+  const sourceAccountId = "GAOBCRXTCO4ZCBNHALJUMJJ5JDXNOUZ7U6VZJX4UBTXAHQEO66IPU6PH";
+  const source = new Account(sourceAccountId, "12345");
+  const contractId = "CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU7";
   const operation = Operation.invokeContractFunction({
-    contract: "CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU7",
+    contract: contractId,
     function: "set_policy",
     args: [],
   });
@@ -17,20 +19,28 @@ test("assembleFromSimulation correctly builds transaction without prompting for 
     minResourceFee: "100",
   };
 
-  // Wait, assembleFromSimulation requires SorobanDataBuilder or string.
-  // Actually we don't even need to run invokeWithWallet, we can just test assembleFromSimulation directly.
+  const passphrase = "Test SDF Network ; September 2015";
   const assembled = assembleFromSimulation({
     simulation: simulationResult,
     source,
     operation,
-    passphrase: "Test SDF Network ; September 2015",
+    passphrase,
     guard: null,
   });
 
-  assert.ok(assembled.transaction);
-  assert.equal(assembled.transaction.fee, "200"); // 100 base + 100 minResourceFee
+  assert.ok(assembled.transaction, "Assembly should return a transaction object");
+  assert.equal(assembled.transaction.fee, "200", "Total fee should be 100 base + 100 minResourceFee");
   
   const xdr = assembled.transaction.toXDR();
-  assert.ok(typeof xdr === "string");
-  assert.ok(xdr.length > 0);
+  assert.ok(typeof xdr === "string", "Exported XDR should be a string");
+  assert.ok(xdr.length > 0, "Exported XDR should not be empty");
+  
+  // Verify the base64 XDR can be properly deserialized into the expected transaction
+  const deserializedTx = TransactionBuilder.fromXDR(xdr, passphrase) as import("@stellar/stellar-sdk").Transaction;
+  assert.equal(deserializedTx.source, sourceAccountId, "Source account should match");
+  assert.equal(deserializedTx.sequence, "12346", "Sequence number should be incremented");
+  assert.equal(deserializedTx.operations.length, 1, "Should contain exactly one operation");
+  
+  const op = deserializedTx.operations[0] as any;
+  assert.equal(op.type, "invokeHostFunction", "Operation should be an invokeHostFunction");
 });
