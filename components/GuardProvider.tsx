@@ -296,4 +296,4 @@ export function useGuard(): GuardContextValue {
   return value;
 }
 
-export { eventKey };
+export { eventKey, GuardContext };
