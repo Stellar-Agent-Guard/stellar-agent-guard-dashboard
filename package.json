@@ -16,6 +16,10 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/unit/*.test.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:visual": "playwright test tests/e2e/visual.spec.ts",
+    "test:visual:update": "playwright test tests/e2e/visual.spec.ts --update-snapshots",
     "prove:phase3": "node scripts/prove-phase3.ts",
     "inspect": "node scripts/inspect-instance.ts"
   },
@@ -28,6 +32,7 @@
     "stellar-agent-guard-sdk": "^0.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^26.5.1",
     "@types/react": "^19.2.0",

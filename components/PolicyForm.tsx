@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { findFlaggedInDraft } from "../lib/guard/securityChecker";
 import type { PolicyDraft } from "../lib/guard/policyForm.ts";
 import {
   EMPTY_DRAFT,
@@ -90,6 +91,27 @@ export function PolicyForm() {
     setBusy(true);
     setError(null);
     setOutcome(null);
+    // Check for flagged addresses and require explicit double-confirmation.
+    const flagged = findFlaggedInDraft({ assets: effective.assets, recipients: effective.recipients, protocols: effective.protocols });
+    if (flagged.length > 0) {
+      const proceed = window.confirm(
+        "CRITICAL: This policy includes addresses that have been flagged as malicious or compromised.\n\nFlagged addresses:\n" +
+          flagged.join("\n") +
+          "\n\nType OK to proceed."
+      );
+      if (!proceed) {
+        setError("Submission cancelled: flagged addresses present.");
+        setBusy(false);
+        return;
+      }
+      // Second confirmation
+      const proceed2 = window.confirm("Please confirm again: install policy containing flagged addresses?");
+      if (!proceed2) {
+        setError("Submission cancelled: second confirmation declined.");
+        setBusy(false);
+        return;
+      }
+    }
     try {
       const result = await installPolicy({ server, signer: signer(), guard, draft: effective });
       setOutcome(result);
