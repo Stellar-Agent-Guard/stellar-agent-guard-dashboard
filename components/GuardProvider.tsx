@@ -31,6 +31,11 @@ import { createServer } from "../lib/guard/chain.ts";
 import { readGuardSnapshot, type GuardSnapshot } from "../lib/guard/guardOps.ts";
 import { NETWORK } from "../lib/guard/network.ts";
 import { GuardFeed } from "../lib/guard/telemetry.ts";
+import {
+  FEED_GUARD_CAP,
+  MultiGuardFeed,
+  type FeedSource,
+} from "../lib/guard/feedSubscriptions.ts";
 import { createTabSync, type TabSyncEventType } from "../lib/guard/tabSync.ts";
 import {
   KNOWN_INSTANCES,
@@ -77,6 +82,12 @@ interface GuardContextValue {
     latestLedger: number | null;
     error: string | null;
     lastPolledAt: string | null;
+    /** The guards currently tailed (up to `cap`), with their registry labels. */
+    guards: FeedSource[];
+    /** How many registry entries the cap is excluding right now. */
+    capped: number;
+    /** Labels of the excluded guards, so the cap can be named, not just counted. */
+    cappedLabels: string[];
   };
   startWatching: () => void;
   stopWatching: () => void;
@@ -95,6 +106,7 @@ const GuardContext = createContext<GuardContextValue | null>(null);
 /** A stable identity for an event, so re-polling the same page cannot duplicate rows. */
 function eventKey(event: GuardEvent): string {
   return [
+    event.contractId ?? "-",
     event.source,
     event.transactionHash ?? "-",
     event.ledger ?? "-",
@@ -131,11 +143,16 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     latestLedger: null,
     error: null,
     lastPolledAt: null,
+    guards: [],
+    capped: 0,
+    cappedLabels: [],
   });
 
-  // The feed instance is kept in a ref so a re-render never resets its cursor —
-  // losing the cursor would silently re-scan and re-deliver events.
-  const feedRef = useRef<GuardFeed | null>(null);
+  // The multi-guard supervisor is kept in a ref so a re-render never resets the
+  // per-guard cursors — losing a cursor would silently re-scan and re-deliver
+  // events. It fans out one listener per tailed guard, reconciled on registry
+  // changes (see `lib/guard/feedSubscriptions.ts`).
+  const multiFeedRef = useRef<MultiGuardFeed | null>(null);
   const seenRef = useRef<Set<string>>(new Set());
   // The active guard, readable from the (long-lived) sync listener without
   // re-subscribing on every guard change.
@@ -347,20 +364,62 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const startWatching = useCallback(() => {
-    if (!demo && (!feedRef.current || feedRef.current.guard !== guard)) {
-      feedRef.current = new GuardFeed(server, guard);
+    if (!demo) {
+      if (!multiFeedRef.current) {
+        multiFeedRef.current = new MultiGuardFeed({
+          cap: FEED_GUARD_CAP,
+          createFeed: (target) => new GuardFeed(server, target),
+        });
+      }
+      multiFeedRef.current.sync(
+        instances.map((instance) => ({ guard: instance.guard, label: instance.label })),
+      );
+      const dropped = multiFeedRef.current.dropped();
+      setFeed((current) => ({
+        ...current,
+        watching: true,
+        error: null,
+        guards: multiFeedRef.current?.guards() ?? [],
+        capped: dropped.length,
+        cappedLabels: dropped.map((source) => source.label),
+      }));
+      return;
     }
     setFeed((current) => ({ ...current, watching: true, error: null }));
-  }, [guard, server, demo]);
+  }, [instances, server, demo]);
 
   const stopWatching = useCallback(() => {
-    setFeed((current) => ({ ...current, watching: false }));
+    multiFeedRef.current?.stopAll();
+    multiFeedRef.current = null;
+    setFeed((current) => ({ ...current, watching: false, guards: [], capped: 0, cappedLabels: [] }));
   }, []);
 
   const clearEvents = useCallback(() => {
     setEvents([]);
     seenRef.current = new Set();
   }, []);
+
+  // Keep the running listeners aligned with the registry while watching. This is
+  // what removes a deleted guard's listener (and stops its stream) and starts a
+  // new one for an added guard, without ever exceeding the cap.
+  useEffect(() => {
+    if (demo || !feed.watching) return;
+    const runner = multiFeedRef.current;
+    if (!runner) return;
+    runner.sync(instances.map((instance) => ({ guard: instance.guard, label: instance.label })));
+    const dropped = runner.dropped();
+    setFeed((current) => ({
+      ...current,
+      guards: runner.guards(),
+      capped: dropped.length,
+      cappedLabels: dropped.map((source) => source.label),
+    }));
+  }, [instances, feed.watching, demo]);
+
+  // The supervisor is deliberately never torn down by an effect cleanup: React's
+  // development StrictMode mount/unmount/mount cycle would stop the listeners on
+  // the simulated unmount and leave the tab unable to tail. The provider lives as
+  // long as the document, and the polling effect below clears its own interval.
 
   useEffect(() => {
     if (!feed.watching) return;
@@ -391,17 +450,22 @@ export function GuardProvider({ children }: { children: ReactNode }) {
 
     let cancelled = false;
     const tick = async () => {
-      const feedRunner = feedRef.current;
+      const feedRunner = multiFeedRef.current;
       if (!feedRunner) return;
       try {
-        const page = await feedRunner.pollOnce();
+        const page = await feedRunner.pollAll();
         if (cancelled) return;
         pushEvents(page.events);
+        // One guard failing to poll is reported on its own line and does not
+        // blank the guards that answered. `error` carries the first failure so
+        // the panel still has a headline to show.
+        const failed = page.watch.find((entry) => !entry.ok);
         setFeed((current) => ({
           ...current,
           latestLedger: page.latestLedger,
           lastPolledAt: new Date().toISOString(),
-          error: null,
+          guards: feedRunner.guards(),
+          error: failed ? `${failed.label}: ${failed.error}` : null,
         }));
       } catch (error) {
         if (cancelled) return;

@@ -4,6 +4,7 @@ import { deadManRemaining, describePolicy, isDeadManFrozen } from "stellar-agent
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, Read, Stat, relativeTime, short } from "./bits.tsx";
 import { PHASE1_ARTIFACT } from "../lib/guard/network.ts";
+import { defaultDenyWarning } from "../lib/guard/setupChecklist.ts";
 
 /**
  * The guard's live state, every field read from the chain on each refresh.
@@ -38,6 +39,19 @@ export function StatusPanel() {
           title="The guard's state could not be read"
           detail={`${snapshotError} — no values are shown, because a failed read is not an empty policy.`}
         />
+      )}
+
+      {/* Derived from `status()` alone, so it shows regardless of whether the
+          post-deploy checklist has been dismissed. The warning is the safety
+          invariant; the wizard is only an affordance. */}
+      {snapshot && defaultDenyWarning(snapshot.status) && (
+        <div className="notice" role="status">
+          <strong>No policy installed — the account is in default-deny</strong>
+          <span className="tiny">
+            With no policy the account refuses every call, including its own agent. Dismissing the
+            post-deploy checklist does not clear this warning; only installing a policy does.
+          </span>
+        </div>
       )}
 
       {!snapshot && !snapshotError && <p className="muted tiny">Reading the chain…</p>}

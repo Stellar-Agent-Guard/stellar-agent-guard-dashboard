@@ -61,7 +61,9 @@ Enforcement happens **inside the account itself**, via Soroban's native Custom A
 - **No-code guardrail configurator (`/configure`)**: Interactive form for defining spending policies without writing code: per-transaction cap, rolling-window cap and length, asset allowlists, recipient allowlists, protocol allowlists, active execution windows, pause state, and dead-man switch grace periods. Validates inputs locally before prompting Freighter, encodes via SDK `policyToScVal`, and executes `set_policy`.
 - **Artifact-verified guard deployment**: Deploys fresh guard accounts from verified on-chain WASM bytecode with cryptographic address prediction.
 - **Emergency panic button (`PanicPanel`)**: Two-step confirmation modal with wallet-signed `freeze()` execution, followed by a mandatory on-chain re-read of `status()` confirming `admin_frozen = true` before updating UI state. Provides matching wallet-signed `unfreeze()` reversal.
-- **Live event telemetry feed (`TelemetryFeed`)**: Cursor-based polling of `event_auth_checked` topics from Soroban RPC, decoding contract outcomes and reason codes using the SDK's verified vocabulary.
+- **Live event telemetry feed (`TelemetryFeed`)**: Cursor-based polling of `event_auth_checked` topics from Soroban RPC, decoding contract outcomes and reason codes using the SDK's verified vocabulary. It tails **several guards at once** — one merged feed with a per-row guard-attribution chip and a guard-chip filter — capped at **5** simultaneous guards (see the poll-load clause below).
+- **Multi-guard tail with a documented poll budget**: Tailing N guards is N `getEvents` poll loops, because the SDK's telemetry listener is single-guard. The feed therefore watches at most **5** guards at a time and names any registry entry beyond that cap as *not tailed* rather than silently multiplying RPC load. **Live multi-tail poll load scales with the number of guards watched**; the cap keeps that bounded. Operators tune the underlying request cost with the SDK's page-size and jitter knobs (see the SDK repo) rather than by adding more guards here.
+- **Guided post-deploy checklist (`SetupWizard`)**: A four-step tracker — deployed → initialized → policy installed → verified — persisted per guard, with each step actionable inline and a clear dismiss affordance. Every step's state is *derived from a live chain read*, not from a stored completion flag: a step cannot stay green after the chain says otherwise, and dismissing the wizard never conceals the default-deny warning that `StatusPanel` renders from `status()`.
 - **Installable PWA shell**: A `manifest.json`, responsive vector icons and a static-shell-only service worker let the console be installed and opened instantly on a phone or after a local network drop. Every `/soroban/rpc` and Horizon request is hard-bypassed — the worker never reads or writes a cache for chain state, so an offline shell can never present a cached balance or freeze flag as if it were live.
 - **Cross-tab lockstep**: A `BroadcastChannel` coordinator (with a `localStorage` fallback) propagates guard switches, confirmed freezes and policy installs across every open tab. Receiving tabs re-read the chain rather than trusting the broadcast, and never overwrite a form edit in progress.
 
@@ -103,7 +105,7 @@ Demo mode is strictly opt-in. When neither the environment flag nor the query pa
 ```bash
 npm run typecheck    # tsc --noEmit
 npm run lint         # eslint
-npm test             # unit tests (31/31 passing)
+npm test             # unit tests (155/155 passing)
 npm run build        # Next.js production build
 npm run inspect      # read-only dump of an instance's state
 ```
@@ -115,6 +117,7 @@ npm run inspect      # read-only dump of an instance's state
 - **`/` (Console Overview)**: Displays connected wallet, active guard address, current balance, policy parameters summary, dead-man switch countdown, live telemetry event stream, and the emergency panic button.
 - **`/configure` (Policy Configurator & Deployment)**:
   - Deploy fresh guard accounts from verified on-chain WASM bytecode.
+  - Follow the **post-deploy checklist** (`SetupWizard`): deploy → initialize → install policy → verify, each step derived from a live read, dismissible, and reopenable.
   - Configure spending policy parameters with real-time validation.
   - Sign and submit `set_policy` transactions.
 
@@ -127,7 +130,8 @@ npm run inspect      # read-only dump of an instance's state
   - Submits wallet-signed `freeze()` transaction.
   - Re-reads contract `status()` to verify `admin_frozen = true`.
   - Provides wallet-signed `unfreeze()` to restore normal operations.
-- **`TelemetryFeed`**: Cursor-based polling of `event_auth_checked` topics from Soroban RPC, decoding contract outcomes and reason codes.
+- **`TelemetryFeed`**: Cursor-based polling of `event_auth_checked` topics from Soroban RPC for up to `FEED_GUARD_CAP` (5) guards simultaneously, decoding contract outcomes and reason codes. Each row carries its source guard's registry label, and a guard-chip filter narrows the merged feed. When the registry exceeds the cap, the panel shows which guards are *not* being tailed instead of dropping them silently.
+- **`SetupWizard`**: The post-deploy checklist. Steps derive from `isInitialized()`, `status()` and `policy()`; only the operator's own live re-read can turn the verify step green (mirroring `PanicPanel`'s mandatory on-chain re-read). The only persisted state is the dismiss flag and the deploy marker.
 - **`WalletBar`**: Displays Freighter connection status, address, and network validation.
 
 ## Operator Runbooks
