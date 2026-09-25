@@ -209,3 +209,4 @@ React components are thin over them and are not covered by automated tests.
 ## 10. Architecture Decision Records
 Key architectural decisions are documented in ADRs under \docs/adr/\:
 - [ADR 001 - Zero-Server Client-Only Architecture](docs/adr/001-zero-server-architecture.md)
+- [ADR 003 - Non-Custodial Freighter Wallet Signing Model](docs/adr/003-non-custodial-wallet-model.md)
