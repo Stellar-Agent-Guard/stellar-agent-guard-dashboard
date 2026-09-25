@@ -7,12 +7,27 @@ const config: NextConfig = {
   // There is deliberately no API route that touches a key.
   poweredByHeader: false,
   async headers() {
+    const csp = [
+      "default-src 'self'",
+      "base-uri 'self'",
+      "object-src 'none'",
+      "frame-ancestors 'none'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      "connect-src 'self' https://horizon-testnet.stellar.org https://horizon.stellar.org https://soroban-testnet.stellar.org https://soroban-mainnet.stellar.org https://friendbot.stellar.org http://localhost:3000 http://localhost:3001 ws://localhost:3000 ws://localhost:3001",
+      "form-action 'self'",
+      "upgrade-insecure-requests",
+    ].join("; ");
+
     return [
       {
         source: "/(.*)",
         headers: [
+          { key: "Content-Security-Policy", value: csp },
           { key: "X-Content-Type-Options", value: "nosniff" },
-          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "X-Frame-Options", value: "DENY" },
         ],
       },
