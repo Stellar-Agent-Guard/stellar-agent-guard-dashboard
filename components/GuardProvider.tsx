@@ -31,6 +31,7 @@ import { createServer } from "../lib/guard/chain.ts";
 import { readGuardSnapshot, type GuardSnapshot } from "../lib/guard/guardOps.ts";
 import { NETWORK } from "../lib/guard/network.ts";
 import { GuardFeed } from "../lib/guard/telemetry.ts";
+import { createTabSync, type TabSyncEventType } from "../lib/guard/tabSync.ts";
 import {
   KNOWN_INSTANCES,
   loadInstances,
@@ -82,6 +83,11 @@ interface GuardContextValue {
   clearEvents: () => void;
   /** Surface refused-write diagnostics in the feed, labelled as diagnostics. */
   pushEvents: (events: GuardEvent[]) => void;
+  /**
+   * Tell the other open tabs that this one changed something. The provider adds
+   * the active guard, so callers only name the change.
+   */
+  notifyTabs: (type: TabSyncEventType, options?: { payload?: Record<string, unknown> }) => void;
 }
 
 const GuardContext = createContext<GuardContextValue | null>(null);
@@ -101,6 +107,10 @@ function eventKey(event: GuardEvent): string {
 
 export function GuardProvider({ children }: { children: ReactNode }) {
   const server = useMemo(() => createServer(NETWORK.rpcUrl), []);
+  // The cross-tab coordinator. It is transport-agnostic (BroadcastChannel with a
+  // localStorage fallback) and inert where neither exists, so the provider never
+  // branches on availability. Created once per tab.
+  const tabSync = useMemo(() => createTabSync(), []);
   // Demo mode is settled synchronously from the build-time flag, then re-checked
   // for `?demo=true` in an effect — the query string is not visible during SSR,
   // and reading it during render would desynchronise hydration.
@@ -127,6 +137,19 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   // losing the cursor would silently re-scan and re-deliver events.
   const feedRef = useRef<GuardFeed | null>(null);
   const seenRef = useRef<Set<string>>(new Set());
+  // The active guard, readable from the (long-lived) sync listener without
+  // re-subscribing on every guard change.
+  const guardRef = useRef(guard);
+
+  useEffect(() => {
+    guardRef.current = guard;
+  }, [guard]);
+
+  // The coordinator is deliberately never closed by an effect cleanup: React's
+  // development StrictMode mount/unmount/mount cycle would close the channel on
+  // the simulated unmount and leave the tab permanently unable to broadcast. The
+  // provider lives as long as the document, and the browser closes the channel
+  // with the page.
 
   useEffect(() => {
     // Demo mode pins the selector to the single fixture instance, so a value the
@@ -194,7 +217,20 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const disconnect = useCallback(() => setWallet(null), []);
+  const disconnect = useCallback(() => {
+    setWallet(null);
+    tabSync.broadcast("WALLET_DISCONNECTED", { guard: guardRef.current });
+  }, [tabSync]);
+
+  const notifyTabs = useCallback(
+    (type: TabSyncEventType, options?: { payload?: Record<string, unknown> }) => {
+      tabSync.broadcast(type, {
+        guard: guardRef.current,
+        ...(options?.payload === undefined ? {} : { payload: options.payload }),
+      });
+    },
+    [tabSync],
+  );
 
   const signer = useCallback((): WalletSigner => {
     if (demo) {
@@ -226,25 +262,74 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     }
   }, [guard, server, wallet?.address, demo]);
 
+  // The sync listener below is installed once, but `refresh` changes identity
+  // with the guard and wallet, so it reaches it through a ref rather than
+  // forcing a re-subscription (and a possible missed event) on every change.
+  const refreshRef = useRef(refresh);
+  useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
+
+  // React to what the other tabs announce. Nothing crosses the wire as state:
+  // `GUARD_CHANGED` carries an address to select, and the freeze/policy events
+  // only prompt a re-read of the chain. Form drafts live in the panel's own
+  // component state, so a remote refresh can never overwrite an edit in progress.
+  useEffect(() => {
+    return tabSync.subscribe((event) => {
+      switch (event.type) {
+        case "GUARD_CHANGED": {
+          const next = event.guard;
+          if (!next || next === guardRef.current) return;
+          setGuard(next);
+          setSnapshot(null);
+          setSnapshotError(null);
+          setEvents([]);
+          seenRef.current = new Set();
+          return;
+        }
+        case "FREEZE_STATE_CHANGED":
+        case "POLICY_UPDATED":
+          // Scope to the guard this tab is showing; an event about another
+          // instance would only cause a pointless read.
+          if (event.guard !== undefined && event.guard !== guardRef.current) return;
+          void refreshRef.current();
+          return;
+        case "WALLET_DISCONNECTED":
+          setWallet(null);
+          return;
+      }
+    });
+  }, [tabSync]);
+
   useEffect(() => {
     void refresh();
     const timer = setInterval(() => void refresh(), SNAPSHOT_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [refresh]);
 
-  const selectGuard = useCallback((next: string) => {
-    setGuard(next);
-    setSnapshot(null);
-    setEvents([]);
-    seenRef.current = new Set();
-  }, []);
+  const selectGuard = useCallback(
+    (next: string) => {
+      setGuard(next);
+      setSnapshot(null);
+      setEvents([]);
+      seenRef.current = new Set();
+      // Every other tab follows the operator's selection instead of continuing to
+      // poll a guard they are no longer looking at.
+      tabSync.broadcast("GUARD_CHANGED", { guard: next });
+    },
+    [tabSync],
+  );
 
-  const addInstance = useCallback((next: string, label: string) => {
-    rememberInstance(next, label);
-    setInstances(loadInstances());
-    setGuard(next);
-    setSnapshot(null);
-  }, []);
+  const addInstance = useCallback(
+    (next: string, label: string) => {
+      rememberInstance(next, label);
+      setInstances(loadInstances());
+      setGuard(next);
+      setSnapshot(null);
+      tabSync.broadcast("GUARD_CHANGED", { guard: next });
+    },
+    [tabSync],
+  );
 
   const pushEvents = useCallback((incoming: GuardEvent[]) => {
     if (incoming.length === 0) return;
@@ -357,6 +442,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     stopWatching,
     clearEvents,
     pushEvents,
+    notifyTabs,
   };
 
   return <GuardContext.Provider value={value}>{children}</GuardContext.Provider>;

@@ -30,7 +30,7 @@ interface Report {
 }
 
 export function PanicPanel() {
-  const { signer, guard, server, refresh, snapshot, pushEvents, wallet } = useGuard();
+  const { signer, guard, server, refresh, snapshot, pushEvents, wallet, notifyTabs } = useGuard();
   const [phase, setPhase] = useState<Phase>("idle");
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -143,6 +143,10 @@ export function PanicPanel() {
             : `status().admin_frozen reads ${adminFrozenAfter} — the intended effect is NOT visible on chain`,
       });
       setPhase("done");
+      // Only a broadcast write can have moved the chain. Tell the other tabs so
+      // they re-read instead of showing the pre-freeze world for up to a poll
+      // interval — the one delay that matters when the agent is misbehaving.
+      if (result.kind === "submitted") notifyTabs("FREEZE_STATE_CHANGED", { payload: { action } });
       await refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));

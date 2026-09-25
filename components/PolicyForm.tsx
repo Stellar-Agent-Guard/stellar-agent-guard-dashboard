@@ -31,7 +31,7 @@ import { ErrorBlock, ScopeNotice, starLink } from "./bits.tsx";
  * order, so a second encoder would be a second place to get the field order wrong.
  */
 export function PolicyForm() {
-  const { signer, guard, server, refresh, snapshot, pushEvents, wallet } = useGuard();
+  const { signer, guard, server, refresh, snapshot, pushEvents, wallet, notifyTabs } = useGuard();
 
   // `null` means "not edited yet", which is what lets the form seed itself from
   // the installed policy without an effect: the seed is derived during render and
@@ -96,6 +96,11 @@ export function PolicyForm() {
       if (result.kind === "invoked" && result.result.kind === "refused") {
         pushEvents(refusedEventsFromDiagnostics(result.result.diagnosticEvents, guard));
       }
+      // Announce only a write that reached the chain; a refused call changed
+      // nothing, so there is nothing for the other tabs to re-read.
+      if (result.kind === "invoked" && result.result.kind === "submitted") {
+        notifyTabs("POLICY_UPDATED", { payload: { operation: "set_policy" } });
+      }
       await refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -111,6 +116,9 @@ export function PolicyForm() {
     try {
       const result = await revokePolicy({ server, signer: signer(), guard });
       setOutcome({ kind: "invoked", result });
+      if (result.kind === "submitted") {
+        notifyTabs("POLICY_UPDATED", { payload: { operation: "revoke_policy" } });
+      }
       await refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
