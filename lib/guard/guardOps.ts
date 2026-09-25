@@ -29,6 +29,8 @@ import {
   type WalletSigner,
 } from "./submit.ts";
 import { addressToScVal, hexToBytes, sha256Hex } from "./scval.ts";
+import { announce } from "./useAnnounce.ts";
+import { recordTx } from "./txHistory.ts";
 
 // ── Artifact identity ──────────────────────────────────────────────────────
 
@@ -109,15 +111,19 @@ export async function submitOperation(params: {
   server: rpc.Server;
   signer: WalletSigner;
   operation: xdr.Operation;
+  /** Name recorded in the transaction history for this operation. */
+  label?: string;
   passphrase?: string;
 }): Promise<InvokeResult> {
   const passphrase = params.passphrase ?? NETWORK.passphrase;
   const { server, signer } = params;
+  const label = params.label ?? "host_function_operation";
 
   let account: Account;
   try {
     account = await server.getAccount(signer.address);
   } catch (error) {
+    announce("Transaction refused — nothing was broadcast");
     return {
       kind: "refused",
       stage: "discovery",
@@ -147,10 +153,13 @@ export async function submitOperation(params: {
     .setTimeout(60)
     .build();
 
+  announce("Transaction simulation started");
+
   let prepared;
   try {
     prepared = await server.prepareTransaction(built);
   } catch (error) {
+    announce("Transaction refused — nothing was broadcast");
     return {
       kind: "refused",
       stage: "enforcement",
@@ -159,11 +168,17 @@ export async function submitOperation(params: {
     };
   }
 
+  announce("Please approve transaction in Freighter");
   const signedXdr = await signer.signTransaction(prepared.toXDR());
   const transaction = TransactionBuilder.fromXDR(signedXdr, passphrase);
 
+  // The envelope's fee field carries inclusion fee + resource fee — exactly
+  // what the network will charge for this transaction.
+  const feeStroops = transaction.fee;
+
   const sent = await server.sendTransaction(transaction);
   if (sent.status === "ERROR") {
+    announce("Transaction refused — nothing was broadcast");
     return {
       kind: "refused",
       stage: "submission",
@@ -171,35 +186,52 @@ export async function submitOperation(params: {
       diagnosticEvents: [],
     };
   }
+
+  announce("Transaction submitted to network");
+
   for (let attempt = 0; attempt < 30; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     const result = await server.getTransaction(sent.hash).catch(() => null);
     if (!result) continue;
     if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+      const ledger = (result as { ledger?: number }).ledger ?? null;
+      recordTx({ hash: sent.hash, operation: label, status: "confirmed", feeStroops });
+      announce(
+        ledger !== null
+          ? `Transaction confirmed on ledger ${ledger}`
+          : "Transaction confirmed on the network",
+      );
       return {
         kind: "submitted",
         hash: sent.hash,
         status: result.status,
-        ledger: (result as { ledger?: number }).ledger ?? null,
+        ledger,
+        feeStroops,
         events: (result as { events?: unknown }).events ?? null,
       };
     }
     if (result.status === rpc.Api.GetTransactionStatus.FAILED) {
+      recordTx({ hash: sent.hash, operation: label, status: "failed", feeStroops });
+      announce("Transaction failed on chain");
       return {
         kind: "failed",
         hash: sent.hash,
         detail: `transaction ${sent.hash} was included and rejected (${describeRejectedResult(
           result,
         )})`,
+        feeStroops,
         diagnosticEvents:
           (result as { diagnosticEventsXdr?: unknown[] }).diagnosticEventsXdr ?? [],
       };
     }
   }
+  recordTx({ hash: sent.hash, operation: label, status: "failed", feeStroops });
+  announce("Transaction failed on chain");
   return {
     kind: "failed",
     hash: sent.hash,
     detail: `timed out waiting for ${sent.hash}`,
+    feeStroops,
     diagnosticEvents: [],
   };
 }
@@ -303,6 +335,7 @@ export async function deployGuard(params: {
       server,
       signer,
       operation: Operation.uploadContractWasm({ wasm }),
+      label: "upload_contract_wasm",
       passphrase: params.passphrase,
     });
     record(`upload_contract_wasm (${PHASE1_ARTIFACT.wasmBytes} bytes)`, upload);
@@ -320,6 +353,7 @@ export async function deployGuard(params: {
       salt,
       constructorArgs: [],
     }),
+    label: "create_custom_contract",
     passphrase: params.passphrase,
   });
   record(
