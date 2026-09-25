@@ -3,7 +3,9 @@
 import { deadManRemaining, describePolicy, isDeadManFrozen } from "stellar-agent-guard-sdk";
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, Read, Stat, relativeTime, short } from "./bits.tsx";
-import { PHASE1_ARTIFACT } from "../lib/guard/network.ts";
+import { PHASE1_ARTIFACT, NETWORK } from "../lib/guard/network.ts";
+import { compilePrintReport } from "../lib/guard/printReport.ts";
+
 
 /**
  * The guard's live state, every field read from the chain on each refresh.
@@ -15,15 +17,21 @@ import { PHASE1_ARTIFACT } from "../lib/guard/network.ts";
  * both, which is why it sits next to the panic button.
  */
 export function StatusPanel() {
-  const { snapshot, snapshotError, refreshing, refresh, guard } = useGuard();
+  const { snapshot, snapshotError, refreshing, refresh, guard, wallet } = useGuard();
+
+  const printReport = snapshot ? compilePrintReport(snapshot, NETWORK.name, wallet?.address || "Disconnected") : null;
 
   return (
     <div className="panel">
       <div className="row" style={{ justifyContent: "space-between" }}>
         <h2 style={{ margin: 0 }}>On-chain state</h2>
+
         <div className="row">
           {snapshot && <span className="tiny muted">read {relativeTime(snapshot.fetchedAt)}</span>}
-          <button className="secondary" onClick={() => void refresh()} disabled={refreshing}>
+          <button className="secondary no-print" onClick={() => window.print()}>
+            Print Compliance Report
+          </button>
+          <button className="secondary no-print" onClick={() => void refresh()} disabled={refreshing}>
             {refreshing ? "Reading…" : "Refresh"}
           </button>
         </div>
@@ -174,11 +182,21 @@ export function StatusPanel() {
                 <div className="grid">
                   <Stat
                     label="Ledger reports"
-                    value={<span className="mono tiny">{short(identity.reportedWasmHash ?? "-", 10, 6)}</span>}
+                    value={
+                      <>
+                        <span className="mono tiny no-print">{short(identity.reportedWasmHash ?? "-", 10, 6)}</span>
+                        <span className="mono tiny print-only">{identity.reportedWasmHash ?? "-"}</span>
+                      </>
+                    }
                   />
                   <Stat
                     label="Fetched bytes hash to"
-                    value={<span className="mono tiny">{short(identity.fetchedSha256, 10, 6)}</span>}
+                    value={
+                      <>
+                        <span className="mono tiny no-print">{short(identity.fetchedSha256, 10, 6)}</span>
+                        <span className="mono tiny print-only">{identity.fetchedSha256}</span>
+                      </>
+                    }
                   />
                   <Stat label="Bytecode size" value={identity.bytes} note="bytes" />
                   <Stat
@@ -200,6 +218,27 @@ export function StatusPanel() {
             )}
           />
         </>
+      )}
+
+      {printReport && (
+        <div className="print-only print-report">
+          <h2>Compliance Audit Report</h2>
+          <p><strong>Timestamp:</strong> {printReport.timestamp}</p>
+          <p><strong>Network:</strong> {printReport.network}</p>
+          <p><strong>Contract ID:</strong> <span className="mono">{printReport.contractId}</span></p>
+          <p><strong>Bytecode Hash:</strong> <span className="mono">{printReport.bytecodeHash}</span></p>
+          <p><strong>Admin Key:</strong> <span className="mono">{printReport.adminKey}</span></p>
+          <p><strong>DMS Status:</strong> {printReport.dmsStatus}</p>
+          <p><strong>Policy Rules:</strong> {printReport.policyRules}</p>
+          <div>
+            <strong>Allowlists:</strong>
+            <ul>
+              <li>Assets: {printReport.allowlists.assets.join(", ") || "None"}</li>
+              <li>Recipients: {printReport.allowlists.recipients.join(", ") || "None"}</li>
+              <li>Protocols: {printReport.allowlists.protocols.join(", ") || "None"}</li>
+            </ul>
+          </div>
+        </div>
       )}
     </div>
   );

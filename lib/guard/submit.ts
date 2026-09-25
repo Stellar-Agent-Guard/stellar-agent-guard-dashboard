@@ -24,10 +24,11 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { NETWORK } from "./network.ts";
-import { guardStorageLedgerKeys, ledgerKeyId } from "./scval.ts";
+import { bytesToHex, guardStorageLedgerKeys, ledgerKeyId } from "./scval.ts";
 import { stringifyError } from "./chain.ts";
 import { announce } from "./useAnnounce.ts";
 import { recordTx } from "./txHistory.ts";
+import { hardwareGuide } from "./hardwareGuide.ts";
 
 /** Inclusion fee floor, in stroops, for a single-operation transaction. */
 export const INCLUSION_FEE = "100";

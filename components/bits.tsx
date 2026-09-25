@@ -2,10 +2,11 @@
 
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { ReadResult } from "../lib/guard/chain.ts";
 import { ENFORCEMENT_SCOPE_STATEMENT } from "../lib/guard/network.ts";
+import { lookupLabel, subscribeAddressBook } from "../lib/guard/addressBook.ts";
 import {
   formatRawStroops,
   formatStroopsWithUnit,
@@ -103,6 +104,50 @@ export function Stat({
 export function short(value: string, head = 6, tail = 4): string {
   if (value.length <= head + tail + 1) return value;
   return `${value.slice(0, head)}…${value.slice(-tail)}`;
+}
+
+/**
+ * The operator's nickname for an address, or `null` when it is not in the book.
+ *
+ * Resolves to `null` during server render (there is no `localStorage` to read)
+ * and again on the first client render, then settles once mounted, so it never
+ * causes a hydration mismatch — an unlabelled address looks identical on both.
+ * It re-reads whenever the book changes anywhere in the tab.
+ */
+export function useAddressLabel(address: string): string | null {
+  // Always start `null` — the same on server and client's first render — then
+  // resolve from the book in an effect. Reading `localStorage` during the first
+  // render would desynchronise hydration whenever an address happens to be
+  // labelled.
+  const [label, setLabel] = useState<string | null>(null);
+  useEffect(() => {
+    const refresh = () => setLabel(lookupLabel(address));
+    refresh();
+    return subscribeAddressBook(refresh);
+  }, [address]);
+  return label;
+}
+
+/**
+ * Render an address the way an operator reads it: `Nickname (XXXX…YYYY)` when it
+ * is in the address book, otherwise the bare truncated form. The full address
+ * stays on `title` so nothing is lost — the nickname is a convenience over the
+ * real key, never a replacement for it.
+ */
+export function AddressText({
+  address,
+  className,
+}: {
+  address: string;
+  className?: string;
+}): ReactNode {
+  const label = useAddressLabel(address);
+  const truncated = label ? short(address, 4, 4) : short(address);
+  return (
+    <span className={className ?? "mono"} title={address}>
+      {label ? `${label} (${truncated})` : truncated}
+    </span>
+  );
 }
 
 export function relativeTime(iso: string | null): string {

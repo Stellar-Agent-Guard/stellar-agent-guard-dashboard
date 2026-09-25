@@ -548,30 +548,30 @@ code {
   word-break: break-all;
 }
 
-[data-theme="light"] {
-  --bg: #ffffff;
-  --panel: #f5f7fa;
-  --panel-2: #e9ecef;
-  --line: #d1d9e2;
-  --text: #1a202c;
-  --muted: #4a5568;
-  --accent: #2b6cb0;
-  --ok: #276749;
-  --warn: #975a16;
-  --danger: #c53030;
-  color-scheme: light;
+@media print {
+  .no-print, button, nav, .theme-toggle, .wallet-bar, .demo-badge {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  span.print-only {
+    display: inline !important;
+  }
+  .panel, body, html {
+    background: white !important;
+    color: black !important;
+  }
+  * {
+    color: black !important;
+    border-color: #ccc !important;
+  }
+  .pill.ok, .pill.warn, .pill.danger {
+    background: transparent !important;
+    border: 1px solid black !important;
+  }
 }
 
-[data-theme="high-contrast"] {
-  --bg: #000000;
-  --panel: #000000;
-  --panel-2: #000000;
-  --line: #ffffff;
-  --text: #ffffff;
-  --muted: #ffffff;
-  --accent: #ffff00;
-  --ok: #00ff00;
-  --warn: #ffcc00;
-  --danger: #ff0000;
-  color-scheme: dark;
+.print-only {
+  display: none;
 }

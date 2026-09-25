@@ -16,6 +16,7 @@ import type { ArtifactCheck, DeployOutcome, DeployPlan } from "../lib/guard/guar
 import type { InvokeResult } from "../lib/guard/submit.ts";
 import { PHASE1_ARTIFACT } from "../lib/guard/network.ts";
 import { bytesToHex } from "../lib/guard/scval.ts";
+import { validateInitParameters, type InitValidation } from "../lib/guard/initValidator.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, OutcomeList, starLink } from "./bits.tsx";
 
@@ -44,6 +45,21 @@ export function DeployPanel() {
   const [error, setError] = useState<string | null>(null);
   const [agentPubkey, setAgentPubkey] = useState("");
   const [initResult, setInitResult] = useState<InvokeResult | null>(null);
+
+  // Guard init parameters, audited by the pre-flight validator before the
+  // "Sign and initialize" button will enable. The admin is whoever is connected,
+  // so its address is not a separate input — it is read from the wallet below.
+  const [agentAddress, setAgentAddress] = useState("");
+  const [dmsDurationSecs, setDmsDurationSecs] = useState("");
+  const [perTxCap, setPerTxCap] = useState("");
+  const [windowCap, setWindowCap] = useState("");
+  const initValidation = validateInitParameters({
+    adminAddress: wallet?.address ?? "",
+    agentAddress,
+    dmsDurationSecs,
+    perTxCap,
+    windowCap,
+  });
 
   // Fetching and applying are separate: `fetchArtifact` touches no state, so the
   // effect below has nothing synchronous to write, and the panel is never blanked
@@ -285,13 +301,75 @@ export function DeployPanel() {
           it from the agent keypair.
         </span>
       </label>
+
+      <p className="tiny muted">
+        The values below are checked before anything is signed. They describe the guard the
+        initialization will create, so a mistake here is caught now rather than discovered in
+        production.
+      </p>
+
+      <label className="field">
+        <span className="lbl">Agent account address (G…)</span>
+        <input
+          value={agentAddress}
+          onChange={(event) => setAgentAddress(event.target.value)}
+          placeholder="GBUQ… (must differ from the connected admin)"
+          aria-label="Agent account address"
+        />
+      </label>
+
+      <div className="grid">
+        <label className="field">
+          <span className="lbl">Dead-man grace (seconds)</span>
+          <input
+            value={dmsDurationSecs}
+            onChange={(event) => setDmsDurationSecs(event.target.value)}
+            placeholder="3600"
+            inputMode="numeric"
+          />
+        </label>
+        <label className="field">
+          <span className="lbl">Per-transaction cap (units)</span>
+          <input
+            value={perTxCap}
+            onChange={(event) => setPerTxCap(event.target.value)}
+            placeholder="1000"
+            inputMode="numeric"
+          />
+        </label>
+        <label className="field">
+          <span className="lbl">Rolling-window cap (units)</span>
+          <input
+            value={windowCap}
+            onChange={(event) => setWindowCap(event.target.value)}
+            placeholder="5000"
+            inputMode="numeric"
+          />
+        </label>
+      </div>
+
+      <InitChecklist validation={initValidation} />
+
       <div className="row">
         <button
-          disabled={!wallet || agentPubkey.trim().length === 0}
+          disabled={
+            !wallet ||
+            agentPubkey.trim().length === 0 ||
+            !initValidation.canDeploy
+          }
           onClick={() => void initialize(outcome?.guard ?? "")}
         >
           Sign and initialize
         </button>
+        {!wallet && (
+          <span className="tiny muted">Connect the admin wallet to initialize.</span>
+        )}
+        {wallet && !initValidation.canDeploy && (
+          <span className="tiny" style={{ color: "var(--danger)" }}>
+            Resolve {initValidation.blockers.length} blocker
+            {initValidation.blockers.length === 1 ? "" : "s"} above before initializing.
+          </span>
+        )}
       </div>
 
       {initResult && (
@@ -311,6 +389,36 @@ export function DeployPanel() {
             <span className="tiny mono">{initResult.kind === "exported" ? "Exported" : initResult.detail}</span>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The pre-flight guardrail checklist.
+ *
+ * A passed rule reads as a green line; a fatal failure reads as a blocker
+ * banner. Every result is shown, including the passing ones, because an
+ * operator needs to see what *was* verified — an all-clear with no visible
+ * checks is indistinguishable from a validator that never ran.
+ */
+function InitChecklist({ validation }: { validation: InitValidation }) {
+  return (
+    <div className="stack" style={{ marginTop: 12 }} role="group" aria-label="Initialization pre-flight checks">
+      {validation.checks.map((item) =>
+        item.passed ? (
+          <div key={item.id} className="checkline">
+            <span className="pill ok" aria-hidden="true">
+              ✓
+            </span>
+            <span className="tiny">{item.label}</span>
+          </div>
+        ) : (
+          <div key={item.id} className="error" role="alert">
+            <span className="t">Blocker: {item.label}</span>
+            <span className="tiny">{item.detail}</span>
+          </div>
+        ),
       )}
     </div>
   );
