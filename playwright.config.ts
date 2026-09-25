@@ -5,9 +5,12 @@ import { defineConfig, devices } from "@playwright/test";
  *
  * Every screen is captured at the three viewports the interface is designed for
  * (desktop 1440, tablet 768, mobile 375), in each colour scheme the browser can
- * report (dark and light). The dashboard ships a single dark palette today, so
- * the light projects currently reproduce the dark baselines byte for byte — they
- * exist so that a light theme, once added, is covered with no further wiring.
+ * report (dark and light). The console picks its initial theme from
+ * `prefers-color-scheme` unless the operator has already chosen one, so
+ * `colorScheme` emulation drives the application's real dark and light palettes
+ * rather than a mock. The third theme, high-contrast, is reachable only through
+ * the in-app toggle, so colour-scheme emulation cannot select it and it is not
+ * covered here.
  */
 
 const VIEWPORTS = [
