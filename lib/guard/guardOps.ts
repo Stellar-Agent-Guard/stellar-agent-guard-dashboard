@@ -411,6 +411,7 @@ export async function installPolicy(params: {
   guard: string;
   draft: PolicyDraft;
   passphrase?: string;
+  exportOnly?: boolean;
 }): Promise<
   { kind: "invalid"; issues: string[] } | { kind: "invoked"; result: InvokeResult }
 > {
@@ -423,6 +424,7 @@ export async function installPolicy(params: {
     args: [built.scval],
     signer: params.signer,
     passphrase: params.passphrase,
+    exportOnly: params.exportOnly,
   });
   return { kind: "invoked", result };
 }
@@ -433,6 +435,7 @@ export function freezeGuard(params: {
   signer: WalletSigner;
   guard: string;
   passphrase?: string;
+  exportOnly?: boolean;
 }): Promise<InvokeResult> {
   return invokeWithWallet({
     server: params.server,
@@ -441,6 +444,7 @@ export function freezeGuard(params: {
     args: [],
     signer: params.signer,
     passphrase: params.passphrase,
+    exportOnly: params.exportOnly,
   });
 }
 
@@ -458,6 +462,7 @@ export function unfreezeGuard(params: {
   signer: WalletSigner;
   guard: string;
   passphrase?: string;
+  exportOnly?: boolean;
 }): Promise<InvokeResult> {
   return invokeWithWallet({
     server: params.server,
@@ -466,6 +471,7 @@ export function unfreezeGuard(params: {
     args: [],
     signer: params.signer,
     passphrase: params.passphrase,
+    exportOnly: params.exportOnly,
   });
 }
 
@@ -475,6 +481,7 @@ export function revokePolicy(params: {
   signer: WalletSigner;
   guard: string;
   passphrase?: string;
+  exportOnly?: boolean;
 }): Promise<InvokeResult> {
   return invokeWithWallet({
     server: params.server,
@@ -483,6 +490,7 @@ export function revokePolicy(params: {
     args: [],
     signer: params.signer,
     passphrase: params.passphrase,
+    exportOnly: params.exportOnly,
   });
 }
 
