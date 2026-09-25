@@ -17,11 +17,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const saved = localStorage.getItem("theme") as Theme;
     if (saved && ["dark", "light", "high-contrast"].includes(saved)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setThemeState(saved);
       document.documentElement.setAttribute("data-theme", saved);
     } else {
       const prefersLight = window.matchMedia("(prefers-color-scheme: light)").matches;
       const initial = prefersLight ? "light" : "dark";
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setThemeState(initial);
       document.documentElement.setAttribute("data-theme", initial);
     }
