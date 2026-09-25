@@ -37,8 +37,13 @@ production build, and a dedicated step that re-checks the enforcement-scope stat
 (`tests/unit/scopeStatement.test.ts`). Rewording the boundary fails CI, which is the
 point — see [Enforcement scope](README.md#enforcement-scope--read-this-before-relying-on-the-caps).
 
+## Adding panels and widgets
+
+To create a new panel or widget, follow the [Contributor Guide — Adding New Panels and Widgets](docs/guides/contributing-widgets.md). It details directory conventions, `GuardProvider` state and telemetry subscriptions, design tokens in `components/bits.tsx`, accessibility standards, and unit test requirements.
+
 ## Issues
 
 - Backlog: <https://github.com/aigbagbobila/stellar-agent-guard-dashboard/issues>
 - The org-wide `tier:` / `scope:` label taxonomy is described in the shared
   CONTRIBUTING.md linked above; this repo's scope label is `scope:dashboard`.
+
