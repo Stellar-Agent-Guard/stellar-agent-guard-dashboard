@@ -46,6 +46,12 @@ import {
 import { connectWallet, currentAddress, freighterSigner, type ConnectedWallet } from "../lib/guard/wallet.ts";
 import type { WalletSigner } from "../lib/guard/submit.ts";
 import {
+  useIdleTimer,
+  loadIdleTimeoutMs,
+  saveIdleTimeoutMs,
+  type IdleState,
+} from "../lib/guard/useIdleTimer.ts";
+import {
   DEMO_BASE_LEDGER,
   DEMO_GUARD,
   DEMO_INSTANCE,
@@ -99,6 +105,13 @@ interface GuardContextValue {
    * the active guard, so callers only name the change.
    */
   notifyTabs: (type: TabSyncEventType, options?: { payload?: Record<string, unknown> }) => void;
+  /** Operator session auto-lock state and its configuration. */
+  session: {
+    state: IdleState;
+    timeoutMs: number;
+    setTimeoutMs: (valueMs: number) => void;
+    stayConnected: () => void;
+  };
 }
 
 const GuardContext = createContext<GuardContextValue | null>(null);
@@ -399,27 +412,25 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     seenRef.current = new Set();
   }, []);
 
-  // Keep the running listeners aligned with the registry while watching. This is
-  // what removes a deleted guard's listener (and stops its stream) and starts a
-  // new one for an added guard, without ever exceeding the cap.
-  useEffect(() => {
-    if (demo || !feed.watching) return;
-    const runner = multiFeedRef.current;
-    if (!runner) return;
-    runner.sync(instances.map((instance) => ({ guard: instance.guard, label: instance.label })));
-    const dropped = runner.dropped();
-    setFeed((current) => ({
-      ...current,
-      guards: runner.guards(),
-      capped: dropped.length,
-      cappedLabels: dropped.map((source) => source.label),
-    }));
-  }, [instances, feed.watching, demo]);
-
-  // The supervisor is deliberately never torn down by an effect cleanup: React's
-  // development StrictMode mount/unmount/mount cycle would stop the listeners on
-  // the simulated unmount and leave the tab unable to tail. The provider lives as
-  // long as the document, and the polling effect below clears its own interval.
+  // ── Operator session auto-lock ───────────────────────────────────────────
+  // The countdown only runs while a wallet is connected: there is nothing to
+  // lock until there is a signing session. On expiry the wallet is disconnected
+  // and the in-memory event feed is dropped, so a walk-up cannot resume an
+  // authorised session or read the last operator's diagnostics.
+  const [idleTimeoutMs, setIdleTimeoutMs] = useState<number>(() => loadIdleTimeoutMs());
+  const handleIdleExpire = useCallback(() => {
+    disconnect();
+    clearEvents();
+  }, [disconnect, clearEvents]);
+  const { state: idleState, stayConnected } = useIdleTimer({
+    timeoutMs: idleTimeoutMs,
+    enabled: wallet !== null,
+    onExpire: handleIdleExpire,
+  });
+  const setIdleTimeout = useCallback((valueMs: number) => {
+    saveIdleTimeoutMs(valueMs);
+    setIdleTimeoutMs(valueMs);
+  }, []);
 
   useEffect(() => {
     if (!feed.watching) return;
@@ -507,9 +518,43 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     clearEvents,
     pushEvents,
     notifyTabs,
+    session: {
+      state: idleState,
+      timeoutMs: idleTimeoutMs,
+      setTimeoutMs: setIdleTimeout,
+      stayConnected,
+    },
   };
 
-  return <GuardContext.Provider value={value}>{children}</GuardContext.Provider>;
+  return (
+    <GuardContext.Provider value={value}>
+      {children}
+      {idleState.phase === "warning" && wallet && (
+        <div className="modal-backdrop">
+          <div
+            className="modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="session-lock-title"
+            aria-describedby="session-lock-body"
+            tabIndex={-1}
+          >
+            <strong id="session-lock-title">
+              Session expiring due to inactivity. Click to stay connected.
+            </strong>
+            <p className="tiny" id="session-lock-body">
+              You will be disconnected in {idleState.secondsLeft}s. The admin wallet will be
+              unlinked and unsaved work dropped; reconnecting is required before anything can be
+              signed again.
+            </p>
+            <div className="row">
+              <button onClick={stayConnected}>Stay connected</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </GuardContext.Provider>
+  );
 }
 
 export function useGuard(): GuardContextValue {
