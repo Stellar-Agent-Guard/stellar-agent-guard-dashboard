@@ -44,3 +44,13 @@ jobs:
       # have drifted apart on what is and is not enforced.
       - name: Enforcement-scope statement is consistent
         run: node --test tests/unit/scopeStatement.test.ts
+
+      # Browser tests, after Build because the suite serves `.next` through
+      # `next start`. Unlike the integration proof above, this one is free and
+      # deterministic: Soroban RPC is answered from committed fixtures and the
+      # wallet is mocked in-page, so it touches neither testnet nor an extension.
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E tests
+        run: npm run test:e2e
