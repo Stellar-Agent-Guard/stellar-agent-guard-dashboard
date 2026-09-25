@@ -26,11 +26,10 @@ import {
   type ReactNode,
 } from "react";
 import type { rpc } from "@stellar/stellar-sdk";
-import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { createServer } from "../lib/guard/chain.ts";
 import { readGuardSnapshot, type GuardSnapshot } from "../lib/guard/guardOps.ts";
 import { NETWORK } from "../lib/guard/network.ts";
-import { GuardFeed } from "../lib/guard/telemetry.ts";
+import { GuardFeed, type TelemetryEvent } from "../lib/guard/telemetry.ts";
 import { createTabSync, type TabSyncEventType } from "../lib/guard/tabSync.ts";
 import {
   KNOWN_INSTANCES,
@@ -126,7 +125,7 @@ interface GuardContextValue {
   stopWatching: () => void;
   clearEvents: () => void;
   /** Surface refused-write diagnostics in the feed, labelled as diagnostics. */
-  pushEvents: (events: GuardEvent[]) => void;
+  pushEvents: (events: TelemetryEvent[]) => void;
   /**
    * Query the feed's guard over a historical time range (#148). Replaces the
    * live view with the window's events and labels it, so a historical result
@@ -164,10 +163,10 @@ const GuardContext = createContext<GuardContextValue | null>(null);
  * keeps the cost of a batch proportional to the one panel that renders it.
  * Only `TelemetryFeed` subscribes.
  */
-const GuardEventsContext = createContext<GuardEvent[] | null>(null);
+const GuardEventsContext = createContext<TelemetryEvent[] | null>(null);
 
 /** A stable identity for an event, so re-polling the same page cannot duplicate rows. */
-function eventKey(event: GuardEvent): string {
+function eventKey(event: TelemetryEvent): string {
   return [
     event.source,
     event.transactionHash ?? "-",
@@ -222,7 +221,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<GuardSnapshot | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [events, setEvents] = useState<GuardEvent[]>([]);
+  const [events, setEvents] = useState<TelemetryEvent[]>([]);
   const [rangeLabel, setRangeLabel] = useState<string | null>(null);
   const [feed, setFeed] = useState<GuardContextValue["feed"]>({
     watching: false,
@@ -514,7 +513,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     [tabSync],
   );
 
-  const pushEvents = useCallback((incoming: GuardEvent[]) => {
+  const pushEvents = useCallback((incoming: TelemetryEvent[]) => {
     if (incoming.length === 0) return;
     // De-duplicate *before* the state update, never inside it: the updater has
     // to stay pure, because React StrictMode double-invokes updaters in
@@ -540,7 +539,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (process.env.NODE_ENV === "production") return;
     const target = window as typeof window & {
-      __guardFeedInject?: (incoming: GuardEvent[]) => void;
+      __guardFeedInject?: (incoming: TelemetryEvent[]) => void;
     };
     target.__guardFeedInject = pushEvents;
     return () => {
@@ -812,7 +811,7 @@ export function useGuard(): GuardContextValue {
 }
 
 /** The live event feed, newest first — see `GuardEventsContext`. */
-export function useGuardEvents(): GuardEvent[] {
+export function useGuardEvents(): TelemetryEvent[] {
   const value = useContext(GuardEventsContext);
   if (value === null) throw new Error("useGuardEvents must be used inside <GuardProvider>");
   return value;
