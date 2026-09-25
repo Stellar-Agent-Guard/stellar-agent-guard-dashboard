@@ -26,6 +26,8 @@ import {
 import { NETWORK } from "./network.ts";
 import { guardStorageLedgerKeys, ledgerKeyId } from "./scval.ts";
 import { stringifyError } from "./chain.ts";
+import { announce } from "./useAnnounce.ts";
+import { recordTx } from "./txHistory.ts";
 
 /** Inclusion fee floor, in stroops, for a single-operation transaction. */
 export const INCLUSION_FEE = "100";
@@ -49,6 +51,8 @@ export type InvokeResult =
       hash: string;
       status: string;
       ledger: number | null;
+      /** Total fee paid, in stroops (inclusion fee + resource fee). */
+      feeStroops?: string;
       /**
        * The transaction's events as the RPC reports them. Kept opaque on purpose:
        * settled guard events are read through the telemetry feed, which decodes
@@ -71,6 +75,8 @@ export type InvokeResult =
       kind: "failed";
       hash: string;
       detail: string;
+      /** Total fee paid, in stroops (inclusion fee + resource fee). */
+      feeStroops?: string;
       diagnosticEvents: unknown[];
     };
 
@@ -359,7 +365,7 @@ async function pollForInclusion(
  * Run a wallet-authorized contract call, submitting only on a passing enforced
  * simulation.
  */
-export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeResult> {
+async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   const passphrase = request.passphrase ?? NETWORK.passphrase;
   const { server, signer } = request;
 
@@ -383,6 +389,17 @@ export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeRe
   const sequence = account.sequenceNumber();
   const freshAccount = () => new Account(signer.address, sequence);
 
+  // "Please approve…" is one milestone per submission, not one per signature:
+  // Freighter can prompt twice (auth entry, then envelope), and a screen
+  // reader hearing the same instruction twice would be exactly the spam the
+  // announcer exists to prevent.
+  let walletPrompted = false;
+  const promptWallet = (): void => {
+    if (walletPrompted) return;
+    walletPrompted = true;
+    announce("Please approve transaction in Freighter");
+  };
+
   const plainOperation = Operation.invokeContractFunction({
     contract: request.contract,
     function: request.fn,
@@ -396,6 +413,7 @@ export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeRe
     passphrase,
     guard: request.guardForFootprint ?? null,
   });
+  announce("Transaction simulation started");
   const discovery = await server.simulateTransaction(probe);
   if (rpc.Api.isSimulationError(discovery)) {
     // Recording mode: this pass records what the call *needs*, so a failure here
@@ -456,6 +474,7 @@ export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeRe
     }
     // The wallet produces the signature over the exact preimage the host will
     // re-derive, including the credential kind and the entry's expiration ledger.
+    promptWallet();
     const signedEntryXdr = await signer.signAuthEntry(entry.toXDR("base64"));
     signed.push(xdr.SorobanAuthorizationEntry.fromXDR(signedEntryXdr, "base64"));
   }
@@ -491,8 +510,12 @@ export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeRe
     passphrase,
     guard: request.guardForFootprint ?? null,
   });
+  promptWallet();
   const signedEnvelope = await signer.signTransaction(assembled.transaction.toXDR());
   const transaction = TransactionBuilder.fromXDR(signedEnvelope, passphrase) as Transaction;
+  // The envelope's fee field carries inclusion fee + resource fee — exactly
+  // what the network will charge for this transaction.
+  const feeStroops = transaction.fee;
 
   let sent: rpc.Api.SendTransactionResponse;
   try {
@@ -523,9 +546,12 @@ export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeRe
       hash: sent.hash,
       status: sent.status,
       ledger: sent.latestLedger ?? null,
+      feeStroops,
       events: null,
     };
   }
+
+  announce("Transaction submitted to network");
 
   const included = await pollForInclusion(
     server,
@@ -538,6 +564,7 @@ export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeRe
       kind: "failed",
       hash: sent.hash,
       detail: included.detail,
+      feeStroops,
       diagnosticEvents: included.diagnosticEvents,
     };
   }
@@ -546,8 +573,53 @@ export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeRe
     hash: sent.hash,
     status: included.status,
     ledger: included.ledger,
+    feeStroops,
     events: included.events,
   };
+}
+
+/**
+ * Run a wallet-authorized contract call, announcing its milestones and
+ * recording its outcome.
+ *
+ * The mid-flight milestones (simulation started, Freighter approval,
+ * broadcast) are announced inside `runInvocation`, at the moment they actually
+ * happen. The terminal outcome — confirmed, failed or refused — is handled
+ * once, here, so every return path, including each kind of refusal, gets the
+ * same announcement and the same history entry without that logic being
+ * repeated at every `return`. Refused calls are announced but deliberately
+ * not recorded: a refusal never had a transaction to record.
+ */
+export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeResult> {
+  const result = await runInvocation(request);
+  if (result.kind === "refused") {
+    announce("Transaction refused — nothing was broadcast");
+  } else if (result.kind === "failed") {
+    recordTx({
+      hash: result.hash,
+      operation: request.fn,
+      status: "failed",
+      feeStroops: result.feeStroops ?? null,
+    });
+    announce("Transaction failed on chain");
+  } else {
+    recordTx({
+      hash: result.hash,
+      operation: request.fn,
+      status: "confirmed",
+      feeStroops: result.feeStroops ?? null,
+    });
+    announce(
+      result.ledger !== null && result.status === rpc.Api.GetTransactionStatus.SUCCESS
+        ? `Transaction confirmed on ledger ${result.ledger}`
+        : "Transaction confirmed on the network",
+    );
+    if (request.fn === "freeze") {
+      // A freeze is the critical security event the assertive region is for.
+      announce("Admin freeze activated", "assertive");
+    }
+  }
+  return result;
 }
 
 /**

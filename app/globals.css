@@ -283,6 +283,21 @@ label.field .hint {
   margin-bottom: 4px;
 }
 
+.demo-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px dashed var(--warn);
+  background: #2a2010;
+  color: var(--warn);
+  border-radius: 9px;
+  padding: 9px 13px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 table.events {
   width: 100%;
   border-collapse: collapse;
@@ -367,4 +382,72 @@ code {
   .split {
     grid-template-columns: 1fr;
   }
+}
+
+/*
+ * Keyboard accessibility (WCAG 2.1 AA, SC 2.4.7 + 1.4.11).
+ *
+ * Every interactive element gets a high-visibility focus indicator on
+ * keyboard focus (:focus-visible). `--accent` (#4da3ff) sits at roughly 7:1
+ * against `--bg` and 6:1 against `--panel` — comfortably past the 3:1
+ * contrast a focus indicator needs — and the 4px halo makes the indicator
+ * visible even on elements whose own border is dark.
+ */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(77, 163, 255, 0.3);
+}
+
+/*
+ * Content for screen readers only: removed from the visual layout but kept
+ * in the accessibility tree, which is exactly what an aria-live region needs.
+ */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * Modal dialogs (the freeze confirmation): a fixed backdrop over the shell
+ * with a centred, scrollable card. `role="dialog"` + `aria-modal` live on the
+ * .modal element in PanicPanel; focus is trapped there while it is open.
+ */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(4, 6, 9, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 16px 18px;
+  max-width: 560px;
+  width: 100%;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+}
+
+.modal strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+.modal .row:last-child {
+  margin-top: 12px;
 }

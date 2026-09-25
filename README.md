@@ -76,6 +76,26 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) in a browser with the [Freighter wallet](https://www.freighter.app/) extension installed and switched to **Testnet**.
 
+### Instant demo mode (no wallet, no testnet, no contracts)
+
+To evaluate the interface without a Freighter wallet or a funded testnet account, start the dashboard with pre-populated fixture data:
+
+```bash
+npm run dev:demo      # runs next dev with NEXT_PUBLIC_DEMO_MODE=true
+```
+
+Then open [http://localhost:3000](http://localhost:3000). You can also opt in per visit, with no script and no rebuild, by adding `?demo=true` to any URL (for example [http://localhost:3000/?demo=true](http://localhost:3000/?demo=true)) against a normal `npm run dev`.
+
+While demo mode is active:
+
+- A top-level badge reads **DEMO MODE — Static Fixture Data**.
+- The on-chain state panel shows a realistic, healthy guard: an installed policy, an open active execution window, and a rolling spend window that is under its cap.
+- The telemetry feed is seeded and watching immediately, with a synthetic stream of allowed transfers, heartbeats, and blocked (diagnostic) decisions.
+- Every value comes from [`lib/guard/demoFixtures.ts`](./lib/guard/demoFixtures.ts) and **no RPC call is made** — it works offline.
+- Write actions are disabled with an explanatory error, because there is nothing real to write to.
+
+Demo mode is strictly opt-in. When neither the environment flag nor the query parameter is set, none of the fixture code is reached and the console keeps its **no mock state** guarantee: every number is read live from Soroban RPC, and a failed read is rendered as a failure, never as a zero.
+
 ### Verification and Development
 
 ```bash

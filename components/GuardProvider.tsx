@@ -39,6 +39,16 @@ import {
 } from "../lib/guard/instance.ts";
 import { connectWallet, currentAddress, freighterSigner, type ConnectedWallet } from "../lib/guard/wallet.ts";
 import type { WalletSigner } from "../lib/guard/submit.ts";
+import {
+  DEMO_BASE_LEDGER,
+  DEMO_GUARD,
+  DEMO_INSTANCE,
+  demoEvents,
+  demoFlagFromQuery,
+  demoSnapshot,
+  isDemoMode,
+  syntheticDemoEvent,
+} from "../lib/guard/demoFixtures.ts";
 
 const SNAPSHOT_INTERVAL_MS = 15_000;
 const FEED_INTERVAL_MS = 5_000;
@@ -91,11 +101,17 @@ function eventKey(event: GuardEvent): string {
 
 export function GuardProvider({ children }: { children: ReactNode }) {
   const server = useMemo(() => createServer(NETWORK.rpcUrl), []);
+  // Demo mode is settled synchronously from the build-time flag, then re-checked
+  // for `?demo=true` in an effect — the query string is not visible during SSR,
+  // and reading it during render would desynchronise hydration.
+  const [demo, setDemo] = useState<boolean>(() => isDemoMode());
   const [wallet, setWallet] = useState<ConnectedWallet | null>(null);
   const [walletError, setWalletError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
-  const [instances, setInstances] = useState<GuardInstance[]>(() => [...KNOWN_INSTANCES]);
-  const [guard, setGuard] = useState<string>(KNOWN_INSTANCES[0]!.guard);
+  const [instances, setInstances] = useState<GuardInstance[]>(() =>
+    isDemoMode() ? [DEMO_INSTANCE] : [...KNOWN_INSTANCES],
+  );
+  const [guard, setGuard] = useState<string>(isDemoMode() ? DEMO_GUARD : KNOWN_INSTANCES[0]!.guard);
   const [snapshot, setSnapshot] = useState<GuardSnapshot | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -113,11 +129,34 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   const seenRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    // Demo mode pins the selector to the single fixture instance, so a value the
+    // fixtures do not describe can never be selected. Leaving demo mode restores
+    // the remembered instances.
+    if (demo) {
+      setInstances([DEMO_INSTANCE]);
+      setGuard(DEMO_GUARD);
+      return;
+    }
     setInstances(loadInstances());
+  }, [demo]);
+
+  // `?demo=true` is only visible in the browser, so demo mode is settled here.
+  useEffect(() => {
+    if (demoFlagFromQuery(window.location.search)) setDemo(true);
   }, []);
+
+  // In demo mode the feed is seeded and watching immediately: a visitor should
+  // see realistic telemetry without having to click "Start watching" first. The
+  // fixtures never touch RPC, so this cannot fire a chain read.
+  useEffect(() => {
+    if (!demo) return;
+    setEvents(demoEvents());
+    setFeed((current) => ({ ...current, watching: true, latestLedger: DEMO_BASE_LEDGER, error: null }));
+  }, [demo]);
 
   // Pick up an already-authorized wallet without prompting for access again.
   useEffect(() => {
+    if (demo) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -131,7 +170,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [demo]);
 
   const connect = useCallback(async () => {
     setConnecting(true);
@@ -158,15 +197,23 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   const disconnect = useCallback(() => setWallet(null), []);
 
   const signer = useCallback((): WalletSigner => {
+    if (demo) {
+      throw new Error(
+        "Demo mode shows static fixture data, so writes are disabled. Unset " +
+          "NEXT_PUBLIC_DEMO_MODE and drop ?demo=true to sign with a real wallet.",
+      );
+    }
     if (!wallet) throw new Error("Connect a wallet before signing anything.");
     return freighterSigner(wallet.address, NETWORK.passphrase);
-  }, [wallet]);
+  }, [wallet, demo]);
 
   const refresh = useCallback(async () => {
     if (!guard) return;
     setRefreshing(true);
     try {
-      const next = await readGuardSnapshot(server, guard, wallet?.address);
+      // In demo mode the snapshot is a fixture, so no read (and no failure) is
+      // possible; outside demo mode this is unchanged and always hits the chain.
+      const next = demo ? demoSnapshot() : await readGuardSnapshot(server, guard, wallet?.address);
       setSnapshot(next);
       setSnapshotError(null);
     } catch (error) {
@@ -177,7 +224,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     } finally {
       setRefreshing(false);
     }
-  }, [guard, server, wallet?.address]);
+  }, [guard, server, wallet?.address, demo]);
 
   useEffect(() => {
     void refresh();
@@ -215,11 +262,11 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const startWatching = useCallback(() => {
-    if (!feedRef.current || feedRef.current.guard !== guard) {
+    if (!demo && (!feedRef.current || feedRef.current.guard !== guard)) {
       feedRef.current = new GuardFeed(server, guard);
     }
     setFeed((current) => ({ ...current, watching: true, error: null }));
-  }, [guard, server]);
+  }, [guard, server, demo]);
 
   const stopWatching = useCallback(() => {
     setFeed((current) => ({ ...current, watching: false }));
@@ -232,6 +279,31 @@ export function GuardProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!feed.watching) return;
+
+    // Demo mode generates its own event stream on a timer. It deliberately does
+    // not construct a `GuardFeed`, so demo mode makes no RPC call at all.
+    if (demo) {
+      let demoCancelled = false;
+      let sequence = 1;
+      const emit = () => {
+        if (demoCancelled) return;
+        const event = syntheticDemoEvent(sequence, Date.now());
+        sequence += 1;
+        setEvents((current) => [event, ...current].slice(0, 250));
+        setFeed((current) => ({
+          ...current,
+          latestLedger: DEMO_BASE_LEDGER + sequence,
+          lastPolledAt: new Date().toISOString(),
+          error: null,
+        }));
+      };
+      const demoTimer = setInterval(emit, 4_000);
+      return () => {
+        demoCancelled = true;
+        clearInterval(demoTimer);
+      };
+    }
+
     let cancelled = false;
     const tick = async () => {
       const feedRunner = feedRef.current;
@@ -261,7 +333,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [feed.watching, pushEvents]);
+  }, [feed.watching, pushEvents, demo]);
 
   const value: GuardContextValue = {
     server,
@@ -296,4 +368,4 @@ export function useGuard(): GuardContextValue {
   return value;
 }
 
-export { eventKey };
+export { eventKey, GuardContext };

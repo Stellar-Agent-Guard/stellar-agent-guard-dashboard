@@ -205,3 +205,7 @@ Notably **not** claimed: that the browser UI itself was driven end to end. This 
 browser, so the UI is verified by building and serving it, and the on-chain behaviour is verified by
 driving the identical library code headlessly. Files under `lib/guard/` are the tested surface; the
 React components are thin over them and are not covered by automated tests.
+
+## 10. Architecture Decision Records
+Key architectural decisions are documented in ADRs under \docs/adr/\:
+- [ADR 001 - Zero-Server Client-Only Architecture](docs/adr/001-zero-server-architecture.md)
