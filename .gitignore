@@ -11,3 +11,11 @@ build/
 .DS_Store
 *.tsbuildinfo
 next-env.d.ts
+
+# Playwright: run artifacts are disposable, but the committed baselines under
+# tests/visual/__screenshots__ are not — they are the reference images the suite
+# compares against, so they are deliberately absent from this list.
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
