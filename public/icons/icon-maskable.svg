@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Stellar Agent Guard">
+  <title>Stellar Agent Guard</title>
+  <!-- Full-bleed background: a maskable icon is cropped to the platform's shape,
+       so nothing important may sit in the outer 20%. -->
+  <rect width="512" height="512" fill="#0a0d12"/>
+  <path
+    d="M256 128 368 172v112c0 66-44 114-112 132-68-18-112-66-112-132V172z"
+    fill="#12161d"
+    stroke="#4da3ff"
+    stroke-width="20"
+    stroke-linejoin="round"
+  />
+  <circle cx="256" cy="248" r="28" fill="#4da3ff"/>
+  <path d="M256 272v48" stroke="#4da3ff" stroke-width="20" stroke-linecap="round"/>
+</svg>
