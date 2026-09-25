@@ -132,12 +132,13 @@ npm run inspect      # read-only dump of an instance's state
 
 ## Operator Runbooks
 
-Two step-by-step procedures cover the console's high-stakes operations. They are written to be followed under pressure, and both include CLI fallback commands for when the browser UI is unavailable.
+Three step-by-step procedures cover the console's high-stakes operations. They are written to be followed under pressure, and each includes CLI fallback commands for when the browser UI is unavailable.
 
 | Runbook | Use it when |
 | --- | --- |
 | [**Emergency Freeze & Security Incident Response**](./docs/runbooks/emergency-freeze.md) | An agent is behaving abnormally or a key may be compromised. Covers incident classification and response timelines, the two-step `PanicPanel` confirmation ritual, verifying frozen status on chain (dashboard reader and Stellar CLI), preserving evidence, agent/admin key rotation, root-cause analysis and the unfreeze checklist. |
 | [**Routine Policy Updates & Audit**](./docs/runbooks/policy-updates.md) | Changing caps, allowlists, execution windows, pause state or the dead-man switch. Covers capturing a rollback baseline, staging and validating a draft in `PolicyForm`, the `set_policy` rolling-window and dead-man-switch resets, the pre-flight security checklist (including verifying token contract IDs on Stellar Expert), post-submission verification and rollback/recovery. |
+| [**Agent Key Rotation & Non-Custodial Security**](./docs/runbooks/agent-key-rotation.md) | The agent key needs replacing — scheduled hygiene, a decommissioned runtime, or a suspected leak. Covers the admin/agent trust boundary and why `rotate_agent_key` is admin-only, the sequential procedure (generate off-runtime → update the runtime → admin-signed rotation → verify new auth and old-key refusal), and decommissioning the old keypair everywhere.
 
 ## Architecture
 
