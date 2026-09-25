@@ -48,6 +48,19 @@ export function StatusPanel() {
         />
       )}
 
+      {/* Derived from `status()` alone, so it shows regardless of whether the
+          post-deploy checklist has been dismissed. The warning is the safety
+          invariant; the wizard is only an affordance. */}
+      {snapshot && defaultDenyWarning(snapshot.status) && (
+        <div className="notice" role="status">
+          <strong>No policy installed — the account is in default-deny</strong>
+          <span className="tiny">
+            With no policy the account refuses every call, including its own agent. Dismissing the
+            post-deploy checklist does not clear this warning; only installing a policy does.
+          </span>
+        </div>
+      )}
+
       {!snapshot && !snapshotError && <p className="muted tiny">Reading the chain…</p>}
 
       {snapshot && (

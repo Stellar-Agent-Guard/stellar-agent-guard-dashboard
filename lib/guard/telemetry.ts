@@ -53,14 +53,33 @@ export class GuardFeed {
   private readonly listener: GuardTelemetryListener;
   private cursor: string | null = null;
   private latestLedger: number | null = null;
+  /** Set by `stop()`. A stopped feed never polls again, even if referenced. */
+  private stopped = false;
 
   constructor(server: rpc.Server, guard: string, rpcUrl: string = NETWORK.rpcUrl) {
     this.guard = guard;
     this.listener = new GuardTelemetryListener({ server, guard, rpcUrl });
   }
 
+  /**
+   * Release this feed. The multi-guard supervisor calls this the moment a guard
+   * is removed from the registry, so a reconciled-away listener cannot keep
+   * emitting events through a stale reference.
+   */
+  stop(): void {
+    this.stopped = true;
+  }
+
+  /** True once `stop()` has been called. Exposed for lifecycle assertions. */
+  isStopped(): boolean {
+    return this.stopped;
+  }
+
   /** One page of committed ledger events. Advances the cursor. */
   async pollOnce(limit = 50): Promise<TelemetryPage> {
+    if (this.stopped) {
+      return { events: [], cursor: this.cursor ?? "", latestLedger: this.latestLedger ?? 0 };
+    }
     const params: { cursor?: string; limit: number; startLedger?: number } = { limit };
     if (this.cursor) {
       params.cursor = this.cursor;
