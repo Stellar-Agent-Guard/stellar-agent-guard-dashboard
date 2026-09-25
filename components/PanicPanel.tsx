@@ -5,7 +5,7 @@ import type { InvokeResult } from "../lib/guard/submit.ts";
 import { freezeGuard, unfreezeGuard } from "../lib/guard/guardOps.ts";
 import { refusedEventsFromDiagnostics } from "../lib/guard/telemetry.ts";
 import { useGuard } from "./GuardProvider.tsx";
-import { ErrorBlock, starLink } from "./bits.tsx";
+import { ErrorBlock, starLink, WRITE_DISABLED_HINT } from "./bits.tsx";
 
 /**
  * The emergency panic button.
@@ -193,6 +193,7 @@ export function PanicPanel() {
             className="danger"
             ref={triggerRef}
             disabled={!wallet || alreadyFrozen === true}
+            title={wallet ? undefined : WRITE_DISABLED_HINT}
             onClick={() => {
               setAcknowledged(false);
               setPhase("confirming");
@@ -204,6 +205,7 @@ export function PanicPanel() {
           <button
             className="secondary"
             disabled={!wallet || alreadyFrozen === false}
+            title={wallet ? undefined : WRITE_DISABLED_HINT}
             onClick={() => void run("unfreeze")}
           >
             Unfreeze

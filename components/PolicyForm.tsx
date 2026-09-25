@@ -20,7 +20,7 @@ import {
   type AssetCapChange,
 } from "../lib/guard/assetCapsCsv.ts";
 import { useGuard } from "./GuardProvider.tsx";
-import { ErrorBlock, ScopeNotice, starLink } from "./bits.tsx";
+import { ErrorBlock, ScopeNotice, starLink, WRITE_DISABLED_HINT } from "./bits.tsx";
 
 /**
  * The no-code configurator.
@@ -413,13 +413,22 @@ export function PolicyForm() {
       )}
 
       <div className="row" style={{ marginTop: 14 }}>
-        <button disabled={!wallet || busy || issues.length > 0} onClick={() => void submit()}>
+        <button
+          disabled={!wallet || busy || issues.length > 0}
+          title={wallet ? undefined : WRITE_DISABLED_HINT}
+          onClick={() => void submit()}
+        >
           {busy ? "Working…" : "Sign and install policy"}
         </button>
         <button className="secondary" disabled={!wallet || busy || issues.length > 0} onClick={() => void submit(true)}>
           Export XDR
         </button>
-        <button className="secondary" disabled={!wallet || busy} onClick={() => void revoke()}>
+        <button
+          className="secondary"
+          disabled={!wallet || busy}
+          title={wallet ? undefined : WRITE_DISABLED_HINT}
+          onClick={() => void revoke()}
+        >
           Revoke policy (default deny)
         </button>
         <button className="secondary" onClick={() => { setDraft(EMPTY_DRAFT); setAssetCapChanges({}); }} disabled={busy}>

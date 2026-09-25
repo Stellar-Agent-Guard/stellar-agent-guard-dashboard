@@ -18,7 +18,7 @@ import { PHASE1_ARTIFACT } from "../lib/guard/network.ts";
 import { bytesToHex } from "../lib/guard/scval.ts";
 import { validateInitParameters, type InitValidation } from "../lib/guard/initValidator.ts";
 import { useGuard } from "./GuardProvider.tsx";
-import { ErrorBlock, OutcomeList, starLink } from "./bits.tsx";
+import { ErrorBlock, OutcomeList, starLink, WRITE_DISABLED_HINT } from "./bits.tsx";
 
 function randomSalt(): Uint8Array {
   const salt = new Uint8Array(32);
@@ -235,6 +235,7 @@ export function DeployPanel() {
       <div className="row" style={{ marginTop: 14 }}>
         <button
           disabled={!wallet || deploying || artifact?.ok !== true}
+          title={wallet ? undefined : WRITE_DISABLED_HINT}
           onClick={() => void deploy()}
         >
           {deploying ? "Deploying..." : "Deploy guard"}
@@ -357,6 +358,7 @@ export function DeployPanel() {
             agentPubkey.trim().length === 0 ||
             !initValidation.canDeploy
           }
+          title={wallet ? undefined : WRITE_DISABLED_HINT}
           onClick={() => void initialize(outcome?.guard ?? "")}
         >
           Sign and initialize

@@ -5,13 +5,26 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { ReadResult } from "../lib/guard/chain.ts";
-import { ENFORCEMENT_SCOPE_STATEMENT } from "../lib/guard/network.ts";
+import { ENFORCEMENT_SCOPE_STATEMENT, NETWORK } from "../lib/guard/network.ts";
 import { lookupLabel, subscribeAddressBook } from "../lib/guard/addressBook.ts";
 import {
   formatRawStroops,
   formatStroopsWithUnit,
   type FormatStroopsOptions,
 } from "../lib/guard/formatters.ts";
+
+/**
+ * The tooltip on a wallet-gated write button while it is disabled because no
+ * wallet is connected.
+ *
+ * Every write is signed by the connected wallet, and a wallet on the wrong
+ * network is refused at connect time — so a write needs a wallet that is both
+ * present and on the network the dashboard is pinned to. This is the one
+ * wording every such button shares.
+ */
+export const WRITE_DISABLED_HINT =
+  `Connect the admin wallet on ${NETWORK.name} to enable this action — a wallet ` +
+  "on a different network is refused at connect time.";
 
 export function Tabs() {
   const pathname = usePathname();

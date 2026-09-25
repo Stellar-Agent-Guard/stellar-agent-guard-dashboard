@@ -38,7 +38,12 @@ import {
   rememberInstance,
   type GuardInstance,
 } from "../lib/guard/instance.ts";
-import { connectWallet, currentAddress, freighterSigner, type ConnectedWallet } from "../lib/guard/wallet.ts";
+import {
+  connectWallet,
+  currentWallet,
+  freighterSigner,
+  type ConnectedWallet,
+} from "../lib/guard/wallet.ts";
 import type { WalletSigner } from "../lib/guard/submit.ts";
 import {
   useIdleTimer,
@@ -59,6 +64,20 @@ import {
 
 const SNAPSHOT_INTERVAL_MS = 15_000;
 const FEED_INTERVAL_MS = 5_000;
+
+/**
+ * The one wording for a wallet whose network cannot sign for this dashboard.
+ *
+ * Both the explicit connect and the silent reconnect below use it, so a
+ * mismatch reads identically however it was discovered.
+ */
+function networkMismatch(connected: ConnectedWallet): string {
+  return (
+    `Your wallet is on "${connected.network}", but this dashboard is configured for ` +
+    `"${NETWORK.name}". A signature produced for a different network cannot authorize ` +
+    `a call on this one, so nothing was sent. Switch the wallet's network and reconnect.`
+  );
+}
 
 interface GuardContextValue {
   server: rpc.Server;
@@ -191,14 +210,21 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   }, [demo]);
 
   // Pick up an already-authorized wallet without prompting for access again.
+  // The network is checked here too: reconnecting silently must not be a way
+  // around the mismatch refusal that the connect button enforces.
   useEffect(() => {
     if (demo) return;
     let cancelled = false;
     void (async () => {
       try {
-        const address = await currentAddress();
-        if (!address || cancelled) return;
-        setWallet({ address, networkPassphrase: NETWORK.passphrase, network: NETWORK.name });
+        const connected = await currentWallet();
+        if (!connected || cancelled) return;
+        if (connected.networkPassphrase !== NETWORK.passphrase) {
+          setWallet(null);
+          setWalletError(networkMismatch(connected));
+          return;
+        }
+        setWallet(connected);
       } catch {
         // A wallet that is not installed is a normal state, not an error to show.
       }
@@ -215,11 +241,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
       const connected = await connectWallet();
       if (connected.networkPassphrase !== NETWORK.passphrase) {
         setWallet(null);
-        setWalletError(
-          `Your wallet is on "${connected.network}", but this dashboard is configured for ` +
-            `"${NETWORK.name}". A signature produced for a different network cannot authorize ` +
-            `a call on this one, so nothing was sent. Switch the wallet's network and reconnect.`,
-        );
+        setWalletError(networkMismatch(connected));
         return;
       }
       setWallet(connected);
