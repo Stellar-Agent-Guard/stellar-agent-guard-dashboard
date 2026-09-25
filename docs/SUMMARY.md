@@ -16,6 +16,7 @@
 * [Operator Runbooks](runbooks/)
   * [Emergency Freeze & Incident Response](runbooks/emergency-freeze.md)
   * [Routine Policy Updates & Audit](runbooks/policy-updates.md)
+  * [Agent Key Rotation & Non-Custodial Security](runbooks/agent-key-rotation.md)
 * [Architecture](architecture.md)
 * [Testnet Verification](verification.md)
 * [Enforcement Scope](enforcement-scope.md)
