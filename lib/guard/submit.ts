@@ -83,6 +83,7 @@ export type InvokeResult =
       /** An unsigned transaction XDR was successfully exported for external tools. */
       kind: "exported";
       xdr: string;
+      detail?: string;
     };
 
 export interface InvokeRequest {

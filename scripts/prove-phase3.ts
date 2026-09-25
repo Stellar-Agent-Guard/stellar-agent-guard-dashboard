@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Phase 3 end-to-end proof, driven headlessly against Stellar testnet.
  *
