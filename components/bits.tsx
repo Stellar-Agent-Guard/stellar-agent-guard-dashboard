@@ -2,9 +2,16 @@
 
 import { usePathname } from "next/navigation";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { ReadResult } from "../lib/guard/chain.ts";
 import { ENFORCEMENT_SCOPE_STATEMENT } from "../lib/guard/network.ts";
+import { lookupLabel, subscribeAddressBook } from "../lib/guard/addressBook.ts";
+import {
+  formatRawStroops,
+  formatStroopsWithUnit,
+  type FormatStroopsOptions,
+} from "../lib/guard/formatters.ts";
 
 export function Tabs() {
   const pathname = usePathname();
@@ -99,6 +106,50 @@ export function short(value: string, head = 6, tail = 4): string {
   return `${value.slice(0, head)}…${value.slice(-tail)}`;
 }
 
+/**
+ * The operator's nickname for an address, or `null` when it is not in the book.
+ *
+ * Resolves to `null` during server render (there is no `localStorage` to read)
+ * and again on the first client render, then settles once mounted, so it never
+ * causes a hydration mismatch — an unlabelled address looks identical on both.
+ * It re-reads whenever the book changes anywhere in the tab.
+ */
+export function useAddressLabel(address: string): string | null {
+  // Always start `null` — the same on server and client's first render — then
+  // resolve from the book in an effect. Reading `localStorage` during the first
+  // render would desynchronise hydration whenever an address happens to be
+  // labelled.
+  const [label, setLabel] = useState<string | null>(null);
+  useEffect(() => {
+    const refresh = () => setLabel(lookupLabel(address));
+    refresh();
+    return subscribeAddressBook(refresh);
+  }, [address]);
+  return label;
+}
+
+/**
+ * Render an address the way an operator reads it: `Nickname (XXXX…YYYY)` when it
+ * is in the address book, otherwise the bare truncated form. The full address
+ * stays on `title` so nothing is lost — the nickname is a convenience over the
+ * real key, never a replacement for it.
+ */
+export function AddressText({
+  address,
+  className,
+}: {
+  address: string;
+  className?: string;
+}): ReactNode {
+  const label = useAddressLabel(address);
+  const truncated = label ? short(address, 4, 4) : short(address);
+  return (
+    <span className={className ?? "mono"} title={address}>
+      {label ? `${label} (${truncated})` : truncated}
+    </span>
+  );
+}
+
 export function relativeTime(iso: string | null): string {
   if (!iso) return "never";
   const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
@@ -149,5 +200,32 @@ export function starLink(hash: string): ReactNode {
     <a href={`https://stellar.expert/explorer/testnet/tx/${hash}`} target="_blank" rel="noreferrer">
       <span className="mono">{short(hash, 10, 6)}</span>
     </a>
+  );
+}
+
+export interface AmountDisplayProps extends FormatStroopsOptions {
+  /** Amount in stroops (BigInt-safe). */
+  stroops: bigint | number | string;
+}
+
+/**
+ * Render a stroop amount human-readably, with a one-click toggle to the
+ * exact raw stroops. A button (not a bare click target) so the toggle is
+ * keyboard-operable and announced.
+ */
+export function AmountDisplay({ stroops, symbol, decimals }: AmountDisplayProps) {
+  const [showRaw, setShowRaw] = useState(false);
+  const human = formatStroopsWithUnit(stroops, { symbol, decimals });
+  const raw = formatRawStroops(stroops);
+  return (
+    <button
+      type="button"
+      className="mono"
+      onClick={() => setShowRaw((v) => !v)}
+      aria-label={showRaw ? `Raw amount: ${raw}` : `Amount: ${human}. Activate to show raw stroops.`}
+      title={showRaw ? "Show human-readable amount" : "Show raw stroops"}
+    >
+      {showRaw ? raw : human}
+    </button>
   );
 }

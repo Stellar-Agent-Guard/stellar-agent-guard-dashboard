@@ -321,6 +321,36 @@ table.events td {
   vertical-align: top;
 }
 
+table.asset-caps {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+table.asset-caps th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  padding: 6px;
+}
+
+table.asset-caps td {
+  border-top: 1px solid var(--line);
+  padding: 6px;
+  vertical-align: top;
+}
+
+table.asset-caps input {
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.asset-cap-badge {
+  margin-top: 4px;
+}
+
 .scrolly {
   max-height: 340px;
   overflow-y: auto;
@@ -450,4 +480,98 @@ code {
 
 .modal .row:last-child {
   margin-top: 12px;
+}
+
+/* Toast notification queue (issue #105) — fixed corner viewport. */
+.toast-viewport {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(380px, calc(100vw - 32px));
+}
+
+.toast-live {
+  display: contents;
+}
+
+.toast {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.toast-success { border-left-color: var(--ok); }
+.toast-info { border-left-color: var(--accent); }
+.toast-warning { border-left-color: var(--warn); }
+.toast-error { border-left-color: var(--danger); }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.toast-enter {
+  animation: toast-in 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-enter { animation: none; }
+}
+
+.toast-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.toast-title {
+  font-size: 13px;
+}
+
+.toast-details {
+  margin-top: 6px;
+}
+
+.toast-details-raw {
+  margin: 6px 0;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+@media print {
+  .no-print, button, nav, .theme-toggle, .wallet-bar, .demo-badge {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  span.print-only {
+    display: inline !important;
+  }
+  .panel, body, html {
+    background: white !important;
+    color: black !important;
+  }
+  * {
+    color: black !important;
+    border-color: #ccc !important;
+  }
+  .pill.ok, .pill.warn, .pill.danger {
+    background: transparent !important;
+    border: 1px solid black !important;
+  }
+}
+
+.print-only {
+  display: none;
 }

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stellar Agent Guard — offline</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0a0d12;
+        color: #e6ebf2;
+        font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        padding: 24px;
+      }
+      main {
+        max-width: 520px;
+        border: 1px solid #242c38;
+        background: #12161d;
+        border-radius: 11px;
+        padding: 20px 22px;
+      }
+      h1 {
+        font-size: 17px;
+        margin: 0 0 10px;
+      }
+      p {
+        margin: 0 0 10px;
+        color: #8b98ab;
+        font-size: 13.5px;
+      }
+      strong {
+        color: #ffb020;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Stellar Agent Guard is offline</h1>
+      <p>
+        <strong>The operator console cannot reach the network.</strong> The cached interface loaded, but
+        every number it shows comes from a live Soroban RPC read, so nothing is displayed while the
+        connection is down.
+      </p>
+      <p>
+        Chain reads are never served from a cache. Reconnect and reload to see the guard's current
+        on-chain state.
+      </p>
+    </main>
+  </body>
+</html>

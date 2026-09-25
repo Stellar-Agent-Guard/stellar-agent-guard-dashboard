@@ -349,6 +349,7 @@ async function main(): Promise<void> {
     windowCap: "150",
     windowSecs: "60",
     assets: token,
+    assetCaps: [],
     recipients: recipient.publicKey(),
     allowAnyRecipient: false,
     protocols: "",
