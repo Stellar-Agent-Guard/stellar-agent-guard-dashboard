@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { InvokeResult } from "../lib/guard/submit.ts";
 import { freezeGuard, unfreezeGuard } from "../lib/guard/guardOps.ts";
 import { refusedEventsFromDiagnostics } from "../lib/guard/telemetry.ts";
@@ -35,6 +35,73 @@ export function PanicPanel() {
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
+
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const confirming = phase === "confirming";
+
+  // Focus management for the confirmation dialog: move focus in on open, keep
+  // Tab cycling inside it, close on Escape, and restore focus to the trigger
+  // whenever the dialog goes away. Without this a modal is either a keyboard
+  // trap (focus escapes into the page behind it) or a dead end (focus lands
+  // nowhere on dismissal) — both fail WCAG 2.1 AA keyboard requirements.
+  useEffect(() => {
+    if (!confirming) return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const focusables = () =>
+      Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+
+    // Focus the dialog itself first, so a screen reader announces the title
+    // before the operator tabs into its controls.
+    dialog.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setPhase("idle");
+        setAcknowledged(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement as HTMLElement | null;
+      const inside = active !== null && dialog.contains(active);
+      if (event.shiftKey && (active === first || !inside)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !inside)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      // Dismissal in any form (Escape, Cancel, or proceeding to sign) returns
+      // focus to the trigger. The trigger row is re-created when the dialog
+      // closes, and React re-attaches refs during the commit — before this
+      // cleanup runs — so the ref already points at the live button. Reading
+      // `.current` at cleanup time is the whole point; a snapshot taken when
+      // the effect started would be null (the row is unmounted while the
+      // dialog is open) or a detached node.
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate late ref read, see above
+      triggerRef.current?.focus();
+    };
+  }, [confirming]);
 
   const alreadyFrozen = snapshot?.status.ok ? snapshot.status.value.admin_frozen : null;
 
@@ -108,6 +175,7 @@ export function PanicPanel() {
         <div className="row" style={{ marginTop: 12 }}>
           <button
             className="danger"
+            ref={triggerRef}
             disabled={!wallet || alreadyFrozen === true}
             onClick={() => {
               setAcknowledged(false);
@@ -128,33 +196,44 @@ export function PanicPanel() {
       )}
 
       {phase === "confirming" && (
-        <div className="notice">
-          <strong>Confirm the freeze — this stops the agent immediately</strong>
-          <p className="tiny">
-            The agent will not be able to make any call that requires its authorization until the
-            account is unfrozen. This will prompt your wallet to sign an <code>unfreeze</code>-able{" "}
-            <code>freeze()</code> call on{" "}
-            <span className="mono">{guard.slice(0, 10)}…</span>.
-          </p>
-          <div className="checkline">
-            <input
-              id="ack-freeze"
-              type="checkbox"
-              checked={acknowledged}
-              onChange={(event) => setAcknowledged(event.target.checked)}
-            />
-            <label htmlFor="ack-freeze">
-              I understand this halts the agent&apos;s spending, and that undoing it needs a second
-              signed <code>unfreeze()</code>.
-            </label>
-          </div>
-          <div className="row">
-            <button className="danger" disabled={!acknowledged} onClick={() => void run("freeze")}>
-              Sign freeze
-            </button>
-            <button className="secondary" onClick={() => setPhase("idle")}>
-              Cancel
-            </button>
+        <div className="modal-backdrop">
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="freeze-confirm-title"
+            ref={dialogRef}
+            tabIndex={-1}
+          >
+            <strong id="freeze-confirm-title">
+              Confirm the freeze — this stops the agent immediately
+            </strong>
+            <p className="tiny">
+              The agent will not be able to make any call that requires its authorization until the
+              account is unfrozen. This will prompt your wallet to sign an <code>unfreeze</code>-able{" "}
+              <code>freeze()</code> call on{" "}
+              <span className="mono">{guard.slice(0, 10)}…</span>.
+            </p>
+            <div className="checkline">
+              <input
+                id="ack-freeze"
+                type="checkbox"
+                checked={acknowledged}
+                onChange={(event) => setAcknowledged(event.target.checked)}
+              />
+              <label htmlFor="ack-freeze">
+                I understand this halts the agent&apos;s spending, and that undoing it needs a second
+                signed <code>unfreeze()</code>.
+              </label>
+            </div>
+            <div className="row">
+              <button className="danger" disabled={!acknowledged} onClick={() => void run("freeze")}>
+                Sign freeze
+              </button>
+              <button className="secondary" onClick={() => setPhase("idle")}>
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
