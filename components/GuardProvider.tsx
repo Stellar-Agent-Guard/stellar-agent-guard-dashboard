@@ -26,11 +26,11 @@ import {
   type ReactNode,
 } from "react";
 import type { rpc } from "@stellar/stellar-sdk";
-import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { createServer } from "../lib/guard/chain.ts";
 import { readGuardSnapshot, type GuardSnapshot } from "../lib/guard/guardOps.ts";
 import { NETWORK } from "../lib/guard/network.ts";
-import { GuardFeed } from "../lib/guard/telemetry.ts";
+import { toJsonSafe } from "../lib/guard/exportFormats.ts";
+import { GuardFeed, type TelemetryEvent } from "../lib/guard/telemetry.ts";
 import { createTabSync, type TabSyncEventType } from "../lib/guard/tabSync.ts";
 import {
   KNOWN_INSTANCES,
@@ -77,7 +77,8 @@ interface GuardContextValue {
   snapshotError: string | null;
   refreshing: boolean;
   refresh: () => Promise<void>;
-  events: GuardEvent[];
+  /** Newest first; each carries its raw XDR when the source provided it. */
+  events: TelemetryEvent[];
   feed: {
     watching: boolean;
     latestLedger: number | null;
@@ -88,7 +89,7 @@ interface GuardContextValue {
   stopWatching: () => void;
   clearEvents: () => void;
   /** Surface refused-write diagnostics in the feed, labelled as diagnostics. */
-  pushEvents: (events: GuardEvent[]) => void;
+  pushEvents: (events: TelemetryEvent[]) => void;
   /**
    * Tell the other open tabs that this one changed something. The provider adds
    * the active guard, so callers only name the change.
@@ -106,7 +107,7 @@ interface GuardContextValue {
 const GuardContext = createContext<GuardContextValue | null>(null);
 
 /** A stable identity for an event, so re-polling the same page cannot duplicate rows. */
-function eventKey(event: GuardEvent): string {
+function eventKey(event: TelemetryEvent): string {
   return [
     event.source,
     event.transactionHash ?? "-",
@@ -114,7 +115,9 @@ function eventKey(event: GuardEvent): string {
     event.topic,
     event.decision?.result ?? "-",
     event.decision?.reason ?? "-",
-    typeof event.data === "object" && event.data !== null ? JSON.stringify(event.data) : String(event.data),
+    // `toJsonSafe` first: decoded data carries bigints (a heartbeat's `at`),
+    // which plain `JSON.stringify` refuses to serialise.
+    typeof event.data === "object" && event.data !== null ? JSON.stringify(toJsonSafe(event.data)) : String(event.data),
   ].join("|");
 }
 
@@ -138,7 +141,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<GuardSnapshot | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [events, setEvents] = useState<GuardEvent[]>([]);
+  const [events, setEvents] = useState<TelemetryEvent[]>([]);
   const [feed, setFeed] = useState<GuardContextValue["feed"]>({
     watching: false,
     latestLedger: null,
@@ -344,7 +347,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     [tabSync],
   );
 
-  const pushEvents = useCallback((incoming: GuardEvent[]) => {
+  const pushEvents = useCallback((incoming: TelemetryEvent[]) => {
     if (incoming.length === 0) return;
     setEvents((current) => {
       const fresh = incoming.filter((event) => {

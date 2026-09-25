@@ -1,7 +1,23 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { describeGuardEvent, explainReason } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
+import {
+  NDJSON_MIME,
+  NO_TELEMETRY_FILTER,
+  filterTelemetry,
+  isFilterActive,
+  ndjsonFilename,
+  telemetryToNdjson,
+  type SourceFilter,
+  type TelemetryFilter,
+  type VerdictFilter,
+} from "../lib/guard/exportFormats.ts";
+import { NETWORK } from "../lib/guard/network.ts";
+import type { TelemetryEvent } from "../lib/guard/telemetry.ts";
+import { useAnnounce } from "../lib/guard/useAnnounce.ts";
+import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, relativeTime, short, starLink } from "./bits.tsx";
 
@@ -21,6 +37,41 @@ import { ErrorBlock, relativeTime, short, starLink } from "./bits.tsx";
  */
 export function TelemetryFeed() {
   const { events, feed, startWatching, stopWatching, clearEvents, guard } = useGuard();
+  const announce = useAnnounce();
+  const demo = useDemoMode();
+  const [filter, setFilter] = useState<TelemetryFilter>(NO_TELEMETRY_FILTER);
+  const filtered = useMemo(() => filterTelemetry(events, filter), [events, filter]);
+  const filterActive = isFilterActive(filter);
+
+  /**
+   * Download the feed as an NDJSON audit log. With a filter active, the default
+   * export is what is on screen; "full buffer" ignores the filter.
+   */
+  function exportNdjson(scope: "view" | "full") {
+    const selected: TelemetryEvent[] = scope === "full" ? events : filtered;
+    const appliedFilter = scope === "full" ? NO_TELEMETRY_FILTER : filter;
+    const exportedAt = new Date();
+    const body = telemetryToNdjson({
+      events: selected,
+      bufferedCount: events.length,
+      guard,
+      network: NETWORK.name,
+      filter: appliedFilter,
+      latestLedger: feed.latestLedger,
+      demo,
+      exportedAt,
+    });
+    const blob = new Blob([body], { type: `${NDJSON_MIME};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = ndjsonFilename(exportedAt, isFilterActive(appliedFilter) ? "filtered" : "full");
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    announce(`Exported ${selected.length} event${selected.length === 1 ? "" : "s"} as NDJSON`);
+  }
 
   return (
     <div className="panel">
@@ -40,6 +91,45 @@ export function TelemetryFeed() {
             Clear
           </button>
         </div>
+      </div>
+
+      <div className="row" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
+        <label className="tiny">
+          Decision{" "}
+          <select
+            value={filter.verdict}
+            onChange={(event) => setFilter((current) => ({ ...current, verdict: event.target.value as VerdictFilter }))}
+          >
+            <option value="all">All events</option>
+            <option value="allowed">Allowed</option>
+            <option value="blocked">Blocked</option>
+            <option value="none">No decision (lifecycle)</option>
+          </select>
+        </label>
+        <label className="tiny">
+          Source{" "}
+          <select
+            value={filter.source}
+            onChange={(event) => setFilter((current) => ({ ...current, source: event.target.value as SourceFilter }))}
+          >
+            <option value="all">Ledger and diagnostic</option>
+            <option value="ledger">Ledger only</option>
+            <option value="diagnostic">Diagnostic only</option>
+          </select>
+        </label>
+        <button
+          className="secondary"
+          onClick={() => exportNdjson("view")}
+          disabled={filtered.length === 0}
+          title="One JSON object per line: decoded fields, verdict, ledger, transaction hash and the raw event XDR"
+        >
+          Export NDJSON{filterActive ? ` (${filtered.length} shown)` : ""}
+        </button>
+        {filterActive && (
+          <button className="secondary" onClick={() => exportNdjson("full")} disabled={events.length === 0}>
+            Export full buffer ({events.length})
+          </button>
+        )}
       </div>
 
       <p className="tiny muted" style={{ marginTop: 8 }}>
@@ -62,7 +152,9 @@ export function TelemetryFeed() {
 
       {feed.error && <ErrorBlock title="The event feed could not poll" detail={feed.error} />}
 
-      {events.length === 0 ? (
+      {events.length > 0 && filtered.length === 0 ? (
+        <p className="tiny muted">No buffered events match this filter.</p>
+      ) : events.length === 0 ? (
         <p className="tiny muted">
           {feed.watching
             ? "No events from this guard yet. Lifecycle events (policy set, frozen, heartbeat) and allowed decisions appear here as they settle."
@@ -81,7 +173,7 @@ export function TelemetryFeed() {
               </tr>
             </thead>
             <tbody>
-              {events.map((event, index) => (
+              {filtered.map((event, index) => (
                 <tr key={`${event.topic}-${event.transactionHash ?? "-"}-${event.ledger ?? "-"}-${index}`}>
                   <td>
                     <div>{labelFor(event)}</div>
@@ -117,7 +209,9 @@ export function TelemetryFeed() {
 
       <p className="tiny muted" style={{ marginTop: 8 }}>
         Feed holds the most recent {events.length} event(s) from{" "}
-        <span className="mono">{short(guard, 8, 6)}</span>.
+        <span className="mono">{short(guard, 8, 6)}</span>
+        {filterActive && `, ${filtered.length} shown`}. NDJSON exports keep 64-bit values (ledgers,
+        stroop amounts, timestamps) as strings so no precision is lost.
       </p>
     </div>
   );
