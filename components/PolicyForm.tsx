@@ -43,6 +43,13 @@ export function PolicyForm() {
   >(null);
   const [error, setError] = useState<string | null>(null);
   const [assetCapChanges, setAssetCapChanges] = useState<Record<string, AssetCapChange>>({});
+  
+  import { useEffect } from "react";
+  import { memoryWiper } from "../lib/guard/memoryWiper.ts";
+  useEffect(() => {
+    return memoryWiper.add(() => setDraft(null));
+  }, []);
+
   const csvInput = useRef<HTMLInputElement>(null);
   const jsonInput = useRef<HTMLInputElement>(null);
 

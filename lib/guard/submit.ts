@@ -271,11 +271,15 @@ function hostErrorFromDiagnostics(events: readonly unknown[]): string | null {
     const text = safeJson(event);
     if (!text.includes('"error"')) continue;
 
-    const messages = [...text.matchAll(/"string":"([^"]{3,200})"/g)].map((match) => match[1]);
+    const messages = [...text.matchAll(/"string":"([^"]{3,200})"/g)]
+      .map((match) => match[1])
+      .filter((m): m is string => m !== undefined);
     const kinds: string[] = [];
     for (const block of text.matchAll(/"error":\{([^}]{1,200})\}/g)) {
       for (const pair of (block[1] ?? "").matchAll(/"([a-z_]+)":"([a-z_]+)"/g)) {
-        kinds.push(`${pair[1]}/${pair[2]}`);
+        if (pair[1] && pair[2]) {
+          kinds.push(`${pair[1]}/${pair[2]}`);
+        }
       }
     }
 

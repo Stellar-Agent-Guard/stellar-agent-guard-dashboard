@@ -56,6 +56,7 @@ import {
   isDemoMode,
   syntheticDemoEvent,
 } from "../lib/guard/demoFixtures.ts";
+import { memoryWiper } from "../lib/guard/memoryWiper.ts";
 
 const SNAPSHOT_INTERVAL_MS = 15_000;
 const FEED_INTERVAL_MS = 5_000;
@@ -134,7 +135,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   const [instances, setInstances] = useState<GuardInstance[]>(() =>
     isDemoMode() ? [DEMO_INSTANCE] : [...KNOWN_INSTANCES],
   );
-  const [guard, setGuard] = useState<string>(isDemoMode() ? DEMO_GUARD : KNOWN_INSTANCES[0]!.guard);
+  const [guard, setGuard] = useState<string>(isDemoMode() ? DEMO_GUARD : KNOWN_INSTANCES[0]?.guard ?? "");
   const [snapshot, setSnapshot] = useState<GuardSnapshot | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -179,6 +180,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   // `?demo=true` is only visible in the browser, so demo mode is settled here.
   useEffect(() => {
     if (demoFlagFromQuery(window.location.search)) setDemo(true);
+    return memoryWiper.registerBrowserEvents();
   }, []);
 
   // In demo mode the feed is seeded and watching immediately: a visitor should
@@ -233,6 +235,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   const disconnect = useCallback(() => {
     setWallet(null);
     tabSync.broadcast("WALLET_DISCONNECTED", { guard: guardRef.current });
+    memoryWiper.wipe();
   }, [tabSync]);
 
   const notifyTabs = useCallback(
@@ -317,7 +320,11 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh();
     const timer = setInterval(() => void refresh(), SNAPSHOT_INTERVAL_MS);
-    return () => clearInterval(timer);
+    const unregister = memoryWiper.add(() => clearInterval(timer));
+    return () => {
+      clearInterval(timer);
+      unregister();
+    };
   }, [refresh]);
 
   const selectGuard = useCallback(
@@ -416,9 +423,11 @@ export function GuardProvider({ children }: { children: ReactNode }) {
         }));
       };
       const demoTimer = setInterval(emit, 4_000);
+      const unregister = memoryWiper.add(() => clearInterval(demoTimer));
       return () => {
         demoCancelled = true;
         clearInterval(demoTimer);
+        unregister();
       };
     }
 
@@ -447,9 +456,14 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     };
     void tick();
     const timer = setInterval(() => void tick(), FEED_INTERVAL_MS);
+    const unregister = memoryWiper.add(() => {
+      cancelled = true;
+      clearInterval(timer);
+    });
     return () => {
       cancelled = true;
       clearInterval(timer);
+      unregister();
     };
   }, [feed.watching, pushEvents, demo]);
 
