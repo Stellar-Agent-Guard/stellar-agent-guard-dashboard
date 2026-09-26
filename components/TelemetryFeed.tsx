@@ -4,11 +4,12 @@ import { describeGuardEvent, explainReason } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, relativeTime, short, starLink } from "./bits.tsx";
+import { severityFor } from "../lib/guard/feedSeverity.ts";
 
 /**
  * The live event feed.
  *
- * Two things are stated on the panel rather than glossed over, because both
+ * Three things are stated on the panel rather than glossed over, because all three
  * change how the feed should be read:
  *
  *   - Soroban RPC has no push stream, so this polls `getEvents` with a cursor and
@@ -18,6 +19,12 @@ import { ErrorBlock, relativeTime, short, starLink } from "./bits.tsx";
  *     that this console produced itself, decoded from the enforced simulation's
  *     diagnostics and labelled `diagnostic`. Absence of refusals here does not
  *     mean absence of refusals on chain.
+ *   - Rows are tiered by severity so a block is findable by looking, not by
+ *     reading: the tier is a class and a `data-severity`, and every tier's wording
+ *     is already in the row, so nothing here depends on colour.
+ *
+ * There is deliberately no sound. An operator console runs unattended and muted;
+ * a noise that can only be silenced in the tab that made it is not an alert.
  */
 export function TelemetryFeed() {
   const { events, feed, startWatching, stopWatching, clearEvents, guard } = useGuard();
@@ -81,35 +88,45 @@ export function TelemetryFeed() {
               </tr>
             </thead>
             <tbody>
-              {events.map((event, index) => (
-                <tr key={`${event.topic}-${event.transactionHash ?? "-"}-${event.ledger ?? "-"}-${index}`}>
-                  <td>
-                    <div>{labelFor(event)}</div>
-                    <div className="tiny muted mono">{describeGuardEvent(event)}</div>
-                  </td>
-                  <td>
-                    {event.decision ? (
-                      event.decision.result === "blocked" ? (
-                        <span className="pill danger">{event.decision.reason ?? "blocked"}</span>
+              {events.map((event, index) => {
+                // O(1) from fields the decoder already produced — no topic or
+                // reason string is parsed to work out how loud the row is.
+                const severity = severityFor(event);
+                return (
+                  <tr
+                    key={`${event.topic}-${event.transactionHash ?? "-"}-${event.ledger ?? "-"}-${index}`}
+                    className={`severity-${severity}`}
+                    data-severity={severity}
+                    data-stream={event.source}
+                  >
+                    <td>
+                      <div>{labelFor(event)}</div>
+                      <div className="tiny muted mono">{describeGuardEvent(event)}</div>
+                    </td>
+                    <td>
+                      {event.decision ? (
+                        event.decision.result === "blocked" ? (
+                          <span className="pill danger">{event.decision.reason ?? "blocked"}</span>
+                        ) : (
+                          <span className="pill ok">allowed</span>
+                        )
                       ) : (
-                        <span className="pill ok">allowed</span>
-                      )
-                    ) : (
-                      <span className="muted tiny">—</span>
-                    )}
-                    {event.decision?.result === "blocked" && event.decision.reason && (
-                      <div className="tiny muted">{explainReason(event.decision.reason)}</div>
-                    )}
-                  </td>
-                  <td>
-                    <span className={`pill${event.source === "diagnostic" ? " warn" : ""}`}>
-                      {event.source}
-                    </span>
-                  </td>
-                  <td className="mono tiny">{event.ledger ?? "—"}</td>
-                  <td>{event.transactionHash ? starLink(event.transactionHash) : <span className="tiny muted">none — never broadcast</span>}</td>
-                </tr>
-              ))}
+                        <span className="muted tiny">—</span>
+                      )}
+                      {event.decision?.result === "blocked" && event.decision.reason && (
+                        <div className="tiny muted">{explainReason(event.decision.reason)}</div>
+                      )}
+                    </td>
+                    <td>
+                      <span className={`pill${event.source === "diagnostic" ? " warn" : ""}`}>
+                        {event.source}
+                      </span>
+                    </td>
+                    <td className="mono tiny">{event.ledger ?? "—"}</td>
+                    <td>{event.transactionHash ? starLink(event.transactionHash) : <span className="tiny muted">none — never broadcast</span>}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
