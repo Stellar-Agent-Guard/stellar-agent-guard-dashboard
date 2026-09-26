@@ -8,6 +8,7 @@ import { PolicyForm } from "../../components/PolicyForm.tsx";
 import { PanicPanel } from "../../components/PanicPanel.tsx";
 import { DeployPanel } from "../../components/DeployPanel.tsx";
 import { TxHistoryTable } from "../../components/TxHistoryTable.tsx";
+import { TelemetryFeed } from "../../components/TelemetryFeed.tsx";
 import { GuardContext } from "../../components/GuardProvider.tsx";
 import { TX_HISTORY_STORAGE_KEY, type TxHistoryEntry } from "../../lib/guard/txHistory.ts";
 
@@ -158,6 +159,65 @@ test("the freeze confirmation dialog passes axe-core while open", async () => {
 
     const violations = await axeViolations(rendered.container);
     assert.deepEqual(violations, [], "the open dialog must pass axe-core");
+  } finally {
+    await rendered.unmount();
+  }
+});
+
+test("TelemetryFeed passes axe-core with severity tiers on every row kind", async () => {
+  // Scanned populated, not empty: a blocked, an allowed, and a lifecycle row
+  // each in the DOM, so the tier markup is what gets audited (issue #26).
+  const events: unknown[] = [
+    {
+      kind: "auth_checked",
+      topic: "event_auth_checked",
+      source: "diagnostic",
+      contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      ledger: null,
+      ledgerClosedAt: null,
+      transactionHash: null,
+      decision: { result: "blocked", reason: "per_tx_cap_exceeded" },
+      data: {},
+    },
+    {
+      kind: "auth_checked",
+      topic: "event_auth_checked",
+      source: "ledger",
+      contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      ledger: 1_000,
+      ledgerClosedAt: "2026-09-25T10:00:00.000Z",
+      transactionHash: "b".repeat(64),
+      decision: { result: "allowed", reason: null },
+      data: {},
+    },
+    {
+      kind: "heartbeat",
+      topic: "event_heartbeat",
+      source: "ledger",
+      contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      ledger: 1_000,
+      ledgerClosedAt: "2026-09-25T10:00:00.000Z",
+      transactionHash: null,
+      decision: null,
+      data: { at: 1_700_000_000 },
+    },
+  ];
+  const context = { ...TEST_GUARD, events, feed: { ...TEST_GUARD.feed, watching: true } };
+  const rendered = await renderPanel(
+    react.createElement(
+      GuardContext.Provider,
+      { value: context },
+      react.createElement(TelemetryFeed),
+    ),
+  );
+  try {
+    assert.equal(
+      rendered.container.querySelectorAll("table.events tbody tr").length,
+      3,
+      "the scan must cover a populated feed",
+    );
+    const violations = await axeViolations(rendered.container);
+    assert.deepEqual(violations, [], "the tiered feed must pass axe-core");
   } finally {
     await rendered.unmount();
   }
