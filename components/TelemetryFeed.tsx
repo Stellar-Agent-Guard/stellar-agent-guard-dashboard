@@ -4,6 +4,8 @@ import { describeGuardEvent, explainReason } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, relativeTime, short, starLink } from "./bits.tsx";
+import { density, initDensityStore } from "../lib/guard/densityStore.ts";
+import { useEffect, useState } from "react";
 
 /**
  * The live event feed.
@@ -21,6 +23,26 @@ import { ErrorBlock, relativeTime, short, starLink } from "./bits.tsx";
  */
 export function TelemetryFeed() {
   const { events, feed, startWatching, stopWatching, clearEvents, guard } = useGuard();
+  const [densityState, setDensityState] = useState<"comfortable" | "compact">("comfortable");
+
+  // Initialize density store from localStorage
+  useEffect(() => {
+    const unsubscribe = initDensityStore();
+    // Subscribe to density store changes
+    const densityUnsubscribe = density.subscribe((value) => {
+      setDensityState(value);
+    });
+
+    // Initialize current state
+    density.subscribe((value) => {
+      setDensityState(value);
+    })();
+
+    return () => {
+      unsubscribe();
+      densityUnsubscribe();
+    };
+  }, []);
 
   return (
     <div className="panel">
@@ -38,6 +60,12 @@ export function TelemetryFeed() {
           )}
           <button className="secondary" onClick={clearEvents} disabled={events.length === 0}>
             Clear
+          </button>
+          {/* Density toggle */}
+          <button className="secondary" onClick={() => {
+            density.set(densityState === "comfortable" ? "compact" : "comfortable");
+          }}>
+            {densityState === "comfortable" ? "Compact" : "Comfortable"}
           </button>
         </div>
       </div>
@@ -70,7 +98,7 @@ export function TelemetryFeed() {
         </p>
       ) : (
         <div className="scrolly">
-          <table className="events">
+          <table className={`events ${densityState === "compact" ? "compact" : ""}`}>
             <thead>
               <tr>
                 <th>Event</th>
