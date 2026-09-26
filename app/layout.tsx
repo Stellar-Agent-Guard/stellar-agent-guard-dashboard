@@ -1,12 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { DemoBadge } from "../components/DemoBadge.tsx";
-import { Tabs } from "../components/bits.tsx";
-import { AriaAnnouncer } from "../components/AriaAnnouncer.tsx";
-import { PwaRegistrar } from "../components/PwaRegistrar.tsx";
-import { ThemeProvider } from "../components/ThemeProvider.tsx";
-import { ThemeToggle } from "../components/ThemeToggle.tsx";
-import { PWA_MANIFEST_PATH, PWA_THEME_COLOR } from "../lib/guard/pwa.ts";
-import "./globals.css";
+import { LayoutShell } from "../components/LayoutShell.tsx";
 
 export const metadata: Metadata = {
   title: "Stellar Agent Guard — operator console",
@@ -14,7 +7,7 @@ export const metadata: Metadata = {
     "Configure, watch and freeze stellar-agent-guard smart accounts. Every action is signed in your own wallet and every number is read from the chain.",
   // Ties the document to the web app manifest, which is what makes the page
   // installable as a standalone app on supported browsers.
-  manifest: PWA_MANIFEST_PATH,
+  manifest: "/manifest.json",
   applicationName: "Stellar Agent Guard",
   icons: {
     icon: [{ url: "/icons/icon.svg", type: "image/svg+xml" }],
@@ -34,7 +27,7 @@ export const metadata: Metadata = {
  * manifest's `theme_color`.
  */
 export const viewport: Viewport = {
-  themeColor: PWA_THEME_COLOR,
+  themeColor: "#000000",
   colorScheme: "dark light",
 };
 
@@ -59,29 +52,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
-        <ThemeProvider>
-          <PwaRegistrar />
-          <AriaAnnouncer />
-          <div className="shell">
-            <DemoBadge />
-            <header className="top">
-              <div className="brand">
-                <h1>Stellar Agent Guard</h1>
-                <span>operator console</span>
-              </div>
-              <div className="row">
-                <span className="pill">Soroban testnet</span>
-                <a href="https://github.com/aigbagbobila/stellar-agent-guard-contracts">contracts</a>
-                <a href="https://github.com/aigbagbobila/stellar-agent-guard-sdk">sdk</a>
-              </div>
-            </header>
-            <div className="row" style={{ justifyContent: "space-between", marginBottom: "16px" }}>
-              <Tabs />
-              <ThemeToggle />
-            </div>
-            {children}
-          </div>
-        </ThemeProvider>
+        <LayoutShell>{children}</LayoutShell>
       </body>
     </html>
   );

@@ -5,7 +5,8 @@ import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, Read, Stat, relativeTime, short } from "./bits.tsx";
 import { PHASE1_ARTIFACT, NETWORK } from "../lib/guard/network.ts";
 import { compilePrintReport } from "../lib/guard/printReport.ts";
-
+import { density, initDensityStore } from "../lib/guard/densityStore.ts";
+import { useEffect, useState } from "react";
 
 /**
  * The guard's live state, every field read from the chain on each refresh.
@@ -18,6 +19,26 @@ import { compilePrintReport } from "../lib/guard/printReport.ts";
  */
 export function StatusPanel() {
   const { snapshot, snapshotError, refreshing, refresh, guard, wallet } = useGuard();
+  const [densityState, setDensityState] = useState<"comfortable" | "compact">("comfortable");
+
+  // Initialize density store from localStorage
+  useEffect(() => {
+    const unsubscribe = initDensityStore();
+    // Subscribe to density store changes
+    const densityUnsubscribe = density.subscribe((value) => {
+      setDensityState(value);
+    });
+
+    // Initialize current state
+    density.subscribe((value) => {
+      setDensityState(value);
+    })();
+
+    return () => {
+      unsubscribe();
+      densityUnsubscribe();
+    };
+  }, []);
 
   const printReport = snapshot ? compilePrintReport(snapshot, NETWORK.name, wallet?.address || "Disconnected") : null;
 
@@ -52,7 +73,7 @@ export function StatusPanel() {
 
       {snapshot && (
         <>
-          <div className="grid" style={{ marginTop: 12 }}>
+          <div className={`grid ${densityState === "compact" ? "compact" : ""}`} style={{ marginTop: 12 }}>
             <Stat
               label="Admin freeze"
               tone={snapshot.status.ok ? (snapshot.status.value.admin_frozen ? "danger" : "ok") : undefined}
@@ -129,7 +150,7 @@ export function StatusPanel() {
               const cap = policy.window_cap;
               const pct = cap > 0n ? Number((window.total * 100n) / cap) : null;
               return (
-                <div className="grid">
+                <div className={`grid ${densityState === "compact" ? "compact" : ""}`}>
                   <Stat label="Spent in window" value={window.total.toString()} note={pct === null ? "no window cap set" : `${pct}% of the ${cap} cap`} />
                   <Stat label="Window length" value={`${policy.window_secs}s`} note={`${window.entries.length} entry(ies) on the ledger`} />
                 </div>
@@ -147,7 +168,7 @@ export function StatusPanel() {
               ) : (
                 <>
                   <p className="tiny mono">{describePolicy(policy)}</p>
-                  <div className="grid">
+                  <div className={`grid ${densityState === "compact" ? "compact" : ""}`}>
                     <Stat label="Per-transaction cap" value={policy.per_tx_cap === 0n ? "off" : policy.per_tx_cap.toString()} />
                     <Stat label="Rolling cap" value={policy.window_cap === 0n ? "off" : `${policy.window_cap} / ${policy.window_secs}s`} />
                     <Stat label="Assets" value={policy.assets.length} note="SAC tokens whose transfers are fully enforced" />
@@ -179,7 +200,7 @@ export function StatusPanel() {
             label="wasm identity"
             render={(identity) => (
               <>
-                <div className="grid">
+                <div className={`grid ${densityState === "compact" ? "compact" : ""}`}>
                   <Stat
                     label="Ledger reports"
                     value={
