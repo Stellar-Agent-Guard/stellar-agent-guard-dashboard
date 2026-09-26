@@ -32,6 +32,7 @@ import { readGuardSnapshot, type GuardSnapshot } from "../lib/guard/guardOps.ts"
 import { NETWORK } from "../lib/guard/network.ts";
 import { GuardFeed } from "../lib/guard/telemetry.ts";
 import { createTabSync, type TabSyncEventType } from "../lib/guard/tabSync.ts";
+import { resolveGuardFromSearch } from "../lib/guard/deeplink.ts";
 import {
   KNOWN_INSTANCES,
   loadInstances,
@@ -180,6 +181,41 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (demoFlagFromQuery(window.location.search)) setDemo(true);
   }, []);
+
+  // Adopt the guard a link named, so a call to action that deep-links into the
+  // configurator does not quietly show a *different* account's state: this page
+  // mounts its own provider, which would otherwise fall back to the first known
+  // instance. An address outside the registry is added to it for the session (not
+  // persisted — a link is not the operator choosing to remember an instance), so
+  // the selector always has an option matching the selection. Demo mode pins the
+  // fixture instance and is left alone.
+  useEffect(() => {
+    if (demo) return;
+    const registry = loadInstances();
+    const requested = resolveGuardFromSearch({
+      search: window.location.search,
+      registry,
+      current: guardRef.current,
+    });
+    if (!requested) return;
+    setInstances(
+      requested.addToRegistry
+        ? [
+            ...registry,
+            {
+              guard: requested.guard,
+              label: `Guard ${requested.guard.slice(0, 6)}…${requested.guard.slice(-4)}`,
+              provenance: "Opened from a link in this browser.",
+            },
+          ]
+        : registry,
+    );
+    setGuard(requested.guard);
+    setSnapshot(null);
+    setSnapshotError(null);
+    setEvents([]);
+    seenRef.current = new Set();
+  }, [demo]);
 
   // In demo mode the feed is seeded and watching immediately: a visitor should
   // see realistic telemetry without having to click "Start watching" first. The
