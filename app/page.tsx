@@ -4,6 +4,7 @@ import { WalletBar } from "../components/WalletBar.tsx";
 import { StatusPanel } from "../components/StatusPanel.tsx";
 import { TxHistoryTable } from "../components/TxHistoryTable.tsx";
 import { TelemetryFeed } from "../components/TelemetryFeed.tsx";
+import { MultisigTracker } from "../components/MultisigTracker.tsx";
 import { PanicPanel } from "../components/PanicPanel.tsx";
 import { HardwareWalletGuide } from "../components/HardwareWalletGuide.tsx";
 import { ScopeNotice } from "../components/bits.tsx";
@@ -17,6 +18,7 @@ export default function ConsolePage() {
       <TxHistoryTable />
       <PanicPanel />
       <TelemetryFeed />
+      <MultisigTracker />
       <SubmitSignedXDRPanel />
       <ScopeNotice compact />
     </GuardProvider>
