@@ -18,6 +18,7 @@ import { PHASE1_ARTIFACT } from "../lib/guard/network.ts";
 import { bytesToHex } from "../lib/guard/scval.ts";
 import { validateInitParameters, type InitValidation } from "../lib/guard/initValidator.ts";
 import { useGuard } from "./GuardProvider.tsx";
+import { writeControlState } from "../lib/guard/observerMode.ts";
 import { ErrorBlock, OutcomeList, starLink } from "./bits.tsx";
 
 function randomSalt(): Uint8Array {
@@ -45,6 +46,13 @@ export function DeployPanel() {
   const [error, setError] = useState<string | null>(null);
   const [agentPubkey, setAgentPubkey] = useState("");
   const [initResult, setInitResult] = useState<InvokeResult | null>(null);
+  // Deploy is a write like any other: available to a connected admin, inert and
+  // self-explanatory to an observer (#101).
+  const deployControl = writeControlState(wallet, {
+    busy: deploying,
+    extraDisabled: artifact?.ok !== true,
+    label: "deploy a guard",
+  });
 
   // Guard init parameters, audited by the pre-flight validator before the
   // "Sign and initialize" button will enable. The admin is whoever is connected,
@@ -234,7 +242,8 @@ export function DeployPanel() {
 
       <div className="row" style={{ marginTop: 14 }}>
         <button
-          disabled={!wallet || deploying || artifact?.ok !== true}
+          disabled={deployControl.disabled}
+          title={deployControl.title}
           onClick={() => void deploy()}
         >
           {deploying ? "Deploying..." : "Deploy guard"}
