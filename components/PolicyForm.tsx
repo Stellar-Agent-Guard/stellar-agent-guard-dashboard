@@ -11,6 +11,7 @@ import {
 import { installPolicy, revokePolicy } from "../lib/guard/guardOps.ts";
 import type { InvokeResult } from "../lib/guard/submit.ts";
 import { refusedEventsFromDiagnostics } from "../lib/guard/telemetry.ts";
+import { NO_POLICY_CONSEQUENCE, policyStateFrom } from "../lib/guard/policyState.ts";
 import {
   exportAssetCapsCsv,
   exportAssetCapsJson,
@@ -20,7 +21,7 @@ import {
   type AssetCapChange,
 } from "../lib/guard/assetCapsCsv.ts";
 import { useGuard } from "./GuardProvider.tsx";
-import { ErrorBlock, ScopeNotice, starLink } from "./bits.tsx";
+import { ErrorBlock, ScopeNotice, WarningBanner, starLink } from "./bits.tsx";
 
 /**
  * The no-code configurator.
@@ -56,6 +57,11 @@ export function PolicyForm() {
 
   const validation = buildPolicyConfig(effective);
   const issues = validation.ok ? [] : validation.issues;
+
+  // The same derivation the console's banner uses, off the same read: a policy
+  // that was never installed and a policy that was just revoked are the same
+  // state, and neither is knowable from a local flag.
+  const policyState = policyStateFrom(snapshot?.status);
 
   function set<K extends keyof PolicyDraft>(key: K, value: PolicyDraft[K]) {
     setDraft((current) => ({ ...(current ?? installedDraft), [key]: value }));
@@ -135,6 +141,24 @@ export function PolicyForm() {
     <div className="panel">
       <h2>Guardrail policy</h2>
       <ScopeNotice />
+
+      {policyState === "default-deny" && (
+        <WarningBanner
+          title="Nothing is installed on this account yet"
+          action={
+            <a className="cta" href="#install-policy">
+              Install the policy below
+            </a>
+          }
+        >
+          <span className="tiny">
+            {NO_POLICY_CONSEQUENCE} The form below starts from a blank draft because there is
+            nothing to edit; installing it is what brings this account out of default-deny, and
+            revoking is the action that puts it back.
+          </span>
+        </WarningBanner>
+      )}
+
       <p className="tiny muted">
         Installing a policy resets the rolling window and restarts the dead-man-switch clock, so a
         freshly installed policy always starts with full grace.
@@ -412,14 +436,18 @@ export function PolicyForm() {
         </div>
       )}
 
-      <div className="row" style={{ marginTop: 14 }}>
+      <div className="row" style={{ marginTop: 14 }} id="install-policy">
         <button disabled={!wallet || busy || issues.length > 0} onClick={() => void submit()}>
           {busy ? "Working…" : "Sign and install policy"}
         </button>
         <button className="secondary" disabled={!wallet || busy || issues.length > 0} onClick={() => void submit(true)}>
           Export XDR
         </button>
-        <button className="secondary" disabled={!wallet || busy} onClick={() => void revoke()}>
+        <button
+          className="secondary"
+          disabled={!wallet || busy || policyState === "default-deny"}
+          onClick={() => void revoke()}
+        >
           Revoke policy (default deny)
         </button>
         <button className="secondary" onClick={() => { setDraft(EMPTY_DRAFT); setAssetCapChanges({}); }} disabled={busy}>

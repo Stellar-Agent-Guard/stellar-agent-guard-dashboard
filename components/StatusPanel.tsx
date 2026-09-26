@@ -1,9 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { deadManRemaining, describePolicy, isDeadManFrozen } from "stellar-agent-guard-sdk";
 import { useGuard } from "./GuardProvider.tsx";
-import { ErrorBlock, Read, Stat, relativeTime, short } from "./bits.tsx";
+import { ErrorBlock, Read, Stat, WarningBanner, relativeTime, short } from "./bits.tsx";
 import { PHASE1_ARTIFACT, NETWORK } from "../lib/guard/network.ts";
+import { configureHref } from "../lib/guard/deeplink.ts";
+import { NO_POLICY_CONSEQUENCE, policyStateFrom } from "../lib/guard/policyState.ts";
 import { compilePrintReport } from "../lib/guard/printReport.ts";
 
 
@@ -15,11 +18,20 @@ import { compilePrintReport } from "../lib/guard/printReport.ts";
  * knowing about: an admin freeze is something the operator just did, while a
  * dead-man-switch freeze is the account having gone quiet. `unfreeze()` clears
  * both, which is why it sits next to the panic button.
+ *
+ * The no-policy state gets a banner of its own, for the opposite reason: it is
+ * the one state that is safe and useless at the same time, and a quiet
+ * `has_policy: false` line is what a fresh deploy (or a just-revoked policy)
+ * looks like when the operator needs to know that nothing can move.
  */
 export function StatusPanel() {
   const { snapshot, snapshotError, refreshing, refresh, guard, wallet } = useGuard();
 
   const printReport = snapshot ? compilePrintReport(snapshot, NETWORK.name, wallet?.address || "Disconnected") : null;
+  // Derived from this render's read, never from an event: a revoke done here, in
+  // another tab, or by the agent's own tooling shows up on the next poll. An
+  // unreadable `status()` yields `unknown`, which claims nothing.
+  const policyState = policyStateFrom(snapshot?.status);
 
   return (
     <div className="panel">
@@ -49,6 +61,19 @@ export function StatusPanel() {
       )}
 
       {!snapshot && !snapshotError && <p className="muted tiny">Reading the chain…</p>}
+
+      {policyState === "default-deny" && (
+        <WarningBanner
+          title="No policy installed — this account is in default-deny"
+          action={
+            <Link className="cta" href={configureHref(guard)}>
+              Configure a policy for this account
+            </Link>
+          }
+        >
+          <span className="tiny">{NO_POLICY_CONSEQUENCE}</span>
+        </WarningBanner>
+      )}
 
       {snapshot && (
         <>
@@ -95,6 +120,7 @@ export function StatusPanel() {
             />
             <Stat
               label="Policy installed"
+              tone={policyState === "default-deny" ? "warn" : undefined}
               value={<Read result={snapshot.status} label="status()" render={(s) => (s.has_policy ? "yes" : "no — default deny")} />}
               note="With no policy the account refuses every call"
             />
@@ -143,7 +169,12 @@ export function StatusPanel() {
             label="policy()"
             render={(policy) =>
               policy === null ? (
-                <p className="tiny muted">No policy installed — the account is in default-deny.</p>
+                // Not muted: this is the state of the account, not a footnote
+                // under it. The consequence is spelled out in the banner above.
+                <p className="tiny">
+                  <strong>No policy is stored on this account</strong> — nothing has been installed,
+                  or it was revoked. The account is in default-deny until a policy is installed.
+                </p>
               ) : (
                 <>
                   <p className="tiny mono">{describePolicy(policy)}</p>
