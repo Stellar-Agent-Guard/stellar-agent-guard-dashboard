@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useRef, useState } from "react";
 import type { PolicyDraft } from "../lib/guard/policyForm.ts";
@@ -21,12 +21,14 @@ import {
 } from "../lib/guard/assetCapsCsv.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, ScopeNotice, starLink } from "./bits.tsx";
+import { exportPolicyDraft, importPolicyFromJson } from "../lib/guard/policySchema.ts";
+import { useToast } from "../lib/guard/useToast.ts";
 
 /**
  * The no-code configurator.
  *
  * The form is validated locally before a wallet is ever prompted, and the policy
- * is encoded by the SDK's `policyToScVal` rather than by a hand-rolled encoder —
+ * is encoded by the SDK's `policyToScVal` rather than by a hand-rolled encoder â€”
  * the host converts the map into a typed struct by walking entries in a required
  * order, so a second encoder would be a second place to get the field order wrong.
  */
@@ -45,6 +47,8 @@ export function PolicyForm() {
   const [assetCapChanges, setAssetCapChanges] = useState<Record<string, AssetCapChange>>({});
   const csvInput = useRef<HTMLInputElement>(null);
   const jsonInput = useRef<HTMLInputElement>(null);
+  const policyJsonInput = useRef<HTMLInputElement>(null);
+  const toast = useToast();
 
   // Editing starts from the policy that is actually installed, not from an empty
   // form that looks like a reset. With nothing installed yet, it starts empty.
@@ -84,6 +88,39 @@ export function PolicyForm() {
     link.download = filename;
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  function exportPolicyJson() {
+    const result = exportPolicyDraft(effective);
+    if (!result.ok) {
+      setError(`Policy export failed: ${result.issues.map((issue) => issue.message).join("; ")}`);
+      return;
+    }
+    downloadAssetCaps(result.filename, result.json);
+    toast.success("Policy exported", result.filename);
+  }
+
+  async function importPolicyJson(file: File) {
+    try {
+      const source = await file.text();
+      const result = importPolicyFromJson(source);
+      if (!result.ok) {
+        const detail = result.issues
+          .map((issue) => (issue.path ? `${issue.path}: ${issue.message}` : issue.message))
+          .join("; ");
+        setError(`Policy import failed: ${detail}`);
+        toast.error("Policy import failed", { message: detail });
+        return;
+      }
+      setDraft(result.draft);
+      setAssetCapChanges({});
+      setError(null);
+      toast.success("Policy imported", "Loaded into the form below -- review before signing.");
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setError(`Policy import failed: ${message}`);
+      toast.error("Policy import failed", { message });
+    }
   }
 
   async function submit(exportOnly = false) {
@@ -138,7 +175,27 @@ export function PolicyForm() {
       <p className="tiny muted">
         Installing a policy resets the rolling window and restarts the dead-man-switch clock, so a
         freshly installed policy always starts with full grace.
-      </p>
+          </p>
+
+      <div className="row" style={{ marginBottom: 14 }}>
+        <button className="secondary" type="button" onClick={() => policyJsonInput.current?.click()} disabled={busy}>
+          Import Policy JSON
+        </button>
+        <button className="secondary" type="button" onClick={exportPolicyJson} disabled={busy}>
+          Export Policy JSON
+        </button>
+        <input
+          ref={policyJsonInput}
+          type="file"
+          accept=".json,application/json"
+          hidden
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void importPolicyJson(file);
+          }}
+        />
+      </div>
 
       <div className="split" style={{ marginTop: 14 }}>
         <div>
@@ -162,7 +219,7 @@ export function PolicyForm() {
               placeholder="150"
             />
             <span className="hint">
-              Total spend allowed inside a genuinely rolling window — not a fixed bucket that resets.
+              Total spend allowed inside a genuinely rolling window â€” not a fixed bucket that resets.
             </span>
           </label>
 
@@ -212,7 +269,7 @@ export function PolicyForm() {
 
         <div>
           <label className="field">
-            <span className="lbl">Assets — SAC token contracts (one per line)</span>
+            <span className="lbl">Assets â€” SAC token contracts (one per line)</span>
             <textarea
               rows={3}
               value={effective.assets}
@@ -368,12 +425,12 @@ export function PolicyForm() {
           </div>
 
           <label className="field">
-            <span className="lbl">Protocols — allowlisted contracts (one per line)</span>
+            <span className="lbl">Protocols â€” allowlisted contracts (one per line)</span>
             <textarea
               rows={3}
               value={effective.protocols}
               onChange={(event) => set("protocols", event.target.value)}
-              placeholder="C…  or  C…:swap,deposit   (no colon = any function)"
+              placeholder="Câ€¦  or  Câ€¦:swap,deposit   (no colon = any function)"
             />
             <span className="hint">
               Calls to contracts outside this list are refused. Window and pause state still apply to
@@ -414,7 +471,7 @@ export function PolicyForm() {
 
       <div className="row" style={{ marginTop: 14 }}>
         <button disabled={!wallet || busy || issues.length > 0} onClick={() => void submit()}>
-          {busy ? "Working…" : "Sign and install policy"}
+          {busy ? "Workingâ€¦" : "Sign and install policy"}
         </button>
         <button className="secondary" disabled={!wallet || busy || issues.length > 0} onClick={() => void submit(true)}>
           Export XDR
@@ -489,10 +546,10 @@ export function OutcomeBlock({ result, verb, onClose }: { result: InvokeResult; 
     return (
       <div className="notice info">
         <strong>
-          {verb} landed on chain — {starLink(result.hash)}
+          {verb} landed on chain â€” {starLink(result.hash)}
         </strong>
         <span className="tiny">
-          Ledger {result.ledger ?? "—"}. The panel above re-reads the contract to show the policy that
+          Ledger {result.ledger ?? "â€”"}. The panel above re-reads the contract to show the policy that
           is actually installed; this receipt proves the write, not that it did what you expected.
         </span>
       </div>
@@ -502,7 +559,7 @@ export function OutcomeBlock({ result, verb, onClose }: { result: InvokeResult; 
     return (
       <div className="error">
         <span className="t">
-          Refused during {result.stage} — nothing was broadcast, so this cost nothing
+          Refused during {result.stage} â€” nothing was broadcast, so this cost nothing
         </span>
         <span className="mono tiny">{result.detail}</span>
       </div>
@@ -511,9 +568,13 @@ export function OutcomeBlock({ result, verb, onClose }: { result: InvokeResult; 
   return (
     <div className="error">
       <span className="t">
-        Broadcast but rejected on chain — {starLink(result.hash)}
+        Broadcast but rejected on chain â€” {starLink(result.hash)}
       </span>
       <span className="mono tiny">{result.detail}</span>
     </div>
   );
 }
+
+
+
+
