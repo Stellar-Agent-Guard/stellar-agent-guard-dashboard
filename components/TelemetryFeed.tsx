@@ -3,7 +3,7 @@
 import { describeGuardEvent, explainReason } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { useGuard } from "./GuardProvider.tsx";
-import { ErrorBlock, relativeTime, short, starLink } from "./bits.tsx";
+import { ErrorBlock, relativeTime, short, starLink, TxHashCell } from "./bits.tsx";
 
 /**
  * The live event feed.
@@ -21,8 +21,7 @@ import { ErrorBlock, relativeTime, short, starLink } from "./bits.tsx";
  */
 export function TelemetryFeed() {
   const { events, feed, startWatching, stopWatching, clearEvents, guard } = useGuard();
-
-  return (
+    return (
     <div className="panel">
       <div className="row" style={{ justifyContent: "space-between" }}>
         <h2 style={{ margin: 0 }}>Telemetry</h2>
@@ -107,7 +106,7 @@ export function TelemetryFeed() {
                     </span>
                   </td>
                   <td className="mono tiny">{event.ledger ?? "—"}</td>
-                  <td>{event.transactionHash ? starLink(event.transactionHash) : <span className="tiny muted">none — never broadcast</span>}</td>
+                  <td>{event.transactionHash ? <TxHashCell hash={event.transactionHash} /> : <span className="tiny muted">none — never broadcast</span>}</td>
                 </tr>
               ))}
             </tbody>
