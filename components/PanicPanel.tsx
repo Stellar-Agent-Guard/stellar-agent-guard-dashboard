@@ -105,7 +105,7 @@ export function PanicPanel() {
 
   const alreadyFrozen = snapshot?.status.ok ? snapshot.status.value.admin_frozen : null;
 
-  async function run(action: "freeze" | "unfreeze") {
+  async function run(action: "freeze" | "unfreeze", exportOnly = false) {
     setError(null);
     setReport(null);
     setPhase("signing");
@@ -113,13 +113,25 @@ export function PanicPanel() {
       const walletSigner = signer();
       const result =
         action === "freeze"
-          ? await freezeGuard({ server, signer: walletSigner, guard })
-          : await unfreezeGuard({ server, signer: walletSigner, guard });
+          ? await freezeGuard({ server, signer: walletSigner, guard, exportOnly })
+          : await unfreezeGuard({ server, signer: walletSigner, guard, exportOnly });
 
       // Surface any refused-decision diagnostics the write produced, so a refusal
       // appears in the feed rather than only in this panel.
       if (result.kind === "refused") {
         pushEvents(refusedEventsFromDiagnostics(result.diagnosticEvents, guard));
+      }
+
+      if (result.kind === "exported") {
+        setReport({
+          action,
+          result,
+          adminFrozenAfter: null,
+          confirmed: false,
+          note: "Transaction XDR exported for offline signing"
+        });
+        setPhase("done");
+        return;
       }
 
       // Re-read the contract's own view. This is the step that makes the claim
@@ -196,6 +208,13 @@ export function PanicPanel() {
           >
             Unfreeze
           </button>
+          <button
+            className="secondary"
+            disabled={!wallet || alreadyFrozen === false}
+            onClick={() => void run("unfreeze", true)}
+          >
+            Export Unfreeze XDR
+          </button>
         </div>
       )}
 
@@ -234,6 +253,9 @@ export function PanicPanel() {
               <button className="danger" disabled={!acknowledged} onClick={() => void run("freeze")}>
                 Sign freeze
               </button>
+              <button className="secondary" disabled={!acknowledged} onClick={() => void run("freeze", true)}>
+                Export XDR
+              </button>
               <button className="secondary" onClick={() => setPhase("idle")}>
                 Cancel
               </button>
@@ -255,7 +277,42 @@ export function PanicPanel() {
 
       {error && <ErrorBlock title="The freeze could not be completed" detail={error} />}
 
-      {report && (
+      {report?.result.kind === "exported" && (
+        <div className="modal-backdrop" onClick={() => { setReport(null); setPhase("idle"); }}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+              <h2 style={{ margin: 0 }}>Exported Transaction XDR</h2>
+              <button className="secondary" onClick={() => { setReport(null); setPhase("idle"); }}>Close</button>
+            </div>
+            <p className="tiny" style={{ marginBottom: "16px" }}>
+              This unsigned transaction envelope is ready for external multi-sig signing.
+            </p>
+            <textarea
+              readOnly
+              value={report.result.kind === "exported" ? report.result.xdr : ""}
+              style={{ width: "100%", height: "120px", marginBottom: "16px", fontSize: "12px", fontFamily: "monospace" }}
+            />
+            <div className="row">
+              <button onClick={() => navigator.clipboard.writeText(report.result.kind === "exported" ? report.result.xdr : "")}>Copy to Clipboard</button>
+              <button
+                onClick={() => {
+                  const blob = new Blob([report.result.kind === "exported" ? report.result.xdr : ""], { type: "text/plain" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `unsigned-${report.action}-${Date.now()}.tx`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+              >
+                Download .tx
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {report && report.result.kind !== "exported" && (
         <div className={report.confirmed ? "notice info" : "error"}>
           <strong>
             {report.confirmed
