@@ -31,6 +31,7 @@ import { createServer } from "../lib/guard/chain.ts";
 import { readGuardSnapshot, type GuardSnapshot } from "../lib/guard/guardOps.ts";
 import { NETWORK } from "../lib/guard/network.ts";
 import { GuardFeed } from "../lib/guard/telemetry.ts";
+import { createTabSync, type TabSyncEventType } from "../lib/guard/tabSync.ts";
 import {
   KNOWN_INSTANCES,
   loadInstances,
@@ -39,6 +40,22 @@ import {
 } from "../lib/guard/instance.ts";
 import { connectWallet, currentAddress, freighterSigner, type ConnectedWallet } from "../lib/guard/wallet.ts";
 import type { WalletSigner } from "../lib/guard/submit.ts";
+import {
+  useIdleTimer,
+  loadIdleTimeoutMs,
+  saveIdleTimeoutMs,
+  type IdleState,
+} from "../lib/guard/useIdleTimer.ts";
+import {
+  DEMO_BASE_LEDGER,
+  DEMO_GUARD,
+  DEMO_INSTANCE,
+  demoEvents,
+  demoFlagFromQuery,
+  demoSnapshot,
+  isDemoMode,
+  syntheticDemoEvent,
+} from "../lib/guard/demoFixtures.ts";
 
 const SNAPSHOT_INTERVAL_MS = 15_000;
 const FEED_INTERVAL_MS = 5_000;
@@ -72,6 +89,18 @@ interface GuardContextValue {
   clearEvents: () => void;
   /** Surface refused-write diagnostics in the feed, labelled as diagnostics. */
   pushEvents: (events: GuardEvent[]) => void;
+  /**
+   * Tell the other open tabs that this one changed something. The provider adds
+   * the active guard, so callers only name the change.
+   */
+  notifyTabs: (type: TabSyncEventType, options?: { payload?: Record<string, unknown> }) => void;
+  /** Operator session auto-lock state and its configuration. */
+  session: {
+    state: IdleState;
+    timeoutMs: number;
+    setTimeoutMs: (valueMs: number) => void;
+    stayConnected: () => void;
+  };
 }
 
 const GuardContext = createContext<GuardContextValue | null>(null);
@@ -91,11 +120,27 @@ function eventKey(event: GuardEvent): string {
 
 export function GuardProvider({ children }: { children: ReactNode }) {
   const server = useMemo(() => createServer(NETWORK.rpcUrl), []);
+  // The cross-tab coordinator. It is transport-agnostic (BroadcastChannel with a
+  // localStorage fallback) and inert where neither exists, so the provider never
+  // branches on availability. Created once per tab.
+  const tabSync = useMemo(() => createTabSync(), []);
+  // Demo mode is settled synchronously from the build-time flag, then re-checked
+  // for `?demo=true` in an effect — the query string is not visible during SSR,
+  // and reading it during render would desynchronise hydration.
+  const [demo, setDemo] = useState<boolean>(() => isDemoMode());
   const [wallet, setWallet] = useState<ConnectedWallet | null>(null);
   const [walletError, setWalletError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
-  const [instances, setInstances] = useState<GuardInstance[]>(() => [...KNOWN_INSTANCES]);
-  const [guard, setGuard] = useState<string>(KNOWN_INSTANCES[0]!.guard);
+  const [instances, setInstances] = useState<GuardInstance[]>(() =>
+    isDemoMode() ? [DEMO_INSTANCE] : [...KNOWN_INSTANCES],
+  );
+  const [guard, setGuard] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      const g = new URLSearchParams(window.location.search).get("guard");
+      if (g) return g;
+    }
+    return isDemoMode() ? DEMO_GUARD : KNOWN_INSTANCES[0]!.guard;
+  });
   const [snapshot, setSnapshot] = useState<GuardSnapshot | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -111,13 +156,49 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   // losing the cursor would silently re-scan and re-deliver events.
   const feedRef = useRef<GuardFeed | null>(null);
   const seenRef = useRef<Set<string>>(new Set());
+  // The active guard, readable from the (long-lived) sync listener without
+  // re-subscribing on every guard change.
+  const guardRef = useRef(guard);
 
   useEffect(() => {
+    guardRef.current = guard;
+  }, [guard]);
+
+  // The coordinator is deliberately never closed by an effect cleanup: React's
+  // development StrictMode mount/unmount/mount cycle would close the channel on
+  // the simulated unmount and leave the tab permanently unable to broadcast. The
+  // provider lives as long as the document, and the browser closes the channel
+  // with the page.
+
+  useEffect(() => {
+    // Demo mode pins the selector to the single fixture instance, so a value the
+    // fixtures do not describe can never be selected. Leaving demo mode restores
+    // the remembered instances.
+    if (demo) {
+      setInstances([DEMO_INSTANCE]);
+      setGuard(DEMO_GUARD);
+      return;
+    }
     setInstances(loadInstances());
+  }, [demo]);
+
+  // `?demo=true` is only visible in the browser, so demo mode is settled here.
+  useEffect(() => {
+    if (demoFlagFromQuery(window.location.search)) setDemo(true);
   }, []);
+
+  // In demo mode the feed is seeded and watching immediately: a visitor should
+  // see realistic telemetry without having to click "Start watching" first. The
+  // fixtures never touch RPC, so this cannot fire a chain read.
+  useEffect(() => {
+    if (!demo) return;
+    setEvents(demoEvents());
+    setFeed((current) => ({ ...current, watching: true, latestLedger: DEMO_BASE_LEDGER, error: null }));
+  }, [demo]);
 
   // Pick up an already-authorized wallet without prompting for access again.
   useEffect(() => {
+    if (demo) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -131,7 +212,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [demo]);
 
   const connect = useCallback(async () => {
     setConnecting(true);
@@ -155,18 +236,39 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const disconnect = useCallback(() => setWallet(null), []);
+  const disconnect = useCallback(() => {
+    setWallet(null);
+    tabSync.broadcast("WALLET_DISCONNECTED", { guard: guardRef.current });
+  }, [tabSync]);
+
+  const notifyTabs = useCallback(
+    (type: TabSyncEventType, options?: { payload?: Record<string, unknown> }) => {
+      tabSync.broadcast(type, {
+        guard: guardRef.current,
+        ...(options?.payload === undefined ? {} : { payload: options.payload }),
+      });
+    },
+    [tabSync],
+  );
 
   const signer = useCallback((): WalletSigner => {
+    if (demo) {
+      throw new Error(
+        "Demo mode shows static fixture data, so writes are disabled. Unset " +
+          "NEXT_PUBLIC_DEMO_MODE and drop ?demo=true to sign with a real wallet.",
+      );
+    }
     if (!wallet) throw new Error("Connect a wallet before signing anything.");
     return freighterSigner(wallet.address, NETWORK.passphrase);
-  }, [wallet]);
+  }, [wallet, demo]);
 
   const refresh = useCallback(async () => {
     if (!guard) return;
     setRefreshing(true);
     try {
-      const next = await readGuardSnapshot(server, guard, wallet?.address);
+      // In demo mode the snapshot is a fixture, so no read (and no failure) is
+      // possible; outside demo mode this is unchanged and always hits the chain.
+      const next = demo ? demoSnapshot() : await readGuardSnapshot(server, guard, wallet?.address);
       setSnapshot(next);
       setSnapshotError(null);
     } catch (error) {
@@ -177,7 +279,46 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     } finally {
       setRefreshing(false);
     }
-  }, [guard, server, wallet?.address]);
+  }, [guard, server, wallet?.address, demo]);
+
+  // The sync listener below is installed once, but `refresh` changes identity
+  // with the guard and wallet, so it reaches it through a ref rather than
+  // forcing a re-subscription (and a possible missed event) on every change.
+  const refreshRef = useRef(refresh);
+  useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
+
+  // React to what the other tabs announce. Nothing crosses the wire as state:
+  // `GUARD_CHANGED` carries an address to select, and the freeze/policy events
+  // only prompt a re-read of the chain. Form drafts live in the panel's own
+  // component state, so a remote refresh can never overwrite an edit in progress.
+  useEffect(() => {
+    return tabSync.subscribe((event) => {
+      switch (event.type) {
+        case "GUARD_CHANGED": {
+          const next = event.guard;
+          if (!next || next === guardRef.current) return;
+          setGuard(next);
+          setSnapshot(null);
+          setSnapshotError(null);
+          setEvents([]);
+          seenRef.current = new Set();
+          return;
+        }
+        case "FREEZE_STATE_CHANGED":
+        case "POLICY_UPDATED":
+          // Scope to the guard this tab is showing; an event about another
+          // instance would only cause a pointless read.
+          if (event.guard !== undefined && event.guard !== guardRef.current) return;
+          void refreshRef.current();
+          return;
+        case "WALLET_DISCONNECTED":
+          setWallet(null);
+          return;
+      }
+    });
+  }, [tabSync]);
 
   useEffect(() => {
     void refresh();
@@ -185,19 +326,29 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(timer);
   }, [refresh]);
 
-  const selectGuard = useCallback((next: string) => {
-    setGuard(next);
-    setSnapshot(null);
-    setEvents([]);
-    seenRef.current = new Set();
-  }, []);
+  const selectGuard = useCallback(
+    (next: string) => {
+      setGuard(next);
+      setSnapshot(null);
+      setEvents([]);
+      seenRef.current = new Set();
+      // Every other tab follows the operator's selection instead of continuing to
+      // poll a guard they are no longer looking at.
+      tabSync.broadcast("GUARD_CHANGED", { guard: next });
+    },
+    [tabSync],
+  );
 
-  const addInstance = useCallback((next: string, label: string) => {
-    rememberInstance(next, label);
-    setInstances(loadInstances());
-    setGuard(next);
-    setSnapshot(null);
-  }, []);
+  const addInstance = useCallback(
+    (next: string, label: string) => {
+      rememberInstance(next, label);
+      setInstances(loadInstances());
+      setGuard(next);
+      setSnapshot(null);
+      tabSync.broadcast("GUARD_CHANGED", { guard: next });
+    },
+    [tabSync],
+  );
 
   const pushEvents = useCallback((incoming: GuardEvent[]) => {
     if (incoming.length === 0) return;
@@ -215,11 +366,11 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const startWatching = useCallback(() => {
-    if (!feedRef.current || feedRef.current.guard !== guard) {
+    if (!demo && (!feedRef.current || feedRef.current.guard !== guard)) {
       feedRef.current = new GuardFeed(server, guard);
     }
     setFeed((current) => ({ ...current, watching: true, error: null }));
-  }, [guard, server]);
+  }, [guard, server, demo]);
 
   const stopWatching = useCallback(() => {
     setFeed((current) => ({ ...current, watching: false }));
@@ -230,8 +381,53 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     seenRef.current = new Set();
   }, []);
 
+  // ── Operator session auto-lock ───────────────────────────────────────────
+  // The countdown only runs while a wallet is connected: there is nothing to
+  // lock until there is a signing session. On expiry the wallet is disconnected
+  // and the in-memory event feed is dropped, so a walk-up cannot resume an
+  // authorised session or read the last operator's diagnostics.
+  const [idleTimeoutMs, setIdleTimeoutMs] = useState<number>(() => loadIdleTimeoutMs());
+  const handleIdleExpire = useCallback(() => {
+    disconnect();
+    clearEvents();
+  }, [disconnect, clearEvents]);
+  const { state: idleState, stayConnected } = useIdleTimer({
+    timeoutMs: idleTimeoutMs,
+    enabled: wallet !== null,
+    onExpire: handleIdleExpire,
+  });
+  const setIdleTimeout = useCallback((valueMs: number) => {
+    saveIdleTimeoutMs(valueMs);
+    setIdleTimeoutMs(valueMs);
+  }, []);
+
   useEffect(() => {
     if (!feed.watching) return;
+
+    // Demo mode generates its own event stream on a timer. It deliberately does
+    // not construct a `GuardFeed`, so demo mode makes no RPC call at all.
+    if (demo) {
+      let demoCancelled = false;
+      let sequence = 1;
+      const emit = () => {
+        if (demoCancelled) return;
+        const event = syntheticDemoEvent(sequence, Date.now());
+        sequence += 1;
+        setEvents((current) => [event, ...current].slice(0, 250));
+        setFeed((current) => ({
+          ...current,
+          latestLedger: DEMO_BASE_LEDGER + sequence,
+          lastPolledAt: new Date().toISOString(),
+          error: null,
+        }));
+      };
+      const demoTimer = setInterval(emit, 4_000);
+      return () => {
+        demoCancelled = true;
+        clearInterval(demoTimer);
+      };
+    }
+
     let cancelled = false;
     const tick = async () => {
       const feedRunner = feedRef.current;
@@ -261,7 +457,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [feed.watching, pushEvents]);
+  }, [feed.watching, pushEvents, demo]);
 
   const value: GuardContextValue = {
     server,
@@ -285,9 +481,44 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     stopWatching,
     clearEvents,
     pushEvents,
+    notifyTabs,
+    session: {
+      state: idleState,
+      timeoutMs: idleTimeoutMs,
+      setTimeoutMs: setIdleTimeout,
+      stayConnected,
+    },
   };
 
-  return <GuardContext.Provider value={value}>{children}</GuardContext.Provider>;
+  return (
+    <GuardContext.Provider value={value}>
+      {children}
+      {idleState.phase === "warning" && wallet && (
+        <div className="modal-backdrop">
+          <div
+            className="modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="session-lock-title"
+            aria-describedby="session-lock-body"
+            tabIndex={-1}
+          >
+            <strong id="session-lock-title">
+              Session expiring due to inactivity. Click to stay connected.
+            </strong>
+            <p className="tiny" id="session-lock-body">
+              You will be disconnected in {idleState.secondsLeft}s. The admin wallet will be
+              unlinked and unsaved work dropped; reconnecting is required before anything can be
+              signed again.
+            </p>
+            <div className="row">
+              <button onClick={stayConnected}>Stay connected</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </GuardContext.Provider>
+  );
 }
 
 export function useGuard(): GuardContextValue {
@@ -296,4 +527,4 @@ export function useGuard(): GuardContextValue {
   return value;
 }
 
-export { eventKey };
+export { eventKey, GuardContext };

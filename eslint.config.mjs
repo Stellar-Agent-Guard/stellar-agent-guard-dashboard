@@ -6,7 +6,11 @@ import nextConfig from "eslint-config-next";
 const config = [
   ...nextConfig,
   {
-    ignores: [".next/**", ".cache/**", "node_modules/**", "vendor/**"],
+    // `public/**` is served verbatim to the browser and includes the service
+    // worker, which is a plain worker script with worker globals (`self`,
+    // `caches`, `fetch`) rather than application code — it is exercised by
+    // `tests/unit/pwa.test.ts`, not by the app lint preset.
+    ignores: [".next/**", ".cache/**", "node_modules/**", "vendor/**", "public/**"],
   },
 ];
 

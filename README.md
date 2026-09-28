@@ -62,6 +62,8 @@ Enforcement happens **inside the account itself**, via Soroban's native Custom A
 - **Artifact-verified guard deployment**: Deploys fresh guard accounts from verified on-chain WASM bytecode with cryptographic address prediction.
 - **Emergency panic button (`PanicPanel`)**: Two-step confirmation modal with wallet-signed `freeze()` execution, followed by a mandatory on-chain re-read of `status()` confirming `admin_frozen = true` before updating UI state. Provides matching wallet-signed `unfreeze()` reversal.
 - **Live event telemetry feed (`TelemetryFeed`)**: Cursor-based polling of `event_auth_checked` topics from Soroban RPC, decoding contract outcomes and reason codes using the SDK's verified vocabulary.
+- **Installable PWA shell**: A `manifest.json`, responsive vector icons and a static-shell-only service worker let the console be installed and opened instantly on a phone or after a local network drop. Every `/soroban/rpc` and Horizon request is hard-bypassed — the worker never reads or writes a cache for chain state, so an offline shell can never present a cached balance or freeze flag as if it were live.
+- **Cross-tab lockstep**: A `BroadcastChannel` coordinator (with a `localStorage` fallback) propagates guard switches, confirmed freezes and policy installs across every open tab. Receiving tabs re-read the chain rather than trusting the broadcast, and never overwrite a form edit in progress.
 
 ## Quick Start
 
@@ -75,6 +77,26 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) in a browser with the [Freighter wallet](https://www.freighter.app/) extension installed and switched to **Testnet**.
+
+### Instant demo mode (no wallet, no testnet, no contracts)
+
+To evaluate the interface without a Freighter wallet or a funded testnet account, start the dashboard with pre-populated fixture data:
+
+```bash
+npm run dev:demo      # runs next dev with NEXT_PUBLIC_DEMO_MODE=true
+```
+
+Then open [http://localhost:3000](http://localhost:3000). You can also opt in per visit, with no script and no rebuild, by adding `?demo=true` to any URL (for example [http://localhost:3000/?demo=true](http://localhost:3000/?demo=true)) against a normal `npm run dev`.
+
+While demo mode is active:
+
+- A top-level badge reads **DEMO MODE — Static Fixture Data**.
+- The on-chain state panel shows a realistic, healthy guard: an installed policy, an open active execution window, and a rolling spend window that is under its cap.
+- The telemetry feed is seeded and watching immediately, with a synthetic stream of allowed transfers, heartbeats, and blocked (diagnostic) decisions.
+- Every value comes from [`lib/guard/demoFixtures.ts`](./lib/guard/demoFixtures.ts) and **no RPC call is made** — it works offline.
+- Write actions are disabled with an explanatory error, because there is nothing real to write to.
+
+Demo mode is strictly opt-in. When neither the environment flag nor the query parameter is set, none of the fixture code is reached and the console keeps its **no mock state** guarantee: every number is read live from Soroban RPC, and a failed read is rendered as a failure, never as a zero.
 
 ### Verification and Development
 
@@ -107,6 +129,15 @@ npm run inspect      # read-only dump of an instance's state
   - Provides wallet-signed `unfreeze()` to restore normal operations.
 - **`TelemetryFeed`**: Cursor-based polling of `event_auth_checked` topics from Soroban RPC, decoding contract outcomes and reason codes.
 - **`WalletBar`**: Displays Freighter connection status, address, and network validation.
+
+## Operator Runbooks
+
+Two step-by-step procedures cover the console's high-stakes operations. They are written to be followed under pressure, and both include CLI fallback commands for when the browser UI is unavailable.
+
+| Runbook | Use it when |
+| --- | --- |
+| [**Emergency Freeze & Security Incident Response**](./docs/runbooks/emergency-freeze.md) | An agent is behaving abnormally or a key may be compromised. Covers incident classification and response timelines, the two-step `PanicPanel` confirmation ritual, verifying frozen status on chain (dashboard reader and Stellar CLI), preserving evidence, agent/admin key rotation, root-cause analysis and the unfreeze checklist. |
+| [**Routine Policy Updates & Audit**](./docs/runbooks/policy-updates.md) | Changing caps, allowlists, execution windows, pause state or the dead-man switch. Covers capturing a rollback baseline, staging and validating a draft in `PolicyForm`, the `set_policy` rolling-window and dead-man-switch resets, the pre-flight security checklist (including verifying token contract IDs on Stellar Expert), post-submission verification and rollback/recovery. |
 
 ## Architecture
 

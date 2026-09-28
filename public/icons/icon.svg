@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Stellar Agent Guard">
+  <title>Stellar Agent Guard</title>
+  <rect width="512" height="512" rx="104" fill="#0a0d12"/>
+  <path
+    d="M256 68 400 126v146c0 86-58 148-144 172-86-24-144-86-144-172V126z"
+    fill="#12161d"
+    stroke="#4da3ff"
+    stroke-width="26"
+    stroke-linejoin="round"
+  />
+  <circle cx="256" cy="228" r="36" fill="#4da3ff"/>
+  <path d="M256 258v62" stroke="#4da3ff" stroke-width="26" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,304 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { before, test } from "node:test";
+import type { ReactElement } from "react";
+import type axeCore from "axe-core";
+import { installDom, loadReact, sleep, type Act } from "./domHarness.ts";
+import { PolicyForm } from "../../components/PolicyForm.tsx";
+import { PanicPanel } from "../../components/PanicPanel.tsx";
+import { DeployPanel } from "../../components/DeployPanel.tsx";
+import { TxHistoryTable } from "../../components/TxHistoryTable.tsx";
+import { GuardContext } from "../../components/GuardProvider.tsx";
+import { TX_HISTORY_STORAGE_KEY, type TxHistoryEntry } from "../../lib/guard/txHistory.ts";
+
+installDom();
+
+let react: typeof import("react");
+let createRoot: typeof import("react-dom/client").createRoot;
+let act: Act;
+let axe: typeof axeCore;
+
+before(async () => {
+  const loaded = await loadReact();
+  react = loaded.react;
+  createRoot = loaded.createRoot;
+  act = loaded.act;
+  const axeModule = (await import("axe-core")) as unknown as { default: typeof axeCore };
+  axe = axeModule.default;
+});
+
+/**
+ * A guard context with no network behind it. Every `server` method rejects
+ * immediately, so panels whose mount effects read the chain settle into their
+ * error states without a single packet leaving the process.
+ */
+const noNetworkServer = new Proxy(
+  {},
+  { get: () => () => Promise.reject(new Error("network disabled in unit tests")) },
+);
+
+const TEST_GUARD = {
+  server: noNetworkServer,
+  wallet: {
+    address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWH",
+    networkPassphrase: "Test SDF Network ; September 2015",
+    network: "Testnet",
+  },
+  walletError: null,
+  connecting: false,
+  connect: async () => {},
+  disconnect: () => {},
+  signer: () => {
+    throw new Error("no signing in a11y tests");
+  },
+  instances: [],
+  guard: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  selectGuard: () => {},
+  addInstance: () => {},
+  snapshot: null,
+  snapshotError: null,
+  refreshing: false,
+  refresh: async () => {},
+  events: [],
+  feed: { watching: false, latestLedger: null, error: null, lastPolledAt: null },
+  startWatching: () => {},
+  stopWatching: () => {},
+  clearEvents: () => {},
+  pushEvents: () => {},
+} as any;
+
+interface Rendered {
+  container: HTMLElement;
+  unmount: () => Promise<void>;
+}
+
+async function renderPanel(element: ReactElement): Promise<Rendered> {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  let root: ReturnType<typeof createRoot> | undefined;
+  await act(async () => {
+    root = createRoot(container);
+    root.render(element);
+  });
+  // Let mount effects (artifact checks, store reads) settle inside act.
+  await act(async () => {
+    await sleep(60);
+  });
+  return {
+    container,
+    unmount: async () => {
+      await act(async () => {
+        root?.unmount();
+      });
+      container.remove();
+    },
+  };
+}
+
+function renderGuarded(panel: ReactElement): ReactElement {
+  return react.createElement(GuardContext.Provider, { value: TEST_GUARD }, panel);
+}
+
+/** Run axe-core scoped to WCAG 2.1 A/AA and return human-readable violations. */
+async function axeViolations(container: HTMLElement): Promise<string[]> {
+  const results = await axe.run(container, {
+    runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"] },
+    rules: {
+      // jsdom performs no layout, so pixel contrast cannot be computed here.
+      // Focus-indicator contrast is asserted separately against globals.css.
+      "color-contrast": { enabled: false },
+    },
+  });
+  return results.violations.map(
+    (violation) =>
+      `${violation.id} (${violation.impact}): ${violation.help} — ` +
+      `${violation.nodes.length} node(s): ${violation.nodes[0]?.target.join(" ") ?? ""}`,
+  );
+}
+
+async function assertCleanScan(panel: ReactElement, name: string): Promise<void> {
+  const rendered = await renderPanel(panel);
+  try {
+    const violations = await axeViolations(rendered.container);
+    assert.deepEqual(violations, [], `${name} must have zero WCAG 2.1 A/AA violations`);
+  } finally {
+    await rendered.unmount();
+  }
+}
+
+test("PolicyForm passes automated axe-core WCAG 2.1 AA checks", async () => {
+  await assertCleanScan(renderGuarded(react.createElement(PolicyForm)), "PolicyForm");
+});
+
+test("PanicPanel passes automated axe-core WCAG 2.1 AA checks", async () => {
+  await assertCleanScan(renderGuarded(react.createElement(PanicPanel)), "PanicPanel");
+});
+
+test("DeployPanel passes automated axe-core WCAG 2.1 AA checks", async () => {
+  await assertCleanScan(renderGuarded(react.createElement(DeployPanel)), "DeployPanel");
+});
+
+test("the freeze confirmation dialog passes axe-core while open", async () => {
+  const rendered = await renderPanel(renderGuarded(react.createElement(PanicPanel)));
+  try {
+    const trigger = buttonByText(rendered.container, "Freeze this account");
+    await act(async () => {
+      trigger.click();
+    });
+
+    const dialog = rendered.container.querySelector<HTMLElement>('[role="dialog"]');
+    assert.ok(dialog, "the confirmation must render as a dialog");
+    assert.equal(dialog.getAttribute("aria-modal"), "true");
+    const labelledBy = dialog.getAttribute("aria-labelledby");
+    assert.ok(labelledBy, "the dialog must be labelled");
+    assert.ok(
+      dialog.ownerDocument.getElementById(labelledBy),
+      "aria-labelledby must reference an existing element",
+    );
+
+    const violations = await axeViolations(rendered.container);
+    assert.deepEqual(violations, [], "the open dialog must pass axe-core");
+  } finally {
+    await rendered.unmount();
+  }
+});
+
+test("TxHistoryTable passes automated axe-core WCAG 2.1 AA checks", async () => {
+  // Seed the store so the scan sees the populated table, not just empty state.
+  const seeded: TxHistoryEntry[] = [
+    {
+      hash: "abc123def456",
+      operation: "set_policy",
+      status: "confirmed",
+      feeStroops: "310",
+      recordedAt: "2026-09-24T10:00:00.000Z",
+    },
+    {
+      hash: "789xyz012345",
+      operation: "freeze",
+      status: "failed",
+      feeStroops: "100",
+      recordedAt: "2026-09-23T09:30:00.000Z",
+    },
+  ];
+  window.localStorage.setItem(TX_HISTORY_STORAGE_KEY, JSON.stringify(seeded));
+  try {
+    await assertCleanScan(renderGuarded(react.createElement(TxHistoryTable)), "TxHistoryTable");
+  } finally {
+    window.localStorage.removeItem(TX_HISTORY_STORAGE_KEY);
+  }
+});
+
+test("the freeze dialog traps keyboard focus and cycles Tab in both directions", async () => {
+  const rendered = await renderPanel(renderGuarded(react.createElement(PanicPanel)));
+  try {
+    const trigger = buttonByText(rendered.container, "Freeze this account");
+    await act(async () => {
+      trigger.click();
+    });
+
+    const dialog = rendered.container.querySelector<HTMLElement>('[role="dialog"]');
+    assert.ok(dialog);
+    assert.equal(
+      document.activeElement,
+      dialog,
+      "opening the dialog must move focus into it",
+    );
+
+    // Acknowledge so every control in the dialog is enabled, then walk the trap.
+    const ack = rendered.container.querySelector<HTMLInputElement>("#ack-freeze");
+    assert.ok(ack);
+    await act(async () => {
+      ack.click();
+    });
+
+    const cancel = buttonByText(rendered.container, "Cancel");
+    cancel.focus();
+    assert.equal(document.activeElement, cancel);
+
+    await act(async () => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+      );
+    });
+    assert.equal(
+      document.activeElement,
+      ack,
+      "Tab on the last control must wrap to the first control inside the dialog",
+    );
+
+    await act(async () => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Tab",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    assert.equal(
+      document.activeElement,
+      cancel,
+      "Shift+Tab on the first control must wrap to the last control inside the dialog",
+    );
+  } finally {
+    await rendered.unmount();
+  }
+});
+
+test("Escape dismisses the dialog and restores focus to its trigger", async () => {
+  const rendered = await renderPanel(renderGuarded(react.createElement(PanicPanel)));
+  try {
+    const trigger = buttonByText(rendered.container, "Freeze this account");
+    await act(async () => {
+      trigger.click();
+    });
+    assert.ok(rendered.container.querySelector('[role="dialog"]'));
+
+    await act(async () => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+    });
+
+    assert.equal(
+      rendered.container.querySelector('[role="dialog"]'),
+      null,
+      "Escape must close the dialog",
+    );
+    // The trigger row is re-created when the dialog closes, so the live
+    // button — not the pre-open node — must be the focused element.
+    const restored = buttonByText(rendered.container, "Freeze this account");
+    assert.equal(
+      document.activeElement,
+      restored,
+      "focus must return to the control that opened the dialog",
+    );
+  } finally {
+    await rendered.unmount();
+  }
+});
+
+test("the stylesheet ships the focus indicator and dialog styles the audit relies on", () => {
+  // axe cannot compute visual contrast in jsdom, so the indicator itself is
+  // asserted textually: every interactive element's :focus-visible rule uses
+  // the accent token, whose contrast against the surfaces is documented there.
+  const css = readFileSync("app/globals.css", "utf8");
+  assert.match(
+    css,
+    /:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--accent\)/,
+    "globals.css must define a visible :focus-visible outline in the accent colour",
+  );
+  assert.match(css, /\.visually-hidden\s*\{/, "a visually-hidden utility must exist");
+  assert.match(css, /\.modal-backdrop\s*\{/, "modal backdrop styles must exist");
+  assert.match(css, /\.modal\s*\{/, "modal card styles must exist");
+});
+
+function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll("button")).find(
+    (candidate) => candidate.textContent?.trim() === text,
+  );
+  assert.ok(button, `expected a button labelled "${text}"`);
+  return button;
+}

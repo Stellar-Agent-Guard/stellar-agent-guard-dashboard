@@ -14,6 +14,7 @@
 import { policyToScVal } from "stellar-agent-guard-sdk";
 import type { PolicyConfig } from "stellar-agent-guard-sdk";
 import { Address, xdr } from "@stellar/stellar-sdk";
+import { validateAssetCapOverrides, type AssetCapOverride } from "./assetCapsCsv.ts";
 
 /** What the operator types, before validation. Strings, so a half-filled box is representable. */
 export interface PolicyDraft {
@@ -22,6 +23,8 @@ export interface PolicyDraft {
   windowSecs: string;
   /** One address per line. */
   assets: string;
+  /** Client-side per-asset cap overrides, retained for bulk editing and export. */
+  assetCaps: AssetCapOverride[];
   /** One address per line. */
   recipients: string;
   allowAnyRecipient: boolean;
@@ -38,6 +41,7 @@ export const EMPTY_DRAFT: PolicyDraft = {
   windowCap: "",
   windowSecs: "86400",
   assets: "",
+  assetCaps: [],
   recipients: "",
   allowAnyRecipient: false,
   protocols: "",
@@ -107,6 +111,9 @@ export function buildPolicyConfig(draft: PolicyDraft): ValidationResult {
 
   const assets = parseAddresses(draft.assets, "assets", "Assets", issues);
   const recipients = parseAddresses(draft.recipients, "recipients", "Recipients", issues);
+  for (const message of validateAssetCapOverrides(draft.assetCaps)) {
+    issues.push({ field: "assetCaps", message });
+  }
 
   const protocols: Array<{ contract: string; fns: string[] | null }> = [];
   for (const line of draft.protocols.split("\n")) {
@@ -177,6 +184,7 @@ export function draftFromConfig(config: PolicyConfig): PolicyDraft {
     windowCap: renderBigint(config.window_cap),
     windowSecs: renderBigint(config.window_secs),
     assets: config.assets.join("\n"),
+    assetCaps: [],
     recipients: config.recipients.join("\n"),
     allowAnyRecipient: config.allow_any_recipient,
     protocols: config.protocols

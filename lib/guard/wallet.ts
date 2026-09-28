@@ -10,8 +10,20 @@
  * signature is produced inside the wallet, over a payload the wallet displays.
  */
 
-import { getAddress, requestAccess, signAuthEntry, signTransaction } from "@stellar/freighter-api";
 import type { WalletSigner } from "./submit.ts";
+
+/**
+ * The extension API, loaded on demand rather than at module load.
+ *
+ * The package ships a minified CJS bundle, and Node's ESM loader cannot see
+ * its named exports — a top-level import would make this module, and every
+ * panel that transitively imports it, unloadable in unit tests. The browser
+ * build bundles it either way (this module already used a dynamic import for
+ * `getNetworkDetails`), so this only defers *when* the bundle is evaluated.
+ */
+function freighter(): Promise<typeof import("@stellar/freighter-api")> {
+  return import("@stellar/freighter-api");
+}
 
 export class WalletError extends Error {
   constructor(message: string) {
@@ -50,6 +62,7 @@ export interface ConnectedWallet {
  * than to let the operator approve something that cannot work.
  */
 export async function connectWallet(): Promise<ConnectedWallet> {
+  const { requestAccess } = await freighter();
   const granted = await requestAccess();
   assertNoError(granted, "requestAccess");
   const address = (granted as { address?: string }).address;
@@ -61,6 +74,7 @@ export async function connectWallet(): Promise<ConnectedWallet> {
 
 /** The wallet's current address, if access was already granted. */
 export async function currentAddress(): Promise<string | null> {
+  const { getAddress } = await freighter();
   const result = await getAddress();
   if ((result as WithError).error) return null;
   return (result as { address?: string }).address ?? null;
@@ -87,6 +101,7 @@ export function freighterSigner(address: string, networkPassphrase: string): Wal
   return {
     address,
     async signTransaction(transactionXdr: string): Promise<string> {
+      const { signTransaction } = await freighter();
       const result = await signTransaction(transactionXdr, { networkPassphrase, address });
       assertNoError(result, "signTransaction");
       const signed = (result as { signedTxXdr?: string }).signedTxXdr;
@@ -94,6 +109,7 @@ export function freighterSigner(address: string, networkPassphrase: string): Wal
       return signed;
     },
     async signAuthEntry(entryXdr: string): Promise<string> {
+      const { signAuthEntry } = await freighter();
       const result = await signAuthEntry(entryXdr, { networkPassphrase, address });
       assertNoError(result, "signAuthEntry");
       const signed = (result as { signedAuthEntry?: string | null }).signedAuthEntry;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { InvokeResult } from "../lib/guard/submit.ts";
 import { freezeGuard, unfreezeGuard } from "../lib/guard/guardOps.ts";
 import { refusedEventsFromDiagnostics } from "../lib/guard/telemetry.ts";
@@ -30,15 +30,82 @@ interface Report {
 }
 
 export function PanicPanel() {
-  const { signer, guard, server, refresh, snapshot, pushEvents, wallet } = useGuard();
+  const { signer, guard, server, refresh, snapshot, pushEvents, wallet, notifyTabs } = useGuard();
   const [phase, setPhase] = useState<Phase>("idle");
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const confirming = phase === "confirming";
+
+  // Focus management for the confirmation dialog: move focus in on open, keep
+  // Tab cycling inside it, close on Escape, and restore focus to the trigger
+  // whenever the dialog goes away. Without this a modal is either a keyboard
+  // trap (focus escapes into the page behind it) or a dead end (focus lands
+  // nowhere on dismissal) — both fail WCAG 2.1 AA keyboard requirements.
+  useEffect(() => {
+    if (!confirming) return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const focusables = () =>
+      Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+
+    // Focus the dialog itself first, so a screen reader announces the title
+    // before the operator tabs into its controls.
+    dialog.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setPhase("idle");
+        setAcknowledged(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement as HTMLElement | null;
+      const inside = active !== null && dialog.contains(active);
+      if (event.shiftKey && (active === first || !inside)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !inside)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      // Dismissal in any form (Escape, Cancel, or proceeding to sign) returns
+      // focus to the trigger. The trigger row is re-created when the dialog
+      // closes, and React re-attaches refs during the commit — before this
+      // cleanup runs — so the ref already points at the live button. Reading
+      // `.current` at cleanup time is the whole point; a snapshot taken when
+      // the effect started would be null (the row is unmounted while the
+      // dialog is open) or a detached node.
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate late ref read, see above
+      triggerRef.current?.focus();
+    };
+  }, [confirming]);
+
   const alreadyFrozen = snapshot?.status.ok ? snapshot.status.value.admin_frozen : null;
 
-  async function run(action: "freeze" | "unfreeze") {
+  async function run(action: "freeze" | "unfreeze", exportOnly = false) {
     setError(null);
     setReport(null);
     setPhase("signing");
@@ -46,13 +113,25 @@ export function PanicPanel() {
       const walletSigner = signer();
       const result =
         action === "freeze"
-          ? await freezeGuard({ server, signer: walletSigner, guard })
-          : await unfreezeGuard({ server, signer: walletSigner, guard });
+          ? await freezeGuard({ server, signer: walletSigner, guard, exportOnly })
+          : await unfreezeGuard({ server, signer: walletSigner, guard, exportOnly });
 
       // Surface any refused-decision diagnostics the write produced, so a refusal
       // appears in the feed rather than only in this panel.
       if (result.kind === "refused") {
         pushEvents(refusedEventsFromDiagnostics(result.diagnosticEvents, guard));
+      }
+
+      if (result.kind === "exported") {
+        setReport({
+          action,
+          result,
+          adminFrozenAfter: null,
+          confirmed: false,
+          note: "Transaction XDR exported for offline signing"
+        });
+        setPhase("done");
+        return;
       }
 
       // Re-read the contract's own view. This is the step that makes the claim
@@ -76,6 +155,10 @@ export function PanicPanel() {
             : `status().admin_frozen reads ${adminFrozenAfter} — the intended effect is NOT visible on chain`,
       });
       setPhase("done");
+      // Only a broadcast write can have moved the chain. Tell the other tabs so
+      // they re-read instead of showing the pre-freeze world for up to a poll
+      // interval — the one delay that matters when the agent is misbehaving.
+      if (result.kind === "submitted") notifyTabs("FREEZE_STATE_CHANGED", { payload: { action } });
       await refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -108,6 +191,7 @@ export function PanicPanel() {
         <div className="row" style={{ marginTop: 12 }}>
           <button
             className="danger"
+            ref={triggerRef}
             disabled={!wallet || alreadyFrozen === true}
             onClick={() => {
               setAcknowledged(false);
@@ -124,37 +208,58 @@ export function PanicPanel() {
           >
             Unfreeze
           </button>
+          <button
+            className="secondary"
+            disabled={!wallet || alreadyFrozen === false}
+            onClick={() => void run("unfreeze", true)}
+          >
+            Export Unfreeze XDR
+          </button>
         </div>
       )}
 
       {phase === "confirming" && (
-        <div className="notice">
-          <strong>Confirm the freeze — this stops the agent immediately</strong>
-          <p className="tiny">
-            The agent will not be able to make any call that requires its authorization until the
-            account is unfrozen. This will prompt your wallet to sign an <code>unfreeze</code>-able{" "}
-            <code>freeze()</code> call on{" "}
-            <span className="mono">{guard.slice(0, 10)}…</span>.
-          </p>
-          <div className="checkline">
-            <input
-              id="ack-freeze"
-              type="checkbox"
-              checked={acknowledged}
-              onChange={(event) => setAcknowledged(event.target.checked)}
-            />
-            <label htmlFor="ack-freeze">
-              I understand this halts the agent&apos;s spending, and that undoing it needs a second
-              signed <code>unfreeze()</code>.
-            </label>
-          </div>
-          <div className="row">
-            <button className="danger" disabled={!acknowledged} onClick={() => void run("freeze")}>
-              Sign freeze
-            </button>
-            <button className="secondary" onClick={() => setPhase("idle")}>
-              Cancel
-            </button>
+        <div className="modal-backdrop">
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="freeze-confirm-title"
+            ref={dialogRef}
+            tabIndex={-1}
+          >
+            <strong id="freeze-confirm-title">
+              Confirm the freeze — this stops the agent immediately
+            </strong>
+            <p className="tiny">
+              The agent will not be able to make any call that requires its authorization until the
+              account is unfrozen. This will prompt your wallet to sign an <code>unfreeze</code>-able{" "}
+              <code>freeze()</code> call on{" "}
+              <span className="mono">{guard.slice(0, 10)}…</span>.
+            </p>
+            <div className="checkline">
+              <input
+                id="ack-freeze"
+                type="checkbox"
+                checked={acknowledged}
+                onChange={(event) => setAcknowledged(event.target.checked)}
+              />
+              <label htmlFor="ack-freeze">
+                I understand this halts the agent&apos;s spending, and that undoing it needs a second
+                signed <code>unfreeze()</code>.
+              </label>
+            </div>
+            <div className="row">
+              <button className="danger" disabled={!acknowledged} onClick={() => void run("freeze")}>
+                Sign freeze
+              </button>
+              <button className="secondary" disabled={!acknowledged} onClick={() => void run("freeze", true)}>
+                Export XDR
+              </button>
+              <button className="secondary" onClick={() => setPhase("idle")}>
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -172,7 +277,42 @@ export function PanicPanel() {
 
       {error && <ErrorBlock title="The freeze could not be completed" detail={error} />}
 
-      {report && (
+      {report?.result.kind === "exported" && (
+        <div className="modal-backdrop" onClick={() => { setReport(null); setPhase("idle"); }}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+              <h2 style={{ margin: 0 }}>Exported Transaction XDR</h2>
+              <button className="secondary" onClick={() => { setReport(null); setPhase("idle"); }}>Close</button>
+            </div>
+            <p className="tiny" style={{ marginBottom: "16px" }}>
+              This unsigned transaction envelope is ready for external multi-sig signing.
+            </p>
+            <textarea
+              readOnly
+              value={report.result.kind === "exported" ? report.result.xdr : ""}
+              style={{ width: "100%", height: "120px", marginBottom: "16px", fontSize: "12px", fontFamily: "monospace" }}
+            />
+            <div className="row">
+              <button onClick={() => navigator.clipboard.writeText(report.result.kind === "exported" ? report.result.xdr : "")}>Copy to Clipboard</button>
+              <button
+                onClick={() => {
+                  const blob = new Blob([report.result.kind === "exported" ? report.result.xdr : ""], { type: "text/plain" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `unsigned-${report.action}-${Date.now()}.tx`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+              >
+                Download .tx
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {report && report.result.kind !== "exported" && (
         <div className={report.confirmed ? "notice info" : "error"}>
           <strong>
             {report.confirmed

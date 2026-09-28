@@ -1,0 +1,28 @@
+{
+  "id": "/",
+  "name": "Stellar Agent Guard — operator console",
+  "short_name": "Agent Guard",
+  "description": "Configure, watch and freeze stellar-agent-guard smart accounts. Every action is signed in your own wallet and every number is read from the chain.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "theme_color": "#0a0d12",
+  "background_color": "#0a0d12",
+  "categories": ["finance", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "maskable"
+    }
+  ]
+}

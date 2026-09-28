@@ -26,3 +26,9 @@ site:
           path: screens
           content:
             directory: ./screens
+        - type: space
+          key: space-runbooks
+          title: Operator Runbooks
+          path: runbooks
+          content:
+            directory: ./runbooks
