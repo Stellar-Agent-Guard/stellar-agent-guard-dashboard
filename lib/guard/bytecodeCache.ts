@@ -7,8 +7,10 @@ const STORAGE_KEY = 'stellar_bytecode_hash_cache';
 const MAX_ENTRIES = 50;
 const TTL_MS = 60 * 60 * 1000;
 
+const memoryStore: Record<string, CacheEntry> = {};
+
 function getStore(): Record<string, CacheEntry> {
-  if (typeof sessionStorage === 'undefined') return {};
+  if (typeof sessionStorage === 'undefined') return memoryStore;
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : {};
