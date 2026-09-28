@@ -15,5 +15,5 @@ export function parseAddressList(csv: string) {
   return valid;
 }
 export function exportRFC4180(addresses: string[]) {
-  return addresses.map(a => \`"\${a}"\`).join('\r\n');
+  return addresses.map(a => `"${a}"`).join('\r\n');
 }
