@@ -1,3 +1,4 @@
+import { withBackoff, RetryableError } from "./retry.ts";
 /**
  * The write path: a contract call authorized by the operator's own wallet.
  *
@@ -337,36 +338,35 @@ async function pollForInclusion(
   | { ok: true; status: string; ledger: number | null; events: unknown }
   | { ok: false; detail: string; diagnosticEvents: unknown[] }
 > {
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    const result = (await server.getTransaction(hash).catch(() => null)) as
-      | (rpc.Api.GetTransactionResponse & { diagnosticEventsXdr?: unknown[] })
-      | null;
-    if (!result) continue;
-    if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
-      return {
-        ok: true,
-        status: result.status,
-        ledger: (result as { ledger?: number }).ledger ?? null,
-        events: (result as { events?: unknown }).events ?? null,
-      };
-    }
-    if (result.status === rpc.Api.GetTransactionStatus.FAILED) {
-      const diagnostics = result.diagnosticEventsXdr ?? [];
-      return {
-        ok: false,
-        detail: `transaction ${hash} was included and rejected by the network (${describeRejectedResult(
-          result,
-        )})`,
-        diagnosticEvents: diagnostics,
-      };
-    }
+  try {
+    return await withBackoff(async () => {
+      const result = (await server.getTransaction(hash).catch(() => null)) as
+        | (rpc.Api.GetTransactionResponse & { diagnosticEventsXdr?: unknown[] })
+        | null;
+      if (!result || result.status === rpc.Api.GetTransactionStatus.NOT_FOUND) {
+        throw new RetryableError("NOT_FOUND");
+      }
+      if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+        return {
+          ok: true,
+          status: result.status,
+          ledger: (result as { ledger?: number }).ledger ?? null,
+          events: (result as { events?: unknown }).events ?? null,
+        };
+      }
+      if (result.status === rpc.Api.GetTransactionStatus.FAILED) {
+        const diagnostics = result.diagnosticEventsXdr ?? [];
+        return {
+          ok: false,
+          detail: `transaction ${hash} was included and rejected by the network`,
+          diagnosticEvents: diagnostics,
+        };
+      }
+      throw new RetryableError("TRY_AGAIN_LATER");
+    }, { baseDelayMs: intervalMs, maxRetries: attempts });
+  } catch (e) {
+    return { ok: false, detail: `transaction timed out after ${attempts} attempts`, diagnosticEvents: [] };
   }
-  return {
-    ok: false,
-    detail: `timed out after ${attempts} polls waiting for ${hash} to be included`,
-    diagnosticEvents: [],
-  };
 }
 
 /**
@@ -500,7 +500,19 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     passphrase,
     guard: request.guardForFootprint ?? null,
   });
-  const enforced = await server.simulateTransaction(enforcing);
+  const enforced = await withBackoff(
+    async () => {
+      const sim = await server.simulateTransaction(enforcing);
+      if (sim && (sim as any).status === "ERROR" || (sim as any).error) {
+        const errStr = typeof (sim as any).error === "string" ? (sim as any).error : JSON.stringify((sim as any).error);
+        if (errStr && (errStr.includes("TRY_AGAIN_LATER") || errStr.includes("TIMEOUT"))) {
+          throw new RetryableError(errStr);
+        }
+      }
+      return sim;
+    },
+    { baseDelayMs: 500, maxRetries: 3 }
+  );
   if (rpc.Api.isSimulationError(enforced)) {
     return {
       kind: "refused",

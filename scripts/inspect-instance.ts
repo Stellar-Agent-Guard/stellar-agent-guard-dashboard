@@ -48,6 +48,7 @@ async function main(): Promise<void> {
   ]);
 
   const report = {
+    schemaVersion: 1,
     rpcUrl: NETWORK.rpcUrl,
     guard,
     artifact: {

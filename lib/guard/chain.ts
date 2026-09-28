@@ -1,3 +1,4 @@
+import { getCachedHash, setCachedHash } from "./bytecodeCache.ts";
 /**
  * Read-only access to a guard deployment, straight off Soroban RPC.
  *
@@ -157,13 +158,23 @@ export async function verifyWasmIdentity(
     executable?: { wasmHash?: unknown };
   };
   const reportedWasmHash = hashToHex(instance.executable?.wasmHash);
-  const wasm = await server.getContractWasmByContractId(contractId);
-  const bytes = toBytes(wasm);
-  const fetchedSha256 = await sha256Hex(bytes);
+  
+  const networkKey = (server as any).serverURL?.includes('testnet') ? 'testnet' : 'public';
+  
+  let fetchedSha256 = getCachedHash(networkKey, contractId);
+  let length = 0;
+  if (!fetchedSha256) {
+    const wasm = await server.getContractWasmByContractId(contractId);
+    const bytes = toBytes(wasm);
+    fetchedSha256 = await sha256Hex(bytes);
+    length = bytes.length;
+    setCachedHash(networkKey, contractId, fetchedSha256);
+  }
+  
   return {
     reportedWasmHash,
     fetchedSha256,
-    bytes: bytes.length,
+    bytes: length,
     match: reportedWasmHash === fetchedSha256,
   };
 }
