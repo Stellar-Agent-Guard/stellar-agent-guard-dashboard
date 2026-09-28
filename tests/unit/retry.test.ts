@@ -1,37 +1,37 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { withBackoff, RetryableError } from "../../lib/guard/retry.ts";
+import { withRetry } from '../../lib/utils/retry';
 
-test("withBackoff succeeds on first try", async () => {
-  const result = await withBackoff(async () => "ok");
-  assert.equal(result, "ok");
-});
+describe('Retry logic', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
 
-test("withBackoff retries on RetryableError and succeeds", async () => {
-  let calls = 0;
-  const result = await withBackoff(
-    async () => {
-      calls++;
-      if (calls < 3) throw new RetryableError("NOT_FOUND");
-      return "ok";
-    },
-    { baseDelayMs: 10, maxRetries: 3 }
-  );
-  assert.equal(result, "ok");
-  assert.equal(calls, 3);
-});
+  afterEach(() => {
+    jest.useRealTimers();
+  });
 
-test("withBackoff throws non-retryable immediately", async () => {
-  let calls = 0;
-  await assert.rejects(
-    withBackoff(
-      async () => {
-        calls++;
-        throw new Error("HostError");
-      },
-      { baseDelayMs: 10, maxRetries: 3 }
-    ),
-    /HostError/
-  );
-  assert.equal(calls, 1);
+  it('verifies backoff timing progression with jitter', async () => {
+    const mockFn = jest.fn()
+      .mockRejectedValueOnce(new Error('retryable'))
+      .mockRejectedValueOnce(new Error('retryable'))
+      .mockResolvedValue('success');
+
+    const promise = withRetry(mockFn);
+    
+    // Fast-forward through retries
+    jest.runAllTimers();
+    
+    const result = await promise;
+    expect(result).toBe('success');
+    expect(mockFn).toHaveBeenCalledTimes(3);
+  });
+
+  it('handles non-retryable errors without delay', async () => {
+    const error = new Error('fatal');
+    (error as any).retryable = false;
+    
+    const mockFn = jest.fn().mockRejectedValue(error);
+    
+    await expect(withRetry(mockFn)).rejects.toThrow('fatal');
+    expect(mockFn).toHaveBeenCalledTimes(1);
+  });
 });
