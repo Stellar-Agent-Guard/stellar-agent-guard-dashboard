@@ -16,6 +16,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/unit/*.test.ts",
+    "check:docs-scripts": "node --import tsx scripts/check-doc-scripts.ts",
     "prove:phase3": "node scripts/prove-phase3.ts",
     "inspect": "node scripts/inspect-instance.ts"
   },

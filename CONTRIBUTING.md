@@ -20,6 +20,7 @@ npm run typecheck   # tsc --noEmit
 npm run lint        # eslint
 npm test            # node --test (unit suite)
 npm run build       # Next.js production build
+npm run check:docs-scripts  # validates README.md + CONTRIBUTING.md references
 ```
 
 Two extra scripts are not part of the CI gate:
@@ -27,6 +28,25 @@ Two extra scripts are not part of the CI gate:
 - `npm run prove:phase3` — re-runs the live testnet proof against the real deployed
   contract; needs funded testnet keypairs.
 - `npm run inspect` — read-only dump of a deployed instance's on-chain state.
+
+### Script audit inventory
+
+The mini checker enforces the asymmetric rule: a script referenced in docs must exist,
+while extra scripts are reported as informational rather than failing CI. The current
+inventory is:
+
+| Script | Documented in README/CONTRIBUTING | Verdict |
+| --- | --- | --- |
+| `dev` | Yes — quick start | documented |
+| `dev:demo` | Yes — demo mode section | documented |
+| `build` | Yes — verification block | documented |
+| `start` | No | intentional-with-note (local runtime entrypoint, kept out of the docs) |
+| `lint` | Yes — verification block | documented |
+| `typecheck` | Yes — verification block | documented |
+| `test` | Yes — verification block | documented |
+| `check:docs-scripts` | Yes — this section | documented |
+| `prove:phase3` | Yes — extra scripts note | documented |
+| `inspect` | Yes — verification block and extra scripts note | documented |
 
 ## Branch protection and CI
 
