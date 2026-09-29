@@ -32,12 +32,19 @@ import { readGuardSnapshot, type GuardSnapshot } from "../lib/guard/guardOps.ts"
 import { NETWORK } from "../lib/guard/network.ts";
 import { GuardFeed } from "../lib/guard/telemetry.ts";
 import { createTabSync, type TabSyncEventType } from "../lib/guard/tabSync.ts";
+import { announce } from "../lib/guard/useAnnounce.ts";
 import {
   KNOWN_INSTANCES,
   loadInstances,
   rememberInstance,
   type GuardInstance,
 } from "../lib/guard/instance.ts";
+import {
+  readStatus,
+  readPolicy,
+  readWindow,
+  verifyWasmIdentity,
+} from "../lib/guard/chain.ts";
 import { connectWallet, currentAddress, freighterSigner, type ConnectedWallet } from "../lib/guard/wallet.ts";
 import type { WalletSigner } from "../lib/guard/submit.ts";
 import {
@@ -60,6 +67,9 @@ import {
 const SNAPSHOT_INTERVAL_MS = 15_000;
 const FEED_INTERVAL_MS = 5_000;
 
+/** The individually-read fields of a guard snapshot (issue #36 retry keys). */
+export type SnapshotField = "status" | "policy" | "window" | "identity";
+
 interface GuardContextValue {
   server: rpc.Server;
   wallet: ConnectedWallet | null;
@@ -77,6 +87,10 @@ interface GuardContextValue {
   snapshotError: string | null;
   refreshing: boolean;
   refresh: () => Promise<void>;
+  /** Per-read retry (issue #36): re-invoke ONLY one failed snapshot read. */
+  retryRead: (field: SnapshotField) => Promise<void>;
+  /** The snapshot field currently re-reading, if any. */
+  retryingField: SnapshotField | null;
   events: GuardEvent[];
   feed: {
     watching: boolean;
@@ -144,6 +158,10 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<GuardSnapshot | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // Per-read retry state (issue #36): which single field is re-reading. Only
+  // one retry is in flight at a time — the same in-flight discipline the panel
+  // refresh button follows — and a retry never touches the other fields.
+  const [retryingField, setRetryingField] = useState<SnapshotField | null>(null);
   const [events, setEvents] = useState<GuardEvent[]>([]);
   const [feed, setFeed] = useState<GuardContextValue["feed"]>({
     watching: false,
@@ -288,6 +306,62 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     refreshRef.current = refresh;
   }, [refresh]);
+
+  /**
+   * Re-run exactly one snapshot read (issue #36).
+   *
+   * Discrete reads get discrete retries: retrying `status` must not re-invoke
+   * `policy`, `window` or `identity` — the operator's per-read error report
+   * names one failed read, and the fix re-reads that one. The other fields stay
+   * exactly as they are, including their own failures, so the panel never
+   * blanks a good value because a sibling read failed. Re-entry follows the
+   * render triple: the failed read shows its error block, then a pending
+   * skeleton while the re-read is in flight, then the value or the error again
+   * (with the retry still available — a failing retry is not a dead end).
+   */
+  const retryRead = useCallback(
+    async (field: SnapshotField) => {
+      if (!guard || retryingField !== null) return; // one in flight at a time
+      setRetryingField(field);
+      try {
+        const failure = (error: unknown): { ok: false; error: string } => ({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        let next: GuardSnapshot["status"] | GuardSnapshot["policy"] | GuardSnapshot["window"] | GuardSnapshot["identity"];
+        switch (field) {
+          case "status":
+            next = await readStatus(server, guard, wallet?.address).catch(failure);
+            break;
+          case "policy":
+            next = await readPolicy(server, guard, wallet?.address).catch(failure);
+            break;
+          case "window":
+            next = await readWindow(server, guard).catch(failure);
+            break;
+          case "identity":
+            next = await verifyWasmIdentity(server, guard)
+              .then((value): GuardSnapshot["identity"] => ({ ok: true, value }))
+              .catch(failure);
+            break;
+        }
+        // Merge only this field into the existing snapshot. A snapshot that has
+        // been replaced wholesale (guard switch, full refresh) since the retry
+        // started is left alone: the retry result is for a guard this panel may
+        // no longer be showing.
+        setSnapshot((current) =>
+          current && current.guard === guard ? { ...current, [field]: next } : current,
+        );
+        announce(
+          next.ok ? `${field} read recovered` : `${field} read failed again`,
+          next.ok ? "polite" : "assertive",
+        );
+      } finally {
+        setRetryingField(null);
+      }
+    },
+    [guard, server, wallet?.address, retryingField],
+  );
 
   // React to what the other tabs announce. Nothing crosses the wire as state:
   // `GUARD_CHANGED` carries an address to select, and the freeze/policy events
@@ -475,6 +549,8 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     snapshotError,
     refreshing,
     refresh,
+    retryRead,
+    retryingField,
     events,
     feed,
     startWatching,
