@@ -4,6 +4,8 @@ import { describeGuardEvent, explainReason } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, relativeTime, short, starLink, TxHashCell } from "./bits.tsx";
+import { useAnnounce } from "../lib/guard/useAnnounce.ts";
+import { eventsToCsv, eventsToJson, exportFilename } from "../lib/guard/eventExport.ts";
 
 /**
  * The live event feed.
@@ -21,7 +23,32 @@ import { ErrorBlock, relativeTime, short, starLink, TxHashCell } from "./bits.ts
  */
 export function TelemetryFeed() {
   const { events, feed, startWatching, stopWatching, clearEvents, guard } = useGuard();
-    return (
+  const announce = useAnnounce();
+
+  /**
+   * Download the feed through the shared export path (issue #37). The schema,
+   * BOM and filename rules all live in `lib/guard/eventExport.ts` — this is a
+   * thin binding, not a second exporter.
+   */
+  function downloadExport(format: "csv" | "json") {
+    const content =
+      format === "csv"
+        ? eventsToCsv(events, guard)
+        : JSON.stringify(eventsToJson(events, guard), null, 2);
+    const type = format === "csv" ? "text/csv;charset=utf-8" : "application/json";
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = exportFilename(guard, format, events.length);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    announce(`Exported ${events.length} event${events.length === 1 ? "" : "s"} as ${format.toUpperCase()}`);
+  }
+
+  return (
     <div className="panel">
       <div className="row" style={{ justifyContent: "space-between" }}>
         <h2 style={{ margin: 0 }}>Telemetry</h2>
@@ -37,6 +64,12 @@ export function TelemetryFeed() {
           )}
           <button className="secondary" onClick={clearEvents} disabled={events.length === 0}>
             Clear
+          </button>
+          <button className="secondary" onClick={() => downloadExport("csv")} disabled={events.length === 0}>
+            Export CSV
+          </button>
+          <button className="secondary" onClick={() => downloadExport("json")} disabled={events.length === 0}>
+            Export JSON
           </button>
         </div>
       </div>
