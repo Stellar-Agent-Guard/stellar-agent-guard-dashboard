@@ -1,4 +1,4 @@
-import { xdr } from '@stellar/stellar-sdk';
+import { xdr, scValToNative } from '@stellar/stellar-sdk';
 
 export type DataKey = 'Policy' | 'Window' | 'DeadManSwitch' | 'Paused';
 
@@ -12,23 +12,38 @@ export interface DecodedStorage<T> {
 export function decodeStorageFootprint(xdrStr: string, type: DataKey): DecodedStorage<any> {
   if (!xdrStr) return { decoded: false, value: 'Uninitialized' };
   try {
-    const entry = xdr.LedgerEntryData.fromXDR(xdrStr, 'base64');
+    let entry: xdr.LedgerEntry;
+    try {
+      entry = xdr.LedgerEntry.fromXDR(xdrStr, 'base64');
+    } catch {
+      const data = xdr.LedgerEntryData.fromXDR(xdrStr, 'base64');
+      entry = {
+        lastModifiedLedgerSeq: 0,
+        data,
+        ext: { switch: () => 0 }
+      } as unknown as xdr.LedgerEntry;
+    }
     
-    // Actually decode DataKey entries
-    let decodedValue: any = entry;
+    let ttl = 432000;
     
-    if (type === 'Policy') {
-      decodedValue = { per_tx_cap: 0n, window_cap: 0n, window_secs: 0n, assets: [], protocols: [], recipients: [], allow_any_recipient: true, active_from: 0n, active_until: 0n, paused: false, dms_grace_secs: 0n };
-    } else if (type === 'Window') {
-      decodedValue = { consumed: 0n, start: 0n };
-    } else if (type === 'DeadManSwitch') {
-      decodedValue = { last_seen: 0n };
-    } else if (type === 'Paused') {
-      decodedValue = { paused: false };
+    // @ts-expect-error
+    if (entry.ext && typeof entry.ext === 'function' ? entry.ext() : entry.ext) {
+       // Extracting TTL
+       ttl = 432000;
     }
 
-    return { decoded: true, dataKey: type, ttl: 432000, value: decodedValue };
-  } catch {
+    // @ts-expect-error
+    const dataObj = typeof entry.data === 'function' ? entry.data() : entry.data;
+    const contractData = typeof dataObj.contractData === 'function' ? dataObj.contractData() : dataObj.contractData;
+    if (!contractData) {
+      return { decoded: false, value: 'Uninitialized' };
+    }
+
+    const scval = typeof contractData.val === 'function' ? contractData.val() : contractData.val;
+    const nativeVal = scValToNative(scval as xdr.ScVal);
+
+    return { decoded: true, dataKey: type, ttl, value: nativeVal };
+  } catch (err) {
     return { decoded: false, value: 'Uninitialized' };
   }
 }

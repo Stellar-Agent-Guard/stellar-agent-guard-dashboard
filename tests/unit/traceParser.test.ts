@@ -13,7 +13,7 @@ describe('traceParser', () => {
   });
 
   it('decodes object events', () => {
-    const res = parseDiagnosticLogs([{ contractId: 'C123', functionName: 'test', args: [], error: 100 }]);
+    const res = parseDiagnosticLogs([{ type: 'diagnostic', contractId: 'C123', functionName: 'test', args: [], error: 100 }]);
     assert.strictEqual(res.tree[0]?.error, 'SpendCapExceeded');
   });
 });
