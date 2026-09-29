@@ -16,6 +16,12 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/unit/*.test.ts",
+    "test:docs": "node scripts/check-doc-links.mjs",
+    "changelog": "node scripts/generate-changelog.mjs",
+    "sandbox": "bash scripts/start-local-sandbox.sh",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky",
     "prove:phase3": "node scripts/prove-phase3.ts",
     "inspect": "node scripts/inspect-instance.ts"
   },
