@@ -3,11 +3,22 @@
 import { memo, useState } from "react";
 import { describeGuardEvent, explainReason, GUARD_EVENT_TOPICS } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
+import { STREAM_BUFFER_LIMIT } from "../lib/guard/telemetry.ts";
 import { eventKey, useGuard, useGuardEvents } from "./GuardProvider.tsx";
 import { TelemetryAlerts } from "./TelemetryAlerts.tsx";
+import { TelemetryChart } from "./TelemetryChart.tsx";
 import { ErrorBlock, relativeTime, short, starLink } from "./bits.tsx";
 import { DateRangePicker } from "./DateRangePicker.tsx";
 import type { RangePreset, TimeRange } from "../lib/guard/ledgerTime.ts";
+import {
+  NDJSON_MIME,
+  auditLogFilename,
+  isFilterActive,
+  telemetryToAuditLog,
+} from "../lib/guard/exportFormats.ts";
+import { NETWORK } from "../lib/guard/network.ts";
+import { useAnnounce } from "../lib/guard/useAnnounce.ts";
+import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 import {
   EMPTY_TELEMETRY_FILTER,
   filterGuardEvents,
@@ -63,18 +74,53 @@ export function TelemetryFeed() {
   // The feed subscribes to the events context itself: batches re-render this
   // panel and nothing else (see `GuardEventsContext`).
   const events = useGuardEvents();
-  const { feed, startWatching, stopWatching, clearEvents, guard, queryRange, rangeLabel } =
-    useGuard();
+  const {
+    feed,
+    stream,
+    pauseStream,
+    resumeStream,
+    startWatching,
+    stopWatching,
+    clearEvents,
+    guard,
+    queryRange,
+    rangeLabel,
+  } = useGuard();
   const [filter, setFilter] = useState<TelemetryFilter>(EMPTY_TELEMETRY_FILTER);
+  const announce = useAnnounce();
+  const demo = useDemoMode();
 
   // The three controls and the exports all act on the same projection, so a
   // CSV/NDJSON download is provably the filtered view on screen — one row in,
   // one line out, never a hidden superset.
   const rows = filterGuardEvents(events, filter);
-  const filterActive =
-    filter.verdict !== EMPTY_TELEMETRY_FILTER.verdict ||
-    filter.topic !== EMPTY_TELEMETRY_FILTER.topic ||
-    filter.contract.trim() !== EMPTY_TELEMETRY_FILTER.contract;
+  const filterActive = isFilterActive(filter);
+
+  /**
+   * Download the structured audit log: a header line naming the guard, network
+   * and filter, then one record per event with its raw XDR and every 64-bit
+   * value as a decimal string. Like the other exports it is the filtered view
+   * on screen; the header's `bufferedCount` shows how much the filter left out.
+   */
+  function exportAuditLog() {
+    const exportedAt = new Date();
+    const body = telemetryToAuditLog({
+      events: rows,
+      bufferedCount: events.length,
+      guard,
+      network: NETWORK.name,
+      filter,
+      latestLedger: feed.latestLedger,
+      demo,
+      exportedAt,
+    });
+    downloadText(
+      auditLogFilename(exportedAt, filterActive ? "filtered" : "full"),
+      body,
+      `${NDJSON_MIME};charset=utf-8`,
+    );
+    announce(`Exported ${rows.length} event${rows.length === 1 ? "" : "s"} to the audit log`);
+  }
 
   function applyRange(range: TimeRange, preset: RangePreset) {
     // A historical query replaces the live tail view: the feed shows exactly
@@ -94,6 +140,7 @@ export function TelemetryFeed() {
         <h2 style={{ margin: 0 }}>Telemetry</h2>
         <div className="row">
           {feed.watching && <span className="pill ok">polling</span>}
+          {stream.paused && <span className="pill warn">paused</span>}
           {feed.latestLedger !== null && <span className="tiny muted">ledger {feed.latestLedger}</span>}
           {feed.watching ? (
             <button className="secondary" onClick={stopWatching}>
@@ -102,8 +149,27 @@ export function TelemetryFeed() {
           ) : (
             <button onClick={startWatching}>Start watching</button>
           )}
-          <button className="secondary" onClick={clearEvents} disabled={events.length === 0}>
-            Clear
+          {stream.paused ? (
+            <button onClick={resumeStream}>
+              Resume{stream.pendingCount > 0 ? ` (${stream.pendingCount})` : ""}
+            </button>
+          ) : (
+            <button
+              className="secondary"
+              onClick={pauseStream}
+              disabled={!feed.watching}
+              title="Freeze the table so rows stop moving. Polling continues; new events queue until you resume."
+            >
+              Pause stream
+            </button>
+          )}
+          <button
+            className="secondary"
+            onClick={clearEvents}
+            disabled={events.length === 0}
+            title="Empty the list. The poll cursor is kept, so nothing is re-fetched and nothing is skipped."
+          >
+            Clear buffer
           </button>
         </div>
       </div>
@@ -116,6 +182,23 @@ export function TelemetryFeed() {
             <button className="secondary" onClick={backToLive}>
               Back to live tail
             </button>
+          </div>
+        )}
+      </div>
+
+      {/* Announced politely so a screen reader hears the queue grow without being interrupted. */}
+      <div role="status" aria-live="polite">
+        {stream.paused && (
+          <div className="notice" style={{ marginTop: 12 }}>
+            <strong>
+              Stream paused ({stream.pendingCount} new event{stream.pendingCount === 1 ? "" : "s"} pending)
+            </strong>
+            <span className="tiny">
+              The table is frozen so you can read it. Polling carries on in the background and new
+              events queue here; resume to add them in order, with no duplicates and none skipped.
+              {stream.dropped > 0 &&
+                ` ${stream.dropped} older queued event${stream.dropped === 1 ? "" : "s"} fell past the ${STREAM_BUFFER_LIMIT}-event buffer and will not be shown.`}
+            </span>
           </div>
         )}
       </div>
@@ -173,6 +256,14 @@ export function TelemetryFeed() {
         >
           Export NDJSON
         </button>
+        <button
+          className="secondary"
+          onClick={exportAuditLog}
+          disabled={rows.length === 0}
+          title="NDJSON audit log: a header line, then decoded fields, verdict, ledger, transaction hash and the raw event XDR per event"
+        >
+          Export audit log
+        </button>
         {filterActive && (
           <button className="secondary" onClick={() => setFilter(EMPTY_TELEMETRY_FILTER)}>
             Clear filters
@@ -201,6 +292,8 @@ export function TelemetryFeed() {
       {feed.error && <ErrorBlock title="The event feed could not poll" detail={feed.error} />}
 
       <TelemetryAlerts />
+
+      <TelemetryChart />
 
       {events.length === 0 ? (
         <p className="tiny muted">
@@ -237,7 +330,8 @@ export function TelemetryFeed() {
       <p className="tiny muted" style={{ marginTop: 8 }}>
         Feed holds the most recent {events.length} event(s) from{" "}
         <span className="mono">{short(guard, 8, 6)}</span>.
-        {filterActive && <> Showing {rows.length} matching the current filter.</>}
+        {filterActive && <> Showing {rows.length} matching the current filter.</>} The audit log
+        keeps 64-bit values (ledgers, stroop amounts, timestamps) as strings so no precision is lost.
       </p>
     </div>
   );
