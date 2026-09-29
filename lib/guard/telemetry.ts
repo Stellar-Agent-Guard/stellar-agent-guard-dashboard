@@ -331,9 +331,9 @@ function diagnosticXdr(value: unknown): RawEventXdr | null {
  */
 export interface StreamBuffer {
   /** What the table shows, newest first. */
-  rows: GuardEvent[];
+  rows: TelemetryEvent[];
   /** Events that arrived while paused, newest first. They are not shown until resume. */
-  pending: GuardEvent[];
+  pending: TelemetryEvent[];
   paused: boolean;
   /** Identities already accepted, so a re-polled page or re-pushed diagnostic is not shown twice. */
   seen: ReadonlySet<string>;
@@ -376,13 +376,13 @@ export function eventKey(event: GuardEvent): string {
  */
 export function ingestEvents(
   buffer: StreamBuffer,
-  incoming: readonly GuardEvent[],
+  incoming: readonly TelemetryEvent[],
   options: { limit?: number; dedupe?: boolean } = {},
 ): StreamBuffer {
   const limit = options.limit ?? STREAM_BUFFER_LIMIT;
   const dedupe = options.dedupe ?? true;
   let seen = buffer.seen;
-  const fresh: GuardEvent[] = [];
+  const fresh: TelemetryEvent[] = [];
   for (const event of incoming) {
     if (dedupe) {
       const key = eventKey(event);
@@ -411,7 +411,7 @@ export function ingestEvents(
  * `seen` is rebuilt from exactly those rows, so returning to the live tail does
  * not re-suppress events the window displayed, nor re-show ones it did.
  */
-export function historicalBuffer(events: readonly GuardEvent[]): StreamBuffer {
+export function historicalBuffer(events: readonly TelemetryEvent[]): StreamBuffer {
   return { ...emptyStreamBuffer(), rows: [...events], seen: new Set(events.map(eventKey)) };
 }
 

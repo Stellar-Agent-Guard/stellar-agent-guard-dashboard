@@ -39,6 +39,7 @@ import {
   pauseStream as pauseBuffer,
   resumeStream as resumeBuffer,
   type StreamBuffer,
+  type TelemetryEvent,
 } from "../lib/guard/telemetry.ts";
 import { createTabSync, type TabSyncEventType } from "../lib/guard/tabSync.ts";
 import {
