@@ -1,44 +1,44 @@
-import { parseAddressList, exportRFC4180 } from '../../lib/guard/csv';
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { parseAddressList, exportRFC4180 } from "../../lib/guard/csv.ts";
 
-const VALID_G = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-const VALID_C = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+const VALID_G = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const VALID_C = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-describe('csv', () => {
-  it('parses simple G-addresses', () => {
-    const results = parseAddressList(VALID_G);
-    expect(results).toHaveLength(1);
-    expect(results[0].address).toBe(VALID_G);
-    expect(results[0].error).toBeUndefined();
-  });
+test("parses simple G-addresses", () => {
+  const results = parseAddressList(VALID_G);
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.address, VALID_G);
+  assert.equal(results[0]?.error, undefined);
+});
 
-  it('parses simple C-contract addresses', () => {
-    const results = parseAddressList(VALID_C);
-    expect(results).toHaveLength(1);
-    expect(results[0].address).toBe(VALID_C);
-    expect(results[0].error).toBeUndefined();
-  });
+test("parses simple C-contract addresses", () => {
+  const results = parseAddressList(VALID_C);
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.address, VALID_C);
+  assert.equal(results[0]?.error, undefined);
+});
 
-  it('parses address,symbol,description CSV format', () => {
-    const csv = `${VALID_G},XLM,Stellar Lumens`;
-    const results = parseAddressList(csv);
-    expect(results[0].address).toBe(VALID_G);
-    expect(results[0].symbol).toBe('XLM');
-    expect(results[0].description).toBe('Stellar Lumens');
-  });
+test("parses address,symbol,description CSV format", () => {
+  const csv = `${VALID_G},XLM,Stellar Lumens`;
+  const results = parseAddressList(csv);
+  assert.equal(results[0]?.address, VALID_G);
+  assert.equal(results[0]?.symbol, "XLM");
+  assert.equal(results[0]?.description, "Stellar Lumens");
+});
 
-  it('deduplicates addresses with error feedback', () => {
-    const results = parseAddressList(`${VALID_G}\n${VALID_G}`);
-    expect(results).toHaveLength(2);
-    expect(results[1].error).toContain('duplicate');
-  });
+test("deduplicates addresses with error feedback", () => {
+  const results = parseAddressList(`${VALID_G}\n${VALID_G}`);
+  assert.equal(results.length, 2);
+  assert.match(results[1]?.error ?? "", /duplicate/);
+});
 
-  it('reports row-by-row errors for invalid addresses', () => {
-    const results = parseAddressList('INVALID\n' + VALID_G);
-    expect(results[0].error).toContain('Row 1: invalid');
-    expect(results[1].error).toBeUndefined();
-  });
+test("reports row-by-row errors for invalid addresses", () => {
+  const results = parseAddressList(`INVALID\n${VALID_G}`);
+  assert.match(results[0]?.error ?? "", /Row 1: invalid/);
+  assert.equal(results[1]?.error, undefined);
+});
 
-  it('exports to RFC 4180 format with CRLF', () => {
-    expect(exportRFC4180(['A', 'B'])).toBe('"A"\r\n"B"');
-  });
+test("exports to RFC 4180 format with CRLF", () => {
+  assert.equal(exportRFC4180(["A", "B"]), '"A"\r\n"B"');
 });

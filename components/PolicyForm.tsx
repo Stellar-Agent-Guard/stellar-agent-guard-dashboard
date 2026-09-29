@@ -153,7 +153,7 @@ export function PolicyForm() {
       <h2>Guardrail policy</h2>
       <ScopeNotice />
       <CsvImportExport />
-      <PolicySimulationView />
+      <PolicySimulationView policy={validation.ok ? validation.config : null} />
       <p className="tiny muted">
         Installing a policy resets the rolling window and restarts the dead-man-switch clock, so a
         freshly installed policy always starts with full grace.

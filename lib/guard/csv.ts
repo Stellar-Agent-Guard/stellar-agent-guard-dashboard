@@ -26,7 +26,7 @@ export function parseAddressList(csv: string): ParsedAddress[] {
 
     // Support both simple address lines and "address,symbol,description" CSV format
     const parts = trimmed.split(',').map(p => p.trim().replace(/^"|"$/g, ''));
-    const address = parts[0];
+    const address = parts[0] ?? '';
     const symbol = parts[1];
     const description = parts[2];
 
