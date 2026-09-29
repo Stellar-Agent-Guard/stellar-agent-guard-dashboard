@@ -76,6 +76,13 @@ jobs:
 
       - name: Compare against main and check the 200 KB budget
         id: compare
+        # continue-on-error lets the upload step always run (so the report
+        # artifact is available regardless of budget outcome), while
+        # steps.compare.outcome == 'failure' carries the budget verdict to the
+        # explicit fail step below. Without this, a non-zero exit from the node
+        # script would kill the step before the upload runs and leave the output
+        # unset — causing the fail step's condition to misfire on every run.
+        continue-on-error: true
         run: |
           node scripts/analyze-bundle.mjs compare \
             --baseline bundle-main.json \
@@ -83,11 +90,10 @@ jobs:
             --budget-kb 200 \
             --metric page \
             --out bundle-report.md
-          echo "code=$?" >> "$GITHUB_OUTPUT"
 
       - name: Upload the report artifact
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: bundle-size-report
           path: |
@@ -97,7 +103,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Fail when a page bundle exceeds the budget
-        if: steps.compare.outputs.code != '0'
+        if: steps.compare.outcome == 'failure'
         run: |
           echo "Page bundle budget exceeded — see bundle-report.md in the bundle-size-report artifact."
           exit 1
