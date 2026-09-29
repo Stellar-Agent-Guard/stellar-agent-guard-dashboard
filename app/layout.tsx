@@ -3,6 +3,8 @@ import { DemoBadge } from "../components/DemoBadge.tsx";
 import { Tabs } from "../components/bits.tsx";
 import { AriaAnnouncer } from "../components/AriaAnnouncer.tsx";
 import { PwaRegistrar } from "../components/PwaRegistrar.tsx";
+import { ThemeProvider } from "../components/ThemeProvider.tsx";
+import { ThemeToggle } from "../components/ThemeToggle.tsx";
 import { PWA_MANIFEST_PATH, PWA_THEME_COLOR } from "../lib/guard/pwa.ts";
 import "./globals.css";
 
@@ -33,31 +35,53 @@ export const metadata: Metadata = {
  */
 export const viewport: Viewport = {
   themeColor: PWA_THEME_COLOR,
-  colorScheme: "dark",
+  colorScheme: "dark light",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              try {
+                var saved = localStorage.getItem('theme');
+                if (saved) {
+                  document.documentElement.setAttribute('data-theme', saved);
+                } else {
+                  var prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+                  document.documentElement.setAttribute('data-theme', prefersLight ? 'light' : 'dark');
+                }
+              } catch(e) {}
+            `,
+          }}
+        />
+      </head>
       <body>
-        <PwaRegistrar />
-        <AriaAnnouncer />
-        <div className="shell">
-          <DemoBadge />
-          <header className="top">
-            <div className="brand">
-              <h1>Stellar Agent Guard</h1>
-              <span>operator console</span>
+        <ThemeProvider>
+          <PwaRegistrar />
+          <AriaAnnouncer />
+          <div className="shell">
+            <DemoBadge />
+            <header className="top">
+              <div className="brand">
+                <h1>Stellar Agent Guard</h1>
+                <span>operator console</span>
+              </div>
+              <div className="row">
+                <span className="pill">Soroban testnet</span>
+                <a href="https://github.com/aigbagbobila/stellar-agent-guard-contracts">contracts</a>
+                <a href="https://github.com/aigbagbobila/stellar-agent-guard-sdk">sdk</a>
+              </div>
+            </header>
+            <div className="row" style={{ justifyContent: "space-between", marginBottom: "16px" }}>
+              <Tabs />
+              <ThemeToggle />
             </div>
-            <div className="row">
-              <span className="pill">Soroban testnet</span>
-              <a href="https://github.com/aigbagbobila/stellar-agent-guard-contracts">contracts</a>
-              <a href="https://github.com/aigbagbobila/stellar-agent-guard-sdk">sdk</a>
-            </div>
-          </header>
-          <Tabs />
-          {children}
-        </div>
+            {children}
+          </div>
+        </ThemeProvider>
       </body>
     </html>
   );
