@@ -87,7 +87,7 @@ jobs:
 
       - name: Upload the report artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bundle-size-report
           path: |
@@ -138,7 +138,7 @@ jobs:
       - name: Download the report artifact
         id: artifact
         if: steps.wait.outputs.run-id != ''
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bundle-size-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -159,7 +159,7 @@ jobs:
                 "## Bundle size report",
                 "",
                 "The bundle-size analysis run did not produce a report" +
-                  `${process.env.conclusion === "timeout" ? " (timed out waiting for it)" : ""}.`,
+                  `${inputs.conclusion === "timeout" ? " (timed out waiting for it)" : ""}.`,
                 "Check the `bundle-size` workflow logs on this pull request.",
               ].join("\n");
             }
