@@ -3,7 +3,10 @@
 import { describeGuardEvent, explainReason } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { useGuard } from "./GuardProvider.tsx";
+import { TelemetryAlerts } from "./TelemetryAlerts.tsx";
 import { ErrorBlock, relativeTime, short, starLink } from "./bits.tsx";
+import { DateRangePicker } from "./DateRangePicker.tsx";
+import type { RangePreset, TimeRange } from "../lib/guard/ledgerTime.ts";
 
 /**
  * The live event feed.
@@ -20,7 +23,20 @@ import { ErrorBlock, relativeTime, short, starLink } from "./bits.tsx";
  *     mean absence of refusals on chain.
  */
 export function TelemetryFeed() {
-  const { events, feed, startWatching, stopWatching, clearEvents, guard } = useGuard();
+  const { events, feed, startWatching, stopWatching, clearEvents, guard, queryRange, rangeLabel } =
+    useGuard();
+
+  function applyRange(range: TimeRange, preset: RangePreset) {
+    // A historical query replaces the live tail view: the feed shows exactly
+    // the window asked for, and watching stops so a poll cannot overwrite it.
+    stopWatching();
+    void queryRange(range, preset);
+  }
+
+  function backToLive() {
+    clearEvents();
+    startWatching();
+  }
 
   return (
     <div className="panel">
@@ -42,6 +58,18 @@ export function TelemetryFeed() {
         </div>
       </div>
 
+      <div style={{ marginTop: 10 }}>
+        <DateRangePicker onApply={applyRange} />
+        {rangeLabel && (
+          <div className="row" style={{ marginTop: 8 }}>
+            <span className="pill warn">historical: {rangeLabel}</span>
+            <button className="secondary" onClick={backToLive}>
+              Back to live tail
+            </button>
+          </div>
+        )}
+      </div>
+
       <p className="tiny muted" style={{ marginTop: 8 }}>
         Tailed from Soroban RPC&apos;s <code>getEvents</code> with a cursor, so no event is delivered
         twice and none is skipped between polls. Soroban has no push stream — the floor on latency is
@@ -61,6 +89,8 @@ export function TelemetryFeed() {
       </div>
 
       {feed.error && <ErrorBlock title="The event feed could not poll" detail={feed.error} />}
+
+      <TelemetryAlerts />
 
       {events.length === 0 ? (
         <p className="tiny muted">

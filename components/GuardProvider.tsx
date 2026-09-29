@@ -38,7 +38,27 @@ import {
   rememberInstance,
   type GuardInstance,
 } from "../lib/guard/instance.ts";
-import { connectWallet, currentAddress, freighterSigner, type ConnectedWallet } from "../lib/guard/wallet.ts";
+import { currentAddress, freighterSigner, type ConnectedWallet } from "../lib/guard/wallet.ts";
+import {
+  WalletNotInstalledError,
+  canReconnectSilently,
+  connectorSigner,
+  createWalletConnector,
+  detectInstalledProviders,
+  loadPreferredProvider,
+  readWalletScope,
+  savePreferredProvider,
+  type WalletConnector,
+  type WalletProviderId,
+} from "../lib/guard/walletConnector.ts";
+import {
+  detectNetworkMismatch,
+  loadFreighterNetworkApi,
+  requestFreighterNetworkSwitch,
+  type NetworkMismatch,
+  type NetworkSwitchOutcome,
+} from "../lib/guard/networkSwitch.ts";
+import { isObserverSession, readSourceFor } from "../lib/guard/observerMode.ts";
 import type { WalletSigner } from "../lib/guard/submit.ts";
 import {
   useIdleTimer,
@@ -56,19 +76,38 @@ import {
   isDemoMode,
   syntheticDemoEvent,
 } from "../lib/guard/demoFixtures.ts";
+import { resolvePreset, validateRange, type RangePreset, type TimeRange } from "../lib/guard/ledgerTime.ts";
 
 const SNAPSHOT_INTERVAL_MS = 15_000;
 const FEED_INTERVAL_MS = 5_000;
+
+/** Display labels for the historical-range presets, mirroring `ledgerTime.ts`. */
+const RANGE_PRESET_LABELS: Record<Exclude<RangePreset, "custom">, string> = {
+  "1h": "last 1 hour",
+  "24h": "last 24 hours",
+  "7d": "last 7 days",
+};
 
 interface GuardContextValue {
   server: rpc.Server;
   wallet: ConnectedWallet | null;
   walletError: string | null;
   connecting: boolean;
-  connect: () => Promise<void>;
+  /** Connect with an explicit provider, or with the one the operator last chose. */
+  connect: (provider?: WalletProviderId) => Promise<void>;
   disconnect: () => void;
   /** A signer for the connected wallet, or a thrown error explaining why not. */
   signer: () => WalletSigner;
+  /** The wallet this session connected through, once it has. */
+  providerId: WalletProviderId | null;
+  /** Wallets this browser can actually serve, probed without prompting. */
+  availableProviders: WalletProviderId[];
+  /** True while nobody is signing: reads work, writes are refused. */
+  observer: boolean;
+  /** The wallet/dashboard network disagreement, if there is one. */
+  networkMismatch: NetworkMismatch | null;
+  /** Ask the wallet to move to this dashboard's network; null when declined. */
+  switchNetwork: () => Promise<NetworkSwitchOutcome | null>;
   instances: GuardInstance[];
   guard: string;
   selectGuard: (guard: string) => void;
@@ -89,6 +128,15 @@ interface GuardContextValue {
   clearEvents: () => void;
   /** Surface refused-write diagnostics in the feed, labelled as diagnostics. */
   pushEvents: (events: GuardEvent[]) => void;
+  /**
+   * Query the feed's guard over a historical time range (#148). Replaces the
+   * live view with the window's events and labels it, so a historical result
+   * is never mistaken for the live tail. In demo mode the window is answered
+   * from the fixtures, since demo mode never touches RPC.
+   */
+  queryRange: (range: TimeRange, preset: RangePreset) => Promise<void>;
+  /** Human-readable label of the range currently displayed, or null when live. */
+  rangeLabel: string | null;
   /**
    * Tell the other open tabs that this one changed something. The provider adds
    * the active guard, so callers only name the change.
@@ -131,6 +179,16 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<ConnectedWallet | null>(null);
   const [walletError, setWalletError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  // The wallet scope is read once per tab: an injected `window.xbull` does not
+  // appear mid-session, and re-probing on every render would mean a popup.
+  const scope = useMemo(() => readWalletScope(), []);
+  const [providerId, setProviderId] = useState<WalletProviderId | null>(() => loadPreferredProvider());
+  const [availableProviders, setAvailableProviders] = useState<WalletProviderId[]>([]);
+  const [networkMismatch, setNetworkMismatch] = useState<NetworkMismatch | null>(null);
+  // The connector that produced the current session. Kept in a ref because a
+  // re-render must never rebuild it — a fresh connector has not been granted
+  // access, and rebuilding on render would prompt the operator again.
+  const connectorRef = useRef<WalletConnector | null>(null);
   const [instances, setInstances] = useState<GuardInstance[]>(() =>
     isDemoMode() ? [DEMO_INSTANCE] : [...KNOWN_INSTANCES],
   );
@@ -145,6 +203,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [events, setEvents] = useState<GuardEvent[]>([]);
+  const [rangeLabel, setRangeLabel] = useState<string | null>(null);
   const [feed, setFeed] = useState<GuardContextValue["feed"]>({
     watching: false,
     latestLedger: null,
@@ -196,9 +255,26 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     setFeed((current) => ({ ...current, watching: true, latestLedger: DEMO_BASE_LEDGER, error: null }));
   }, [demo]);
 
-  // Pick up an already-authorized wallet without prompting for access again.
+  // Which wallets this browser can serve, probed without prompting so the
+  // selection modal can show what is installable rather than what is guessed.
   useEffect(() => {
     if (demo) return;
+    let cancelled = false;
+    void detectInstalledProviders(scope).then((found) => {
+      if (!cancelled) setAvailableProviders(found);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [scope, demo]);
+
+  // Pick up an already-authorized wallet without prompting for access again.
+  // Only for wallets whose reconnect is silent: asking a web popup wallet to
+  // "just reconnect" would open a window on page load.
+  useEffect(() => {
+    if (demo) return;
+    const preferred = loadPreferredProvider();
+    if (!canReconnectSilently(preferred)) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -214,30 +290,80 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     };
   }, [demo]);
 
-  const connect = useCallback(async () => {
-    setConnecting(true);
-    setWalletError(null);
-    try {
-      const connected = await connectWallet();
-      if (connected.networkPassphrase !== NETWORK.passphrase) {
+  const connect = useCallback(
+    async (preferred?: WalletProviderId) => {
+      const id = preferred ?? providerId ?? "freighter";
+      setConnecting(true);
+      setWalletError(null);
+      setNetworkMismatch(null);
+      try {
+        const connector = createWalletConnector(id, scope);
+        const connection = await connector.connect();
+        const mismatch = detectNetworkMismatch(connection.network.passphrase, NETWORK.passphrase, {
+          targetNetwork: NETWORK.name,
+          walletNetwork: connection.network.name,
+        });
+        if (mismatch) {
+          // The session stays unconnected on purpose. A wallet on another
+          // network can be *read* with, but a signature it produces is for a
+          // different transaction id, so offering it would be offering a
+          // guaranteed failure.
+          connectorRef.current = null;
+          setWallet(null);
+          setNetworkMismatch(mismatch);
+          return;
+        }
+        connectorRef.current = connector;
+        setProviderId(id);
+        savePreferredProvider(id);
+        setWallet({
+          address: connection.address,
+          networkPassphrase: connection.network.passphrase,
+          network: connection.network.name,
+        });
+      } catch (error) {
+        connectorRef.current = null;
         setWallet(null);
         setWalletError(
-          `Your wallet is on "${connected.network}", but this dashboard is configured for ` +
-            `"${NETWORK.name}". A signature produced for a different network cannot authorize ` +
-            `a call on this one, so nothing was sent. Switch the wallet's network and reconnect.`,
+          error instanceof WalletNotInstalledError
+            ? `${error.message} Setup guide: ${error.guideUrl}`
+            : error instanceof Error
+              ? error.message
+              : String(error),
         );
-        return;
+      } finally {
+        setConnecting(false);
       }
-      setWallet(connected);
-    } catch (error) {
-      setWalletError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setConnecting(false);
+    },
+    [providerId, scope],
+  );
+
+  /**
+   * Ask the connected wallet to switch to this dashboard's network.
+   *
+   * Only Freighter exposes a switch request; for any other wallet the outcome
+   * is `unsupported`, and the panel falls back to telling the operator which
+   * setting to change rather than pretending the button did something.
+   */
+  const switchNetwork = useCallback(async (): Promise<NetworkSwitchOutcome | null> => {
+    const api = await loadFreighterNetworkApi(scope.freighterLoader);
+    const outcome = await requestFreighterNetworkSwitch({
+      api,
+      targetPassphrase: NETWORK.passphrase,
+      targetNetwork: NETWORK.name,
+    });
+    if (outcome.kind === "switched") {
+      setNetworkMismatch(null);
+      setWalletError(null);
+      await connect("freighter");
     }
-  }, []);
+    return outcome;
+  }, [scope, connect]);
 
   const disconnect = useCallback(() => {
+    connectorRef.current = null;
     setWallet(null);
+    setNetworkMismatch(null);
     tabSync.broadcast("WALLET_DISCONNECTED", { guard: guardRef.current });
   }, [tabSync]);
 
@@ -258,7 +384,17 @@ export function GuardProvider({ children }: { children: ReactNode }) {
           "NEXT_PUBLIC_DEMO_MODE and drop ?demo=true to sign with a real wallet.",
       );
     }
-    if (!wallet) throw new Error("Connect a wallet before signing anything.");
+    if (!wallet) {
+      throw new Error(
+        "This console is in observer mode: no admin wallet is connected, so nothing can be signed. " +
+          "Connect the admin wallet to perform this action.",
+      );
+    }
+    // The connector that opened the session signs with it. The Freighter
+    // fallback covers the silent reconnect on page load, where an address was
+    // read from an already-authorized extension without a connector being built.
+    const connector = connectorRef.current;
+    if (connector) return connectorSigner(connector, wallet.address, NETWORK.passphrase);
     return freighterSigner(wallet.address, NETWORK.passphrase);
   }, [wallet, demo]);
 
@@ -268,7 +404,12 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     try {
       // In demo mode the snapshot is a fixture, so no read (and no failure) is
       // possible; outside demo mode this is unchanged and always hits the chain.
-      const next = demo ? demoSnapshot() : await readGuardSnapshot(server, guard, wallet?.address);
+      // The source account falls back to a known testnet address while
+      // observing, because a read-only simulation needs a payer but is never
+      // charged and mutates nothing.
+      const next = demo
+        ? demoSnapshot()
+        : await readGuardSnapshot(server, guard, readSourceFor(wallet));
       setSnapshot(next);
       setSnapshotError(null);
     } catch (error) {
@@ -279,7 +420,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     } finally {
       setRefreshing(false);
     }
-  }, [guard, server, wallet?.address, demo]);
+  }, [guard, server, wallet, demo]);
 
   // The sync listener below is installed once, but `refresh` changes identity
   // with the guard and wallet, so it reaches it through a ref rather than
@@ -314,7 +455,9 @@ export function GuardProvider({ children }: { children: ReactNode }) {
           void refreshRef.current();
           return;
         case "WALLET_DISCONNECTED":
+          connectorRef.current = null;
           setWallet(null);
+          setNetworkMismatch(null);
           return;
       }
     });
@@ -331,6 +474,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
       setGuard(next);
       setSnapshot(null);
       setEvents([]);
+      setRangeLabel(null);
       seenRef.current = new Set();
       // Every other tab follows the operator's selection instead of continuing to
       // poll a guard they are no longer looking at.
@@ -378,8 +522,63 @@ export function GuardProvider({ children }: { children: ReactNode }) {
 
   const clearEvents = useCallback(() => {
     setEvents([]);
+    setRangeLabel(null);
     seenRef.current = new Set();
   }, []);
+
+  // ── Historical range queries (#148) ──────────────────────────────────
+  // The demo feed never touches RPC, so a demo-mode range query is answered
+  // from the fixtures filtered by the same timestamps — the demo's honesty
+  // note stays true and the picker still demonstrably works.
+  const queryRange = useCallback(
+    async (range: TimeRange, preset: RangePreset) => {
+      const invalid = validateRange(range);
+      if (invalid) {
+        setFeed((current) => ({ ...current, error: invalid }));
+        return;
+      }
+      const label =
+        preset === "custom"
+          ? `${new Date((range.fromUnixSecs ?? 0) * 1000).toLocaleString()} → ${
+              range.toUnixSecs === null ? "now" : new Date(range.toUnixSecs * 1000).toLocaleString()
+            }`
+          : RANGE_PRESET_LABELS[preset];
+      if (demo) {
+        const from = range.fromUnixSecs ?? 0;
+        const to = range.toUnixSecs ?? Number.MAX_SAFE_INTEGER;
+        const inRange = demoEvents()
+          .filter((event) => {
+            if (!event.ledgerClosedAt) return false;
+            const closedAt = Math.floor(new Date(event.ledgerClosedAt).getTime() / 1000);
+            return closedAt >= from && closedAt <= to;
+          });
+        setEvents(inRange);
+        seenRef.current = new Set(inRange.map(eventKey));
+        setRangeLabel(label);
+        return;
+      }
+      const feedRunner =
+        feedRef.current && feedRef.current.guard === guard
+          ? feedRef.current
+          : new GuardFeed(server, guard);
+      if (feedRef.current !== feedRunner) feedRef.current = feedRunner;
+      setFeed((current) => ({ ...current, error: null }));
+      try {
+        const page = await feedRunner.pollRange(range);
+        setEvents(page.events);
+        // seenRef is rebuilt so returning to the live tail does not re-suppress
+        // rows this historical view already displayed.
+        seenRef.current = new Set(page.events.map(eventKey));
+        setRangeLabel(label);
+      } catch (error) {
+        setFeed((current) => ({
+          ...current,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      }
+    },
+    [demo, guard, server],
+  );
 
   // ── Operator session auto-lock ───────────────────────────────────────────
   // The countdown only runs while a wallet is connected: there is nothing to
@@ -467,6 +666,11 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     connect,
     disconnect,
     signer,
+    providerId,
+    availableProviders,
+    observer: isObserverSession(wallet),
+    networkMismatch,
+    switchNetwork,
     instances,
     guard,
     selectGuard,
@@ -481,6 +685,8 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     stopWatching,
     clearEvents,
     pushEvents,
+    queryRange,
+    rangeLabel,
     notifyTabs,
     session: {
       state: idleState,
