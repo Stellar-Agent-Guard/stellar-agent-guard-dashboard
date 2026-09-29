@@ -111,6 +111,10 @@ jobs:
     steps:
       - name: Wait for the analysis run of this head SHA
         id: wait
+        # Waiting is best-effort: an API failure here should degrade to the
+        # fallback comment below, not fail the job — the analysis run's own
+        # check carries the real signal, this job only reports it.
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
@@ -137,7 +141,16 @@ jobs:
 
       - name: Download the report artifact
         id: artifact
-        if: steps.wait.outputs.run-id != ''
+        # Only a concluded analysis run can have produced a report. A budget
+        # failure still uploads its report (the upload step is `if: always()`),
+        # so `failure` is worth an attempt too — and `continue-on-error` keeps
+        # a missing artifact (a run cancelled between conclusion and upload,
+        # or a run that never executed because it is awaiting the workflow
+        # approval fork PRs require) from failing the whole comment job. When
+        # the download yields nothing, the comment step below posts the
+        # explanatory fallback instead.
+        if: steps.wait.outputs.conclusion == 'success' || steps.wait.outputs.conclusion == 'failure'
+        continue-on-error: true
         uses: actions/download-artifact@v8
         with:
           name: bundle-size-report
@@ -145,6 +158,9 @@ jobs:
           run-id: ${{ steps.wait.outputs.run-id }}
 
       - name: Post or update the PR comment
+        # Always comment, even after an unexpected failure above: a missing
+        # report is itself an outcome worth reporting on the PR.
+        if: always()
         uses: actions/github-script@v7
         with:
           script: |
@@ -154,13 +170,26 @@ jobs:
             if (fs.existsSync("bundle-report.md")) {
               body = fs.readFileSync("bundle-report.md", "utf8");
             } else {
+              // No report reached this job. Post why rather than crash: the
+              // job's purpose is to report the analysis outcome on the PR, and
+              // "the analysis never produced a report" is an outcome the
+              // operator can act on. (`inputs` is undefined in a normal job —
+              // the conclusion arrives through the step `env` below.)
+              const conclusion = (process.env.conclusion || "").trim();
+              const reason =
+                conclusion === "timeout"
+                  ? "the wait for the analysis run timed out"
+                  : conclusion === "action_required"
+                    ? "the analysis run is awaiting workflow approval — fork pull requests need a maintainer to approve their workflow runs (\"Approve and run workflows\" on the Actions tab)"
+                    : conclusion === ""
+                      ? "no completed analysis run was found for this commit"
+                      : `the analysis run concluded as \`${conclusion}\` without uploading a report`;
               body = [
                 marker,
                 "## Bundle size report",
                 "",
-                "The bundle-size analysis run did not produce a report" +
-                  `${inputs.conclusion === "timeout" ? " (timed out waiting for it)" : ""}.`,
-                "Check the `bundle-size` workflow logs on this pull request.",
+                `No bundle-size report was produced — ${reason}.`,
+                "Check the `bundle-size` workflow runs on this pull request.",
               ].join("\n");
             }
 
