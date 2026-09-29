@@ -1,29 +1,34 @@
 export interface TraceNode {
   contractId: string;
   functionName: string;
-  arguments: string[];
+  arguments: any[];
   error?: string;
   events: any[];
+  subCalls: TraceNode[];
 }
 
 export interface ParsedDiagnostic {
   tree: TraceNode[];
 }
 
-export function parseDiagnosticLogs(logs: string[]): ParsedDiagnostic {
-  if (!logs || logs.length === 0) return { tree: [] };
+export function parseDiagnosticLogs(events: any[]): ParsedDiagnostic {
+  if (!events || events.length === 0) return { tree: [] };
   
-  const tree: TraceNode[] = logs.map(log => {
+  const tree: TraceNode[] = events.map(event => {
     let error: string | undefined;
-    if (log.includes('Error(Contract, #100)')) {
+    if (typeof event === 'string' && event.includes('Error(Contract, #100)')) {
       error = 'SpendCapExceeded';
+    } else if (event?.error) {
+      error = event.error === 100 ? 'SpendCapExceeded' : 'UnknownError';
     }
+    
     return {
-      contractId: 'C_UNKNOWN',
-      functionName: 'unknown',
-      arguments: [],
+      contractId: event?.contractId || 'C_UNKNOWN',
+      functionName: event?.functionName || 'unknown',
+      arguments: event?.args || [],
       error,
-      events: []
+      events: event?.logs || [],
+      subCalls: []
     };
   });
 

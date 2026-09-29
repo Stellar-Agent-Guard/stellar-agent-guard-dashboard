@@ -11,4 +11,9 @@ describe('traceParser', () => {
     const res = parseDiagnosticLogs(['Error(Contract, #100)']);
     assert.strictEqual(res.tree[0]?.error, 'SpendCapExceeded');
   });
+
+  it('decodes object events', () => {
+    const res = parseDiagnosticLogs([{ contractId: 'C123', functionName: 'test', args: [], error: 100 }]);
+    assert.strictEqual(res.tree[0]?.error, 'SpendCapExceeded');
+  });
 });
