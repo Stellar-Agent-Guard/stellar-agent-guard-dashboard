@@ -31,6 +31,13 @@ import {
 import { addressToScVal, hexToBytes, sha256Hex } from "./scval.ts";
 import { announce } from "./useAnnounce.ts";
 import { recordTx } from "./txHistory.ts";
+import {
+  assertCorrectNetwork,
+  freighterNetworkDetailsApi,
+  networkMismatchToRefusal,
+  NetworkMismatchError,
+  type NetworkDetailsApi,
+} from "./networkGuard.ts";
 
 // ── Artifact identity ──────────────────────────────────────────────────────
 
@@ -114,10 +121,32 @@ export async function submitOperation(params: {
   /** Name recorded in the transaction history for this operation. */
   label?: string;
   passphrase?: string;
+  /**
+   * Injectable network-details API for the write guard (see networkGuard.ts).
+   * Omit in production; provide a stub in tests.
+   */
+  networkApi?: NetworkDetailsApi | null;
 }): Promise<InvokeResult> {
   const passphrase = params.passphrase ?? NETWORK.passphrase;
   const { server, signer } = params;
   const label = params.label ?? "host_function_operation";
+
+  // ── Network guard: block before signer.signTransaction() ───────────────
+  // deploy operations (upload_contract_wasm, create_custom_contract) also call
+  // signer.signTransaction(), so they get the same hard-block as contract calls.
+  try {
+    const api = params.networkApi !== undefined
+      ? params.networkApi
+      : await freighterNetworkDetailsApi();
+    if (api !== null) {
+      await assertCorrectNetwork(api, { passphrase, name: NETWORK.name });
+    }
+  } catch (error) {
+    if (error instanceof NetworkMismatchError) {
+      return networkMismatchToRefusal(error);
+    }
+    throw error;
+  }
 
   let account: Account;
   try {
@@ -302,6 +331,8 @@ export async function deployGuard(params: {
   salt: Uint8Array;
   onStep?: (step: DeployStep) => void;
   passphrase?: string;
+  /** Injectable network-details API for testing. See networkGuard.ts. */
+  networkApi?: NetworkDetailsApi | null;
 }): Promise<DeployOutcome> {
   const { server, signer, salt } = params;
   const steps: DeployStep[] = [];
@@ -337,6 +368,7 @@ export async function deployGuard(params: {
       operation: Operation.uploadContractWasm({ wasm }),
       label: "upload_contract_wasm",
       passphrase: params.passphrase,
+      networkApi: params.networkApi,
     });
     record(`upload_contract_wasm (${PHASE1_ARTIFACT.wasmBytes} bytes)`, upload);
     if (upload.kind !== "submitted") {
@@ -355,6 +387,7 @@ export async function deployGuard(params: {
     }),
     label: "create_custom_contract",
     passphrase: params.passphrase,
+    networkApi: params.networkApi,
   });
   record(
     `create_custom_contract (wasm ${PHASE1_ARTIFACT.wasmHash.slice(0, 12)}…) → ${predicted}`,
@@ -384,6 +417,8 @@ export async function initializeGuard(params: {
   guard: string;
   agentPubkeyHex: string;
   passphrase?: string;
+  /** Injectable network-details API for testing. See networkGuard.ts. */
+  networkApi?: NetworkDetailsApi | null;
 }): Promise<InvokeResult> {
   const pubkey = hexToBytes(params.agentPubkeyHex.trim());
   if (pubkey.length !== 32) {
@@ -401,6 +436,7 @@ export async function initializeGuard(params: {
     args: [addressToScVal(params.signer.address), xdr.ScVal.scvBytes(pubkey)],
     signer: params.signer,
     passphrase: params.passphrase,
+    networkApi: params.networkApi,
   });
 }
 
@@ -412,6 +448,8 @@ export async function installPolicy(params: {
   draft: PolicyDraft;
   passphrase?: string;
   exportOnly?: boolean;
+  /** Injectable network-details API for testing. See networkGuard.ts. */
+  networkApi?: NetworkDetailsApi | null;
 }): Promise<
   { kind: "invalid"; issues: string[] } | { kind: "invoked"; result: InvokeResult }
 > {
@@ -425,6 +463,7 @@ export async function installPolicy(params: {
     signer: params.signer,
     passphrase: params.passphrase,
     exportOnly: params.exportOnly,
+    networkApi: params.networkApi,
   });
   return { kind: "invoked", result };
 }
@@ -436,6 +475,8 @@ export function freezeGuard(params: {
   guard: string;
   passphrase?: string;
   exportOnly?: boolean;
+  /** Injectable network-details API for testing. See networkGuard.ts. */
+  networkApi?: NetworkDetailsApi | null;
 }): Promise<InvokeResult> {
   return invokeWithWallet({
     server: params.server,
@@ -445,6 +486,7 @@ export function freezeGuard(params: {
     signer: params.signer,
     passphrase: params.passphrase,
     exportOnly: params.exportOnly,
+    networkApi: params.networkApi,
   });
 }
 
@@ -463,6 +505,8 @@ export function unfreezeGuard(params: {
   guard: string;
   passphrase?: string;
   exportOnly?: boolean;
+  /** Injectable network-details API for testing. See networkGuard.ts. */
+  networkApi?: NetworkDetailsApi | null;
 }): Promise<InvokeResult> {
   return invokeWithWallet({
     server: params.server,
@@ -472,6 +516,7 @@ export function unfreezeGuard(params: {
     signer: params.signer,
     passphrase: params.passphrase,
     exportOnly: params.exportOnly,
+    networkApi: params.networkApi,
   });
 }
 
@@ -482,6 +527,8 @@ export function revokePolicy(params: {
   guard: string;
   passphrase?: string;
   exportOnly?: boolean;
+  /** Injectable network-details API for testing. See networkGuard.ts. */
+  networkApi?: NetworkDetailsApi | null;
 }): Promise<InvokeResult> {
   return invokeWithWallet({
     server: params.server,
@@ -491,6 +538,7 @@ export function revokePolicy(params: {
     signer: params.signer,
     passphrase: params.passphrase,
     exportOnly: params.exportOnly,
+    networkApi: params.networkApi,
   });
 }
 
@@ -501,6 +549,8 @@ export async function rotateAgentKey(params: {
   guard: string;
   newAgentPubkeyHex: string;
   passphrase?: string;
+  /** Injectable network-details API for testing. See networkGuard.ts. */
+  networkApi?: NetworkDetailsApi | null;
 }): Promise<InvokeResult> {
   const pubkey = hexToBytes(params.newAgentPubkeyHex.trim());
   if (pubkey.length !== 32) {
@@ -518,6 +568,7 @@ export async function rotateAgentKey(params: {
     args: [xdr.ScVal.scvBytes(pubkey)],
     signer: params.signer,
     passphrase: params.passphrase,
+    networkApi: params.networkApi,
   });
 }
 
