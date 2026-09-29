@@ -1,6 +1,14 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert';
 import { parseDiagnosticLogs } from '../../lib/guard/traceParser';
+
 describe('traceParser', () => {
-  it('parses logs', () => {
-    expect(parseDiagnosticLogs([]).tree.length).toBe(0);
+  it('parses empty logs', () => {
+    assert.strictEqual(parseDiagnosticLogs([]).tree.length, 0);
+  });
+
+  it('decodes SpendCapExceeded error', () => {
+    const res = parseDiagnosticLogs(['Error(Contract, #100)']);
+    assert.strictEqual(res.tree[0]?.error, 'SpendCapExceeded');
   });
 });
