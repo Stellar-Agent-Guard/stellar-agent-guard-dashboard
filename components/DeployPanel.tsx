@@ -47,6 +47,7 @@ import {
   type IntegrityReport,
 } from "../lib/guard/wasmInspector.ts";
 import { useGuard } from "./GuardProvider.tsx";
+import { writeControlState } from "../lib/guard/observerMode.ts";
 import { MigrationWizard } from "./MigrationWizard.tsx";
 import { ErrorBlock, OutcomeList, starLink } from "./bits.tsx";
 
