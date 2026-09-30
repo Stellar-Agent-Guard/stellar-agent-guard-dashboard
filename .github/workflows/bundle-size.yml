@@ -137,6 +137,11 @@ jobs:
 
       - name: Download the report artifact
         id: artifact
+        # A missing artifact is an expected outcome, not an error: the analysis
+        # run may still be awaiting approval (fork PRs), may have been skipped,
+        # or may have failed before uploading. Aborting here would skip the
+        # fallback comment below and fail the whole job, so degrade instead.
+        continue-on-error: true
         if: steps.wait.outputs.run-id != ''
         uses: actions/download-artifact@v8
         with:
@@ -159,7 +164,7 @@ jobs:
                 "## Bundle size report",
                 "",
                 "The bundle-size analysis run did not produce a report" +
-                  `${inputs.conclusion === "timeout" ? " (timed out waiting for it)" : ""}.`,
+                  `${process.env.conclusion === "timeout" ? " (timed out waiting for it)" : ""}.`,
                 "Check the `bundle-size` workflow logs on this pull request.",
               ].join("\n");
             }
