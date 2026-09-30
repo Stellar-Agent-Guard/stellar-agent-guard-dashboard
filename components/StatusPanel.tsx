@@ -6,6 +6,7 @@ import { ErrorBlock, Read, Stat, relativeTime, short } from "./bits.tsx";
 import { PHASE1_ARTIFACT, NETWORK } from "../lib/guard/network.ts";
 import { compilePrintReport } from "../lib/guard/printReport.ts";
 import { calculateVelocity } from "../lib/guard/velocity.ts";
+import { useStatusTransitionAnnouncer } from "../lib/guard/statusTransitions.ts";
 
 
 /**
@@ -16,9 +17,18 @@ import { calculateVelocity } from "../lib/guard/velocity.ts";
  * knowing about: an admin freeze is something the operator just did, while a
  * dead-man-switch freeze is the account having gone quiet. `unfreeze()` clears
  * both, which is why it sits next to the panic button.
+ *
+ * The panel is also where a *transition* is announced, because this is the
+ * first place on the page the new state is rendered — see
+ * `useStatusTransitionAnnouncer`. Announcing it here rather than at the write
+ * that caused it is the difference between hearing about a freeze and hearing
+ * about a freeze that another tab, a dead-man switch, or a recovery script put
+ * in place without the operator touching anything.
  */
 export function StatusPanel() {
   const { snapshot, snapshotError, refreshing, refresh, guard, wallet } = useGuard();
+
+  useStatusTransitionAnnouncer(snapshot);
 
   const printReport = snapshot ? compilePrintReport(snapshot, NETWORK.name, wallet?.address || "Disconnected") : null;
 
