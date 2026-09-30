@@ -9,6 +9,8 @@ import {
   draftFromConfig,
 } from "../lib/guard/policyForm.ts";
 import { installPolicy, revokePolicy } from "../lib/guard/guardOps.ts";
+import { computePolicyDiff, type PolicyDiff } from "../lib/guard/policyDiff.ts";
+import { PolicyDiffModal } from "./PolicyDiffModal.tsx";
 import type { InvokeResult } from "../lib/guard/submit.ts";
 import { refusedEventsFromDiagnostics } from "../lib/guard/telemetry.ts";
 import {
@@ -42,6 +44,7 @@ export function PolicyForm() {
     { kind: "invalid"; issues: string[] } | { kind: "invoked"; result: InvokeResult } | null
   >(null);
   const [error, setError] = useState<string | null>(null);
+  const [pendingDiff, setPendingDiff] = useState<PolicyDiff | null>(null);
   const [assetCapChanges, setAssetCapChanges] = useState<Record<string, AssetCapChange>>({});
   const csvInput = useRef<HTMLInputElement>(null);
   const jsonInput = useRef<HTMLInputElement>(null);
@@ -100,7 +103,24 @@ export function PolicyForm() {
     URL.revokeObjectURL(url);
   }
 
+  /**
+   * A signed `set_policy` is what the guard enforces from then on, so an install
+   * stops here to show the operator the diff first. Exporting XDR writes nothing
+   * and needs no confirmation.
+   */
   async function submit(exportOnly = false) {
+    if (!exportOnly) {
+      if (!validation.ok) return;
+      const installed =
+        snapshot?.policy.ok && snapshot.policy.value !== null ? snapshot.policy.value : null;
+      setPendingDiff(computePolicyDiff(installed, validation.config));
+      return;
+    }
+    await runInstall(true);
+  }
+
+  async function runInstall(exportOnly = false) {
+    setPendingDiff(null);
     setBusy(true);
     setError(null);
     setOutcome(null);
@@ -470,6 +490,14 @@ export function PolicyForm() {
         <ErrorBlock
           title="The policy was rejected before signing"
           detail={outcome.issues.join("; ")}
+        />
+      )}
+
+      {pendingDiff && (
+        <PolicyDiffModal
+          diff={pendingDiff}
+          onConfirm={() => void runInstall(false)}
+          onCancel={() => setPendingDiff(null)}
         />
       )}
     </div>
