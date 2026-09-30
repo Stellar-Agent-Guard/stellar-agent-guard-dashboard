@@ -11,6 +11,12 @@
 #                       run of the same head SHA, downloads its report artifact
 #                       and posts/updates the PR comment. It executes no code
 #                       from the pull request.
+#
+# A repo that requires approval to run workflows holds every `pull_request` run
+# from an unapproved fork PR in `action_required`, so the analysis may not have
+# run at all. The comment job therefore treats a missing artifact as a missing
+# *report*, not a failed *build* — the budget gate is the analyze job's exit
+# code, and a comment must never be the thing that blocks a merge.
 
 name: bundle-size
 
@@ -114,6 +120,15 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            // A run that reached a job can still have uploaded the report, because
+            // that step is `if: always()`. A run that never reached a job cannot
+            // have: `action_required` is how GitHub reports a run held for approval
+            // (a fork PR, or a first-time contributor, under a repo that requires
+            // approval). It is reported as status `completed` with zero jobs, so
+            // keying the download off `status` alone made this job fail on every
+            // unapproved pull request.
+            const RAN_JOBS = new Set(["success", "failure", "timed_out"]);
+
             const headSha = context.payload.pull_request.head.sha;
             const deadline = Date.now() + 25 * 60 * 1000;
             let run = null;
@@ -126,18 +141,21 @@ jobs:
                 event: "pull_request",
                 per_page: 10,
               });
-              run = data.workflow_runs.find((candidate) => candidate.status !== "in_progress" && candidate.status !== "queued")
-                ?? data.workflow_runs[0] ?? null;
-              if (run && run.status === "completed") break;
-              run = null;
+              run = data.workflow_runs.find((candidate) => candidate.status === "completed") ?? null;
+              if (run) break;
               await new Promise((resolve) => setTimeout(resolve, 15000));
             }
-            core.setOutput("run-id", run ? String(run.id) : "");
-            core.setOutput("conclusion", run ? (run.conclusion ?? "") : "timeout");
+            const conclusion = run ? (run.conclusion ?? "") : "timeout";
+            core.setOutput("conclusion", conclusion);
+            core.setOutput("run-id", run && RAN_JOBS.has(conclusion) ? String(run.id) : "");
 
       - name: Download the report artifact
         id: artifact
         if: steps.wait.outputs.run-id != ''
+        # The report is a comment, not a gate — the budget itself is enforced by
+        # the `analyze` job. A missing or expired artifact must degrade to the
+        # note below, never to a red check on the pull request.
+        continue-on-error: true
         uses: actions/download-artifact@v8
         with:
           name: bundle-size-report
@@ -150,17 +168,29 @@ jobs:
           script: |
             const fs = require("fs");
             const marker = "<!-- bundle-size-report -->";
+            // Step env vars arrive on process.env. The `inputs` context only
+            // exists for workflow_dispatch and reusable workflows, so reading
+            // `inputs.conclusion` here threw a ReferenceError and took down the
+            // very step meant to explain the missing report.
+            const conclusion = process.env.conclusion ?? "";
             let body = null;
             if (fs.existsSync("bundle-report.md")) {
               body = fs.readFileSync("bundle-report.md", "utf8");
             } else {
+              const cause = {
+                timeout: "within 25 minutes of this pull request being updated",
+                action_required: "because it is awaiting a maintainer's approval to run",
+                cancelled: "because it was cancelled",
+              }[conclusion] ?? `with conclusion \`${conclusion || "unknown"}\``;
               body = [
                 marker,
                 "## Bundle size report",
                 "",
-                "The bundle-size analysis run did not produce a report" +
-                  `${inputs.conclusion === "timeout" ? " (timed out waiting for it)" : ""}.`,
-                "Check the `bundle-size` workflow logs on this pull request.",
+                `The bundle-size analysis run did not produce a report ${cause}.`,
+                "",
+                "The 200 KB page budget is enforced by the analysis job itself, not by",
+                "this comment, so nothing is being waived here. Approve the pending",
+                "`bundle-size` run (or check its logs) to get the numbers.",
               ].join("\n");
             }
 
