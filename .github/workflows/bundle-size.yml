@@ -116,7 +116,15 @@ jobs:
           script: |
             const headSha = context.payload.pull_request.head.sha;
             const deadline = Date.now() + 25 * 60 * 1000;
+            // Only a run that actually executed can have produced the report
+            // artifact. A fork PR's `pull_request` run sits at conclusion
+            // "action_required" until a reviewer approves workflow runs from
+            // that fork — that is a wait state, not an outcome, so it must keep
+            // polling (and fall through to the blocked notice at the deadline)
+            // rather than being treated as a finished analysis with no report.
+            const EXECUTED = new Set(["success", "failure", "timed_out", "cancelled"]);
             let run = null;
+            let blocked = false;
             while (Date.now() < deadline) {
               const { data } = await github.rest.actions.listWorkflowRuns({
                 owner: context.repo.owner,
@@ -126,19 +134,25 @@ jobs:
                 event: "pull_request",
                 per_page: 10,
               });
-              run = data.workflow_runs.find((candidate) => candidate.status !== "in_progress" && candidate.status !== "queued")
-                ?? data.workflow_runs[0] ?? null;
-              if (run && run.status === "completed") break;
-              run = null;
+              run = data.workflow_runs.find((candidate) => EXECUTED.has(candidate.conclusion ?? "")) ?? null;
+              if (run) break;
+              blocked = data.workflow_runs.some(
+                (candidate) => candidate.status === "completed" && candidate.conclusion === "action_required",
+              );
               await new Promise((resolve) => setTimeout(resolve, 15000));
             }
             core.setOutput("run-id", run ? String(run.id) : "");
             core.setOutput("conclusion", run ? (run.conclusion ?? "") : "timeout");
+            core.setOutput("blocked", !run && blocked ? "true" : "false");
 
       - name: Download the report artifact
         id: artifact
+        # Skip entirely when no executed analysis run was found; a missing or
+        # expired artifact on an executed run degrades to the explanatory
+        # comment below instead of failing this job.
         if: steps.wait.outputs.run-id != ''
-        uses: actions/download-artifact@v8
+        continue-on-error: true
+        uses: actions/download-artifact@v4
         with:
           name: bundle-size-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -154,13 +168,23 @@ jobs:
             if (fs.existsSync("bundle-report.md")) {
               body = fs.readFileSync("bundle-report.md", "utf8");
             } else {
+              // Step env vars arrive on process.env; the `inputs` context only
+              // exists for workflow_dispatch and reusable workflows, so reading
+              // inputs.* here throws a ReferenceError and kills this script.
+              const reason =
+                process.env.blocked === "true"
+                  ? " (the analysis run is waiting for a maintainer to approve workflow runs from this fork)"
+                  : process.env.conclusion === "timeout"
+                    ? " (timed out waiting for it)"
+                    : "";
               body = [
                 marker,
                 "## Bundle size report",
                 "",
-                "The bundle-size analysis run did not produce a report" +
-                  `${inputs.conclusion === "timeout" ? " (timed out waiting for it)" : ""}.`,
-                "Check the `bundle-size` workflow logs on this pull request.",
+                "The bundle-size analysis run did not produce a report" + reason + ".",
+                "Check the `bundle-size` workflow logs on this pull request. The",
+                "200 KB page budget itself is enforced by the `analyze` job's exit",
+                "code, not by this comment.",
               ].join("\n");
             }
 
@@ -188,3 +212,4 @@ jobs:
             }
         env:
           conclusion: ${{ steps.wait.outputs.conclusion }}
+          blocked: ${{ steps.wait.outputs.blocked }}
