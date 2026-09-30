@@ -1,4 +1,4 @@
-import { getCachedHash, setCachedHash } from "./bytecodeCache.ts";
+import { getCachedByteLength, getCachedHash, setCachedHash } from "./bytecodeCache.ts";
 /**
  * Read-only access to a guard deployment, straight off Soroban RPC.
  *
@@ -143,6 +143,16 @@ export interface WasmIdentity {
 }
 
 /**
+ * The cache namespace for a server. `rpc.Server` exposes its endpoint as a
+ * `URL`, so it has to be stringified before it can be inspected.
+ */
+function networkCacheKey(server: rpc.Server): string {
+  const endpoint = (server as unknown as { serverURL?: URL | string }).serverURL;
+  const text = endpoint instanceof URL ? endpoint.toString() : String(endpoint ?? "");
+  return text.includes("testnet") ? "testnet" : "public";
+}
+
+/**
  * Verify that a deployed contract really runs the bytecode the ledger claims.
  *
  * `getContractWasmByContractId` returns the stored code; hashing it here is an
@@ -158,23 +168,30 @@ export async function verifyWasmIdentity(
     executable?: { wasmHash?: unknown };
   };
   const reportedWasmHash = hashToHex(instance.executable?.wasmHash);
-  
-  const networkKey = (server as any).serverURL?.includes('testnet') ? 'testnet' : 'public';
-  
-  let fetchedSha256 = getCachedHash(networkKey, contractId);
-  let length = 0;
-  if (!fetchedSha256) {
-    const wasm = await server.getContractWasmByContractId(contractId);
-    const bytes = toBytes(wasm);
-    fetchedSha256 = await sha256Hex(bytes);
-    length = bytes.length;
-    setCachedHash(networkKey, contractId, fetchedSha256);
+
+  // Contract code is immutable, so an unchanged instance lets us skip the
+  // (large) WASM download and the SHA-256 over it.
+  const networkKey = networkCacheKey(server);
+  const cachedHash = getCachedHash(networkKey, contractId);
+
+  if (cachedHash) {
+    return {
+      reportedWasmHash,
+      fetchedSha256: cachedHash,
+      bytes: getCachedByteLength(networkKey, contractId) ?? 0,
+      match: reportedWasmHash === cachedHash,
+    };
   }
-  
+
+  const wasm = await server.getContractWasmByContractId(contractId);
+  const bytes = toBytes(wasm);
+  const fetchedSha256 = await sha256Hex(bytes);
+  setCachedHash(networkKey, contractId, fetchedSha256, bytes.length);
+
   return {
     reportedWasmHash,
     fetchedSha256,
-    bytes: length,
+    bytes: bytes.length,
     match: reportedWasmHash === fetchedSha256,
   };
 }
