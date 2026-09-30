@@ -17,6 +17,7 @@ import {
   readPolicy,
   readStatus,
   readWindow,
+  simulateContractCall,
   verifyWasmIdentity,
   type ReadResult,
   type WasmIdentity,
@@ -394,6 +395,32 @@ export async function initializeGuard(params: {
       diagnosticEvents: [],
     };
   }
+  let admin: xdr.ScVal;
+  try {
+    admin = addressToScVal(params.signer.address);
+  } catch (error) {
+    return {
+      kind: "refused",
+      stage: "discovery",
+      detail: `Malformed admin address: ${error instanceof Error ? error.message : String(error)}`,
+      diagnosticEvents: [],
+    };
+  }
+  const preflight = await simulateContractCall(
+    params.server,
+    params.guard,
+    "initialize",
+    [admin, xdr.ScVal.scvBytes(pubkey)],
+    params.signer.address,
+  );
+  if (!preflight.ok) {
+    return {
+      kind: "refused",
+      stage: "discovery",
+      detail: initializePreflightDetail(preflight.error),
+      diagnosticEvents: [],
+    };
+  }
   return invokeWithWallet({
     server: params.server,
     contract: params.guard,
@@ -402,6 +429,19 @@ export async function initializeGuard(params: {
     signer: params.signer,
     passphrase: params.passphrase,
   });
+}
+
+function initializePreflightDetail(detail: string): string {
+  if (/already_initialized|Error\(Contract,\s*#2\)/i.test(detail)) {
+    return `${detail}\nContract is already initialized. Do not re-run initialize.`;
+  }
+  if (/insufficient.*(?:balance|fund|rent)|(?:balance|fund|rent).*insufficient|tx_insufficient_balance/i.test(detail)) {
+    return `${detail}\nInsufficient balance to cover initialization rent and fees.`;
+  }
+  if (/invalid.*address|malformed.*address|strkey/i.test(detail)) {
+    return `Malformed admin address: ${detail}`;
+  }
+  return detail;
 }
 
 /** Install a policy, validating the draft in the form first. */

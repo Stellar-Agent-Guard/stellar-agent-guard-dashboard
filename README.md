@@ -128,7 +128,7 @@ npm run inspect      # read-only dump of an instance's state
 
 ### Key Components & Actions
 
-- **`DeployPanel`**: Fetches bytecode, verifies SHA-256 hash (`f47919...`), predicts custom account address, prompts the wallet signature, and initializes admin + agent keys.
+- **`DeployPanel`**: Fetches bytecode, verifies SHA-256 hash (`f47919...`), predicts custom account address, and initializes admin + agent keys with pre-flight simulation before signing.
 - **`PolicyForm`**: Real-time form validation, encoding via SDK `policyToScVal`, wallet signing, and transaction broadcast.
 - **`PanicPanel`**: Emergency freeze workflow:
   - Prompts explicit operator confirmation modal.

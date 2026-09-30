@@ -70,6 +70,35 @@ export async function readContract<T = unknown>(
   }
 }
 
+/** Simulate a contract call without requesting authorization signatures. */
+export async function simulateContractCall(
+  server: rpc.Server,
+  contractId: string,
+  fn: string,
+  args: Xdr.ScVal[],
+  source: string,
+): Promise<ReadResult<void>> {
+  try {
+    const tx = new TransactionBuilder(new Account(source, "0"), {
+      fee: "100",
+      networkPassphrase: NETWORK.passphrase,
+    })
+      .addOperation(Operation.invokeContractFunction({ contract: contractId, function: fn, args }))
+      .setTimeout(30)
+      .build();
+    const simulation = await server.simulateTransaction(tx);
+    if (rpc.Api.isSimulationError(simulation)) {
+      return {
+        ok: false,
+        error: stringifyError((simulation as rpc.Api.SimulateTransactionErrorResponse).error),
+      };
+    }
+    return { ok: true, value: undefined };
+  } catch (error) {
+    return { ok: false, error: stringifyError(error) };
+  }
+}
+
 export function readStatus(server: rpc.Server, guard: string, source?: string): Promise<ReadResult<GuardStatus>> {
   return readContract<GuardStatus>(server, guard, "status", [], source);
 }

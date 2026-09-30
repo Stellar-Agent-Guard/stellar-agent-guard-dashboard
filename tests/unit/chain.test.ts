@@ -18,6 +18,7 @@ import {
   readWindow,
   verifyWasmIdentity,
 } from "../../lib/guard/chain.ts";
+import { initializeGuard } from "../../lib/guard/guardOps.ts";
 import { GuardFeed, refusedEventsFromDiagnostics } from "../../lib/guard/telemetry.ts";
 import { MockSorobanRpc, type Invocation } from "../mocks/mockRpcServer.ts";
 import {
@@ -31,6 +32,7 @@ import {
   guardEvent,
   guardStatusScVal,
   initializedFlag,
+  contractTrap,
   persistentDataEntry,
   simSuccess,
   toHex,
@@ -118,6 +120,93 @@ describe("readContract / readStatus / readPolicy", () => {
     assert.equal(seen.args.length, 1);
     assert.equal(seen.args[0]!.toXDR("base64"), arg.toXDR("base64"));
     assert.match(seen.source, /^G[A-Z2-7]{55}$/);
+  });
+});
+
+describe("initialize pre-flight", () => {
+  // RPC errors below are synthetic fixtures; contractTrap(2) uses the HostError
+  // shape documented by the shared fixture helper, and balance/address errors
+  // model the corresponding simulation and local encoding failures.
+  test("a simulated already-initialized failure is shown before the wallet is called", async () => {
+    mock.onSimulate({ contractId: MOCK_GUARD, fn: "initialize" }, contractTrap(2));
+    const walletCalls: string[] = [];
+
+    const result = await initializeGuard({
+      server,
+      signer: {
+        address: ADMIN,
+        signAuthEntry: async () => {
+          walletCalls.push("signAuthEntry");
+          return "";
+        },
+        signTransaction: async () => {
+          walletCalls.push("signTransaction");
+          return "";
+        },
+      },
+      guard: MOCK_GUARD,
+      agentPubkeyHex: "11".repeat(32),
+    });
+
+    assert.deepEqual(mock.requests.map((request) => request.method), ["simulateTransaction"]);
+    assert.deepEqual(walletCalls, []);
+    assert.equal(result.kind, "refused");
+    assert.match(result.kind === "refused" ? result.detail : "", /Contract is already initialized\. Do not re-run initialize\./);
+  });
+
+  test("an insufficient balance simulation is shown before the wallet is called", async () => {
+    mock.onSimulate(
+      { contractId: MOCK_GUARD, fn: "initialize" },
+      { kind: "error", error: "tx_insufficient_balance: insufficient balance for rent" },
+    );
+    let walletCallCount = 0;
+
+    const result = await initializeGuard({
+      server,
+      signer: {
+        address: ADMIN,
+        signAuthEntry: async () => {
+          walletCallCount++;
+          return "";
+        },
+        signTransaction: async () => {
+          walletCallCount++;
+          return "";
+        },
+      },
+      guard: MOCK_GUARD,
+      agentPubkeyHex: "22".repeat(32),
+    });
+
+    assert.equal(mock.callCount("simulateTransaction"), 1);
+    assert.equal(walletCallCount, 0);
+    assert.equal(result.kind, "refused");
+    assert.match(result.kind === "refused" ? result.detail : "", /Insufficient balance to cover initialization rent and fees/);
+  });
+
+  test("a malformed admin address is refused before RPC or wallet calls", async () => {
+    let walletCallCount = 0;
+    const result = await initializeGuard({
+      server,
+      signer: {
+        address: "not-an-address",
+        signAuthEntry: async () => {
+          walletCallCount++;
+          return "";
+        },
+        signTransaction: async () => {
+          walletCallCount++;
+          return "";
+        },
+      },
+      guard: MOCK_GUARD,
+      agentPubkeyHex: "33".repeat(32),
+    });
+
+    assert.equal(mock.callCount("simulateTransaction"), 0);
+    assert.equal(walletCallCount, 0);
+    assert.equal(result.kind, "refused");
+    assert.match(result.kind === "refused" ? result.detail : "", /^Malformed admin address:/);
   });
 });
 
