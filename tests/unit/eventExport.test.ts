@@ -17,11 +17,14 @@ const GUARD = "CAPADGEK".padEnd(56, "A");
 
 function ledgerEvent(overrides: Partial<GuardEvent> = {}): GuardEvent {
   return {
+    id: `ledger:${"aa11bb22cc33".padEnd(64, "0")}:event_auth_checked`,
     kind: "auth_checked",
     topic: "event_auth_checked",
     source: "ledger",
+    stream: "committed",
     contractId: GUARD,
     ledger: 4820001,
+    observedAt: null,
     ledgerClosedAt: "2026-09-24T10:00:00Z",
     transactionHash: "aa11bb22cc33".padEnd(64, "0"),
     decision: { result: "allowed", reason: null, source: "ledger" },
@@ -110,14 +113,15 @@ test("CSV is BOM-prefixed (UTF-8 bytes EF BB BF) so Excel opens it as UTF-8", ()
 });
 
 test("CSV quotes cells per RFC 4180 (commas, quotes, newlines) and doubles quotes", () => {
-  const chatty = ledgerEvent({
-    decision: { result: "blocked", reason: "paused, \"test\"", source: "diagnostic" },
-  });
+  // The reason column is a closed union of contract symbols (sdk 0.1.1), so
+  // the hostile string lives in `topic`, the one free-text column, to pin the
+  // same RFC 4180 quoting rule.
+  const chatty = ledgerEvent({ topic: 'paused, "test"' });
   const csv = eventsToCsv([chatty], GUARD);
-  const reasonCell = csv.slice(1).split("\n")[1]!.split(",").slice(6, 8).join(",");
+  const topicCell = csv.slice(1).split("\n")[1]!.split(",").slice(2, 4).join(",");
   assert.ok(
-    reasonCell.includes('"paused, ""test"""'),
-    `the reason cell is quoted with doubled inner quotes, got: ${reasonCell}`,
+    topicCell.includes('"paused, ""test"""'),
+    `the topic cell is quoted with doubled inner quotes, got: ${topicCell}`,
   );
 });
 
