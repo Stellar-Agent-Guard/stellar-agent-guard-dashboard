@@ -140,7 +140,16 @@ export function WalletBar() {
           {networkMismatch && (
             <div className="notice warn" role="alert" data-testid="network-mismatch">
               <strong>{describeMismatch(networkMismatch)}</strong>
+              {/* Issue #18: this warning is backed by hard enforcement — every write
+                  chokepoint (invokeWithWallet and submitOperation) calls
+                  assertCorrectNetwork() before any signTransaction() can be reached.
+                  The warning and the block are one and the same guard; this copy
+                  names what the enforcement does rather than just what the operator sees. */}
               <span className="tiny">{mismatchExplanation(networkMismatch)}</span>
+              <span className="tiny" style={{ display: "block", marginTop: 4, fontWeight: 600 }} data-testid="network-mismatch-enforcement-note">
+                All write actions (deploy, initialize, set&nbsp;policy, freeze, unfreeze, rotate) are
+                hard-blocked until the wallet is switched. No signing prompt will appear on mismatch.
+              </span>
               <div className="row" style={{ marginTop: 8 }}>
                 <button onClick={() => void switchNetwork().then(setSwitchOutcome)}>
                   {switchButtonLabel(networkMismatch)}

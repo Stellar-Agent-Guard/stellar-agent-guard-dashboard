@@ -221,7 +221,7 @@ Full proof artifact recorded in [`tests/fixtures/phase3-proof.json`](./tests/fix
 
 ## Honest limitations
 
-- **Freighter wallet dependency**: Operator write actions require an active Freighter browser extension connected to Stellar Testnet; no programmatic secret keys are held or supported.
+- **Freighter wallet dependency**: Operator write actions require an active Freighter browser extension connected to Stellar Testnet; no programmatic secret keys are held or supported. Write actions are hard-blocked when the wallet is on any other network — the guard checks the wallet's active network passphrase against the dashboard's configured target before any signing prompt is shown; a mismatch produces a clear modal naming both networks rather than a confusing RPC failure mid-flow. This is complementary to the SDK's server-passphrase check, which guards the transaction layer; this guards the wallet side.
 - **Client-side static deployment**: Designed as a pure client-side application (compatible with Vercel or any static host); does not maintain a persistent server database.
 - **Enforcement boundary for arbitrary calls**: Full amount/recipient limits apply natively to SAC token transfers. Arbitrary Soroban contract calls are gated by protocol/function allowlists, active execution window, pause, and dead-man switches; fine-grained amount controls for non-SAC calls are tracked as v2.
 

@@ -30,6 +30,13 @@ import { stringifyError } from "./chain.ts";
 import { announce } from "./useAnnounce.ts";
 import { recordTx } from "./txHistory.ts";
 import { hardwareGuide } from "./hardwareGuide.ts";
+import {
+  assertCorrectNetwork,
+  freighterNetworkDetailsApi,
+  networkMismatchToRefusal,
+  NetworkMismatchError,
+  type NetworkDetailsApi,
+} from "./networkGuard.ts";
 
 /** Inclusion fee floor, in stroops, for a single-operation transaction. */
 import { calculateFeeHeadroom, FeePreset } from "./feeEstimator.ts";
@@ -70,7 +77,7 @@ export type InvokeResult =
        * is no transaction hash — that is the whole point of enforcing pre-flight.
        */
       kind: "refused";
-      stage: "discovery" | "enforcement" | "submission";
+      stage: "discovery" | "enforcement" | "submission" | "network_guard";
       detail: string;
       diagnosticEvents: unknown[];
     }
@@ -98,6 +105,19 @@ export interface InvokeRequest {
   signer: WalletSigner;
   passphrase?: string;
   exportOnly?: boolean;
+  /**
+   * Injectable network-details API for the write guard.
+   *
+   * Production code passes `null` (or omits this field) — the guard loads the
+   * live Freighter bundle automatically. Tests pass a stub that simulates a
+   * mismatch or a healthy network without needing a browser extension.
+   *
+   * When `null` (or omitted) the guard calls `freighterNetworkDetailsApi()`
+   * which dynamically imports `@stellar/freighter-api`. That import is
+   * side-effect-free in Node's test runner because the guard is invoked via
+   * the injected API surface, never directly.
+   */
+  networkApi?: NetworkDetailsApi | null;
   /**
    * A smart account whose own storage must be merged into the footprint. Only
    * needed when the call is authorized *by* the guard (its `__check_auth` reads
@@ -404,6 +424,29 @@ async function pollForInclusion(
 async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   const passphrase = request.passphrase ?? NETWORK.passphrase;
   const { server, signer } = request;
+
+  // ── Network guard: hard-block before any signer.signTransaction() ──────
+  // This is the enforcement twin of the WalletBar display check. The display
+  // warns; this blocks. Neither bypasses the other: the display can show a
+  // mismatch before the operator clicks a write action, and this catches any
+  // case where it was missed (network changed between connect and action,
+  // another tab, direct API call). See lib/guard/networkGuard.ts.
+  //
+  // `networkApi` is injectable so tests can stub the network without a browser.
+  // Production code omits the field; the guard loads the Freighter bundle live.
+  try {
+    const api = request.networkApi !== undefined
+      ? request.networkApi
+      : await freighterNetworkDetailsApi();
+    if (api !== null) {
+      await assertCorrectNetwork(api, { passphrase, name: NETWORK.name });
+    }
+  } catch (error) {
+    if (error instanceof NetworkMismatchError) {
+      return networkMismatchToRefusal(error);
+    }
+    throw error;
+  }
 
   let account: Account;
   try {
