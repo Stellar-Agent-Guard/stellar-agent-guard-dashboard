@@ -63,7 +63,7 @@ Enforcement happens **inside the account itself**, via Soroban's native Custom A
 - **No-code guardrail configurator (`/configure`)**: Interactive form for defining spending policies without writing code: per-transaction cap, rolling-window cap and length, asset allowlists, recipient allowlists, protocol allowlists, active execution windows, pause state, and dead-man switch grace periods. Validates inputs locally before prompting Freighter, encodes via SDK `policyToScVal`, and executes `set_policy`.
 - **Artifact-verified guard deployment**: Deploys fresh guard accounts from verified on-chain WASM bytecode with cryptographic address prediction.
 - **Emergency panic button (`PanicPanel`)**: Two-step confirmation modal with wallet-signed `freeze()` execution, followed by a mandatory on-chain re-read of `status()` confirming `admin_frozen = true` before updating UI state. Provides matching wallet-signed `unfreeze()` reversal.
-- **Live event telemetry feed (`TelemetryFeed`)**: Cursor-based polling of `event_auth_checked` topics from Soroban RPC, decoding contract outcomes and reason codes using the SDK's verified vocabulary, with CSV/JSON export under the stable schema documented in [docs/export-schema.md](./docs/export-schema.md).
+- **Live event telemetry feed (`TelemetryFeed`)**: Cursor-based polling of `event_auth_checked` topics from Soroban RPC, decoding contract outcomes and reason codes using the SDK's verified vocabulary.
 - **Installable PWA shell**: A `manifest.json`, responsive vector icons and a static-shell-only service worker let the console be installed and opened instantly on a phone or after a local network drop. Every `/soroban/rpc` and Horizon request is hard-bypassed — the worker never reads or writes a cache for chain state, so an offline shell can never present a cached balance or freeze flag as if it were live.
 - **Cross-tab lockstep**: A `BroadcastChannel` coordinator (with a `localStorage` fallback) propagates guard switches, confirmed freezes and policy installs across every open tab. Receiving tabs re-read the chain rather than trusting the broadcast, and never overwrite a form edit in progress.
 - **Multi-wallet connectors**: One `WalletConnector` interface over Freighter, Albedo and xBull, with a detection modal that names what the browser found and links to install what it did not. The operator's choice persists so a returning session is not asked again.
@@ -73,7 +73,6 @@ Enforcement happens **inside the account itself**, via Soroban's native Custom A
 - **Operator accelerators**: A `Cmd`/`Ctrl`+`K` command palette, dark/light/high-contrast themes, an address book, a drag-to-reorder dashboard grid, and an unsigned-XDR export/import path for multisig or air-gapped signing.
 - **Fleet overview (`/fleet`)**: One table of every registered guard instance with its live on-chain state, so an operator running more than one agent does not have to open them one at a time.
 - **Printable compliance report**: A `@media print` stylesheet and a "Print compliance report" action render a clean, paginated summary of the contract id, pinned bytecode hash, active policy and freeze state for auditors.
-- **Per-read recovery**: The discrete per-read error reporting above comes with matching per-read retry — a failed read renders an error block with a retry button that re-invokes only that read (never a full-page refetch), in-flight retries are debounced so a double-click cannot stack two fetches, and repeated failures stay retryable. The telemetry feed exports its visible events as CSV or JSON under a stable, append-only column schema (see [docs/export-schema.md](./docs/export-schema.md)): reason codes carry both the raw symbol and the SDK's human explanation, timestamps export as strings to keep ISO precision intact, and the CSV is BOM-prefixed for Excel.
 
 ## Quick Start
 
@@ -110,7 +109,7 @@ Demo mode is strictly opt-in. When neither the environment flag nor the query pa
 
 ### Copy and confirmation micro-UX
 
-Operator-facing identifiers (guard addresses, transaction hashes, deploy result IDs) render with one-click copy buttons (`components/CopyButton.tsx`) that write the **full** value, swap to `Copied ✓` for two seconds, announce the outcome through the shared announcer, and — when the async Clipboard API is unavailable (insecure-context dev over plain http, or denied permission) — show an inline "select manually" hint instead of failing silently. Destructive actions go through the shared `ConfirmDialog` (`components/ConfirmDialog.tsx`), whose `consequence` prop is required: a confirmation that cannot state what it is about to destroy does not compile.
+Operator-facing identifiers (guard addresses, transaction hashes, deploy result IDs) render with one-click copy buttons (`components/CopyButton.tsx`) that write the **full** value, swap to `Copied ✓` for two seconds, announce the outcome through the shared announcer, and — when the async Clipboard API is unavailable (insecure-context dev over plain http, or denied permission) — show an inline "select manually" hint instead of failing silently.
 
 ### Verification and Development
 

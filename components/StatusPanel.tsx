@@ -2,15 +2,7 @@
 
 import { deadManRemaining, describePolicy, isDeadManFrozen } from "stellar-agent-guard-sdk";
 import { useGuard } from "./GuardProvider.tsx";
-import {
-  ErrorBlock,
-  Read,
-  ReadSkeleton,
-  ReadWithRetry,
-  Stat,
-  relativeTime,
-  short,
-} from "./bits.tsx";
+import { ErrorBlock, Read, Stat, relativeTime, short } from "./bits.tsx";
 import { CopyButton } from "./CopyButton.tsx";
 import { PHASE1_ARTIFACT, NETWORK } from "../lib/guard/network.ts";
 import { compilePrintReport } from "../lib/guard/printReport.ts";
@@ -26,8 +18,7 @@ import { calculateVelocity } from "../lib/guard/velocity.ts";
  * both, which is why it sits next to the panic button.
  */
 export function StatusPanel() {
-  const { snapshot, snapshotError, refreshing, refresh, guard, wallet, retryRead, retryingField } =
-    useGuard();
+  const { snapshot, snapshotError, refreshing, refresh, guard, wallet } = useGuard();
 
   const printReport = snapshot
     ? compilePrintReport(snapshot, NETWORK.name, wallet?.address || "Disconnected")
@@ -79,11 +70,9 @@ export function StatusPanel() {
                   : undefined
               }
               value={
-                <ReadWithRetry
+                <Read
                   result={snapshot.status}
                   label="status()"
-                  onRetry={() => void retryRead("status")}
-                  retrying={retryingField === "status"}
                   render={(status) => (status.admin_frozen ? "FROZEN" : "clear")}
                 />
               }
@@ -154,12 +143,9 @@ export function StatusPanel() {
           </div>
 
           <h3>Rolling window</h3>
-          {retryingField === "window" && <ReadSkeleton label="window" />}
-          <ReadWithRetry
+          <Read
             result={snapshot.window}
             label="Window"
-            onRetry={() => void retryRead("window")}
-            retrying={retryingField === "window"}
             render={(window) => {
               const policy = snapshot.policy.ok ? snapshot.policy.value : null;
               if (!window || !policy) {
@@ -262,12 +248,9 @@ export function StatusPanel() {
           />
 
           <h3>Policy in force</h3>
-          {retryingField === "policy" && <ReadSkeleton label="policy" />}
-          <ReadWithRetry
+          <Read
             result={snapshot.policy}
             label="policy()"
-            onRetry={() => void retryRead("policy")}
-            retrying={retryingField === "policy"}
             render={(policy) =>
               policy === null ? (
                 <p className="tiny muted">No policy installed — the account is in default-deny.</p>
@@ -323,12 +306,9 @@ export function StatusPanel() {
           />
 
           <h3>Artifact identity</h3>
-          {retryingField === "identity" && <ReadSkeleton label="identity" />}
-          <ReadWithRetry
+          <Read
             result={snapshot.identity}
             label="wasm identity"
-            onRetry={() => void retryRead("identity")}
-            retrying={retryingField === "identity"}
             render={(identity) => (
               <>
                 <div className="grid">
