@@ -126,7 +126,7 @@ export function useModalFocus({
   /** Restore focus to the previously-active element on close (default true). */
   restoreFocus?: boolean;
   /** Explicit element to restore focus to, instead of the saved prior element. */
-  triggerRef?: React.RefObject<HTMLElement | null>;
+  triggerRef?: React.RefObject<HTMLElement | null> | undefined;
 }): void {
   useEffect(() => {
     if (!open) return;
