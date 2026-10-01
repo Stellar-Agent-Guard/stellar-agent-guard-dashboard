@@ -14,6 +14,7 @@ import {
 import { loadInstances } from "../lib/guard/instance.ts";
 import { freezeGuard } from "../lib/guard/guardOps.ts";
 import { NETWORK } from "../lib/guard/network.ts";
+import { formatRemaining } from "../lib/guard/time.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { starLink } from "./bits.tsx";
 import { useRouter } from "next/navigation";
@@ -191,7 +192,9 @@ export function FleetTable() {
                   <td>{renderStatus(row.derivedStatus)}</td>
                   <td className="mono tiny">{formatStroopsWithUnit(row.spend24h)}</td>
                   <td className="mono tiny">
-                    {row.dmsCountdownSecs !== null ? `${row.dmsCountdownSecs}s` : "—"}
+                    {row.dmsCountdownSecs !== null
+                      ? formatRemaining(row.dmsCountdownSecs).text
+                      : "—"}
                   </td>
                   <td>
                     <div className="row" style={{ gap: "8px" }}>
