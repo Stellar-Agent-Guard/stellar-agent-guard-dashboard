@@ -131,7 +131,13 @@ export function useModalFocus({
   onClose: () => void;
   /** Restore focus to the previously-active element on close (default true). */
   restoreFocus?: boolean;
-  /** Explicit element to restore focus to, instead of the saved prior element. */
+  /**
+   * Explicit element to restore focus to, instead of the saved prior element.
+   * `| undefined` is spelled out because the repo compiles with
+   * `exactOptionalPropertyTypes`: an optional prop may be omitted, but a
+   * caller passing `triggerRef === undefined` explicitly (as `ConfirmDialog`
+   * does when it has no trigger) needs `undefined` admitted in the type.
+   */
   triggerRef?: React.RefObject<HTMLElement | null> | undefined;
 }): void {
   useEffect(() => {
