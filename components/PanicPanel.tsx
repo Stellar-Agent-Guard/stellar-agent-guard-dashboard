@@ -542,7 +542,8 @@ export function PanicPanel() {
           {report.result.kind === "submitted" && (
             <p className="tiny" style={{ marginTop: 6 }}>
               transaction {starLink(report.result.hash)} · included in ledger{" "}
-              {report.result.ledger ?? "—"} <CopyButton value={report.result.hash} label="freeze transaction hash" />
+              {report.result.ledger ?? "—"}{" "}
+              <CopyButton value={report.result.hash} label="freeze transaction hash" />
             </p>
           )}
           {report.result.kind === "refused" && (

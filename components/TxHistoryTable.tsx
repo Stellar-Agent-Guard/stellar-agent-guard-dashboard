@@ -151,7 +151,9 @@ export function TxHistoryTable() {
                         <span className="pill danger">Failed</span>
                       )}
                     </td>
-                    <td><TxHashCell hash={entry.hash} /></td>
+                    <td>
+                      <TxHashCell hash={entry.hash} />
+                    </td>
                     <td className="mono tiny">
                       {entry.feeStroops !== null ? `${entry.feeStroops} stroops` : "—"}
                     </td>
