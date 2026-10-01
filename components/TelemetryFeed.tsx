@@ -4,7 +4,7 @@ import { memo, useState } from "react";
 import { describeGuardEvent, explainReason, GUARD_EVENT_TOPICS } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { STREAM_BUFFER_LIMIT } from "../lib/guard/telemetry.ts";
-import { eventKey, useGuard, useGuardEvents } from "./GuardProvider.tsx";
+import { useGuard, useGuardEvents } from "./GuardProvider.tsx";
 import { TelemetryAlerts } from "./TelemetryAlerts.tsx";
 import { TelemetryChart } from "./TelemetryChart.tsx";
 import { ErrorBlock, relativeTime, short, starLink, TxHashCell } from "./bits.tsx";
@@ -165,7 +165,9 @@ export function TelemetryFeed() {
         <div className="row">
           {feed.watching && <span className="pill ok">polling</span>}
           {stream.paused && <span className="pill warn">paused</span>}
-          {feed.latestLedger !== null && <span className="tiny muted">ledger {feed.latestLedger}</span>}
+          {feed.latestLedger !== null && (
+            <span className="tiny muted">ledger {feed.latestLedger}</span>
+          )}
           {feed.watching ? (
             <button className="secondary" onClick={stopWatching}>
               Stop
@@ -215,7 +217,8 @@ export function TelemetryFeed() {
         {stream.paused && (
           <div className="notice" style={{ marginTop: 12 }}>
             <strong>
-              Stream paused ({stream.pendingCount} new event{stream.pendingCount === 1 ? "" : "s"} pending)
+              Stream paused ({stream.pendingCount} new event{stream.pendingCount === 1 ? "" : "s"}{" "}
+              pending)
             </strong>
             <span className="tiny">
               The table is frozen so you can read it. Polling carries on in the background and new
@@ -228,7 +231,10 @@ export function TelemetryFeed() {
       </div>
 
       <div className="row" style={{ marginTop: 10, flexWrap: "wrap", gap: 8 }}>
-        <label className="tiny muted" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <label
+          className="tiny muted"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+        >
           Verdict
           <select
             aria-label="Verdict filter"
@@ -242,12 +248,17 @@ export function TelemetryFeed() {
             <option value="blocked">Blocked Only</option>
           </select>
         </label>
-        <label className="tiny muted" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <label
+          className="tiny muted"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+        >
           Topic
           <select
             aria-label="Topic filter"
             value={filter.topic}
-            onChange={(event) => setFilter((current) => ({ ...current, topic: event.target.value }))}
+            onChange={(event) =>
+              setFilter((current) => ({ ...current, topic: event.target.value }))
+            }
           >
             <option value="all">All topics</option>
             {Object.entries(TOPIC_LABELS).map(([topic, label]) => (
@@ -261,7 +272,9 @@ export function TelemetryFeed() {
           aria-label="Contract address search"
           placeholder="Contract address contains…"
           value={filter.contract}
-          onChange={(event) => setFilter((current) => ({ ...current, contract: event.target.value }))}
+          onChange={(event) =>
+            setFilter((current) => ({ ...current, contract: event.target.value }))
+          }
           style={{ maxWidth: 240 }}
         />
         <button
@@ -305,9 +318,9 @@ export function TelemetryFeed() {
       </div>
 
       <p className="tiny muted" style={{ marginTop: 8 }}>
-        Tailed from Soroban RPC&apos;s <code>getEvents</code> with a cursor, so no event is delivered
-        twice and none is skipped between polls. Soroban has no push stream — the floor on latency is
-        the ledger close interval (roughly 5s), not the 5s poll.
+        Tailed from Soroban RPC&apos;s <code>getEvents</code> with a cursor, so no event is
+        delivered twice and none is skipped between polls. Soroban has no push stream — the floor on
+        latency is the ledger close interval (roughly 5s), not the 5s poll.
         {feed.lastPolledAt && ` Last poll ${relativeTime(feed.lastPolledAt)}.`}
       </p>
 
@@ -336,8 +349,8 @@ export function TelemetryFeed() {
         </p>
       ) : rows.length === 0 ? (
         <p className="tiny muted">
-          No events match the current filter. The feed still holds {events.length} event(s);
-          widen the verdict, topic or contract filter to see them.
+          No events match the current filter. The feed still holds {events.length} event(s); widen
+          the verdict, topic or contract filter to see them.
         </p>
       ) : (
         <div className="scrolly">
@@ -353,7 +366,7 @@ export function TelemetryFeed() {
             </thead>
             <tbody>
               {rows.map((event) => (
-                <TelemetryRow key={eventKey(event)} event={event} />
+                <TelemetryRow key={event.id} event={event} />
               ))}
             </tbody>
           </table>
@@ -364,7 +377,8 @@ export function TelemetryFeed() {
         Feed holds the most recent {events.length} event(s) from{" "}
         <span className="mono">{short(guard, 8, 6)}</span>.
         {filterActive && <> Showing {rows.length} matching the current filter.</>} The audit log
-        keeps 64-bit values (ledgers, stroop amounts, timestamps) as strings so no precision is lost.
+        keeps 64-bit values (ledgers, stroop amounts, timestamps) as strings so no precision is
+        lost.
       </p>
     </div>
   );
@@ -380,8 +394,8 @@ export function TelemetryFeed() {
  * cap — the difference between holding frame rate and remounting the table on
  * every update.
  *
- * The key is `eventKey`, the provider's own identity for de-duplication, so
- * React reconciles against the same uniqueness the feed guarantees: a new
+ * The key is the SDK's `event.id`, the same identity the feed de-duplicates
+ * on, so React reconciles against the same uniqueness the feed guarantees: a new
  * event prepending shifts nothing, and no row is ever unmounted and rebuilt
  * merely because rows above it changed.
  */
@@ -407,7 +421,9 @@ const TelemetryRow = memo(function TelemetryRow({ event }: { event: GuardEvent }
         )}
       </td>
       <td>
-        <span className={`pill${event.source === "diagnostic" ? " warn" : ""}`}>{event.source}</span>
+        <span className={`pill${event.source === "diagnostic" ? " warn" : ""}`}>
+          {event.source}
+        </span>
       </td>
       <td className="mono tiny">{event.ledger ?? "—"}</td>
       <td>
