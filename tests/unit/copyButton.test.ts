@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { before, mock, test } from "node:test";
 import { installDom, loadReact, sleep, type Act } from "./domHarness.ts";
 import { CopyButton, COPIED_FEEDBACK_MS } from "../../components/CopyButton.tsx";
-import { announce, clearAnnouncements, pendingAnnouncements, shiftAnnouncement, subscribeAnnouncements } from "../../lib/guard/useAnnounce.ts";
+import {
+  announce,
+  clearAnnouncements,
+  pendingAnnouncements,
+  shiftAnnouncement,
+  subscribeAnnouncements,
+} from "../../lib/guard/useAnnounce.ts";
 import { copyToClipboard, type ClipboardWriter } from "../../lib/guard/clipboard.ts";
 
 installDom();
@@ -44,10 +50,14 @@ function capturingWriter(): { writer: ClipboardWriter; texts: string[] } {
  * stand-in the browser's own API occupies: the component code under test is
  * unchanged, and the mock captures (or rejects) like the real write would.
  */
-async function withClipboard(writer: ClipboardWriter | null, run: () => Promise<void>): Promise<void> {
+async function withClipboard(
+  writer: ClipboardWriter | null,
+  run: () => Promise<void>,
+): Promise<void> {
   const holder = globalThis as { navigator: Navigator };
-  const original = Object.getOwnPropertyDescriptor(Navigator.prototype, "clipboard")
-    ?? Object.getOwnPropertyDescriptor(holder.navigator, "clipboard");
+  const original =
+    Object.getOwnPropertyDescriptor(Navigator.prototype, "clipboard") ??
+    Object.getOwnPropertyDescriptor(holder.navigator, "clipboard");
   Object.defineProperty(holder.navigator, "clipboard", {
     value: writer,
     configurable: true,
@@ -106,7 +116,11 @@ test("arg-exactness: the FULL address reaches writeText — equality + 56-length
         GUARD_ADDRESS,
         `the clipboard must receive the full address, got ${JSON.stringify(texts[0])}`,
       );
-      assert.equal(texts[0]?.length, 56, "a guard address is 56 characters — a shorter copy is the bug");
+      assert.equal(
+        texts[0]?.length,
+        56,
+        "a guard address is 56 characters — a shorter copy is the bug",
+      );
       // Context-in-label: the accessible name says WHAT is copied, not just "Copy".
       assert.equal(mounted.button.getAttribute("aria-label"), "Copy guard address");
       // Success parity: the user-action result is announced through the shared channel.
@@ -297,7 +311,8 @@ test("the pure core: arg capture, rejection shape, and the missing-clipboard fai
   await withClipboard(null, async () => {
     const unavailable = await copyToClipboard("y");
     assert.equal(unavailable.ok, false);
-    if (!unavailable.ok) assert.match(unavailable.error, /not secure or has denied clipboard access/);
+    if (!unavailable.ok)
+      assert.match(unavailable.error, /not secure or has denied clipboard access/);
     // The channel helper stays importable and callable for component parity.
     assert.equal(typeof announce, "function");
   });

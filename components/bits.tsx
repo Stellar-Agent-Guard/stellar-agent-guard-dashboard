@@ -105,7 +105,12 @@ export function ReadWithRetry<T>({
             Retrying…
           </span>
         ) : (
-          <button type="button" className="secondary" aria-label={`Retry ${label} fetch`} onClick={onRetry}>
+          <button
+            type="button"
+            className="secondary"
+            aria-label={`Retry ${label} fetch`}
+            onClick={onRetry}
+          >
             Retry
           </button>
         )}

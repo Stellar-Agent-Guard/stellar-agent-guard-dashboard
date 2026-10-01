@@ -419,7 +419,9 @@ export function DeployPanel() {
         <div className="grid">
           <div className="stat">
             <div className="k">Predicted guard address</div>
-            <div className="v small mono" title={plan.predicted}>{plan.predicted}</div>
+            <div className="v small mono" title={plan.predicted}>
+              {plan.predicted}
+            </div>
             <div className="n">
               computed before signing, then confirmed by reading the instance back{" "}
               <CopyButton value={plan.predicted} label="predicted guard address" />

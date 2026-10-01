@@ -2,7 +2,15 @@
 
 import { deadManRemaining, describePolicy, isDeadManFrozen } from "stellar-agent-guard-sdk";
 import { useGuard } from "./GuardProvider.tsx";
-import { ErrorBlock, Read, ReadSkeleton, ReadWithRetry, Stat, relativeTime, short } from "./bits.tsx";
+import {
+  ErrorBlock,
+  Read,
+  ReadSkeleton,
+  ReadWithRetry,
+  Stat,
+  relativeTime,
+  short,
+} from "./bits.tsx";
 import { CopyButton } from "./CopyButton.tsx";
 import { PHASE1_ARTIFACT, NETWORK } from "../lib/guard/network.ts";
 import { compilePrintReport } from "../lib/guard/printReport.ts";
@@ -18,7 +26,8 @@ import { calculateVelocity } from "../lib/guard/velocity.ts";
  * both, which is why it sits next to the panic button.
  */
 export function StatusPanel() {
-  const { snapshot, snapshotError, refreshing, refresh, guard, wallet, retryRead, retryingField } = useGuard();
+  const { snapshot, snapshotError, refreshing, refresh, guard, wallet, retryRead, retryingField } =
+    useGuard();
 
   const printReport = snapshot
     ? compilePrintReport(snapshot, NETWORK.name, wallet?.address || "Disconnected")
