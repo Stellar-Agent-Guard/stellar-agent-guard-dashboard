@@ -210,7 +210,11 @@ const TEST_GUARD = {
 
 test("PanicPanel adopts the shared dialog: cancel → freeze count 0, confirm renders signing", async () => {
   const mounted = await mount(
-    react.createElement(GuardContext.Provider, { value: TEST_GUARD }, react.createElement(PanicPanel)),
+    react.createElement(
+      GuardContext.Provider,
+      { value: TEST_GUARD },
+      react.createElement(PanicPanel),
+    ),
   );
   try {
     const trigger = buttonByText(mounted.container, "Freeze this account");

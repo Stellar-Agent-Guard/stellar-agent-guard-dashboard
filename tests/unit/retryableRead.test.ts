@@ -123,7 +123,9 @@ test("lifecycle: error block → retry click → pending status → success rend
       "the pending state renders the skeleton row",
     );
     assert.equal(
-      mounted.container.querySelector('[data-testid="retryable-balance-"]')?.querySelector("button"),
+      mounted.container
+        .querySelector('[data-testid="retryable-balance-"]')
+        ?.querySelector("button"),
       null,
       "no second retry can start while one is in flight",
     );
@@ -179,7 +181,11 @@ test("non-dead-end: three consecutive failed retries each leave the retry availa
       });
     }
     assert.equal(retryCalls, 3, "every click re-invoked the read: call count == click count");
-    assert.equal(cell.result.ok, false, "the fixture never recovers — the test stays on the failure path");
+    assert.equal(
+      cell.result.ok,
+      false,
+      "the fixture never recovers — the test stays on the failure path",
+    );
   } finally {
     await mounted.unmount();
   }
@@ -235,7 +241,11 @@ test("in-flight discipline: a second click while retrying starts no further read
       await sleep(0);
       await sleep(0);
     });
-    assert.equal(fetchCalls, 1, "the double-click coalesces into a single re-read (debounce-count assert)");
+    assert.equal(
+      fetchCalls,
+      1,
+      "the double-click coalesces into a single re-read (debounce-count assert)",
+    );
     void gate;
   } finally {
     await mounted.unmount();
@@ -248,7 +258,7 @@ test("isolation: retrying one read does not re-invoke its siblings (per-read gra
   let windowCalls = 0;
   let identityCalls = 0;
   const fail = { ok: false as const, error: "RPC unreachable" };
-  const succeed = <T,>(value: T) => ({ ok: true as const, value });
+  const succeed = <T>(value: T) => ({ ok: true as const, value });
 
   let requested: SnapshotField | null = null;
   function Probe(): ReactElement {

@@ -48,12 +48,7 @@ import {
   rememberInstance,
   type GuardInstance,
 } from "../lib/guard/instance.ts";
-import {
-  readStatus,
-  readPolicy,
-  readWindow,
-  verifyWasmIdentity,
-} from "../lib/guard/chain.ts";
+import { readStatus, readPolicy, readWindow, verifyWasmIdentity } from "../lib/guard/chain.ts";
 import { currentAddress, freighterSigner, type ConnectedWallet } from "../lib/guard/wallet.ts";
 import {
   WalletNotInstalledError,
@@ -505,7 +500,11 @@ export function GuardProvider({ children }: { children: ReactNode }) {
           ok: false,
           error: error instanceof Error ? error.message : String(error),
         });
-        let next: GuardSnapshot["status"] | GuardSnapshot["policy"] | GuardSnapshot["window"] | GuardSnapshot["identity"];
+        let next:
+          | GuardSnapshot["status"]
+          | GuardSnapshot["policy"]
+          | GuardSnapshot["window"]
+          | GuardSnapshot["identity"];
         switch (field) {
           case "status":
             next = await readStatus(server, guard, wallet?.address).catch(failure);

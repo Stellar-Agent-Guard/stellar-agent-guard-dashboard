@@ -130,7 +130,10 @@ test("JSON export serialises with insertion-ordered keys (schemaVersion → colu
   const at = (needle: string) => json.indexOf(needle);
   const order = ["schemaVersion", "columns", "guard", "rows"];
   for (let i = 1; i < order.length; i += 1) {
-    assert.ok(at(`"${order[i - 1]}"`) < at(`"${order[i]}"`), `${order[i - 1]} precedes ${order[i]}`);
+    assert.ok(
+      at(`"${order[i - 1]}"`) < at(`"${order[i]}"`),
+      `${order[i - 1]} precedes ${order[i]}`,
+    );
   }
   const parsed = JSON.parse(json) as {
     schemaVersion: number;
@@ -146,12 +149,7 @@ test("JSON export serialises with insertion-ordered keys (schemaVersion → colu
 });
 
 test("filename is deterministic: guard prefix, UTC day, row count, extension", () => {
-  const name = exportFilename(
-    GUARD,
-    "csv",
-    42,
-    Date.parse("2026-09-24T10:00:00Z"),
-  );
+  const name = exportFilename(GUARD, "csv", 42, Date.parse("2026-09-24T10:00:00Z"));
   assert.match(name, /^guard-events-CAPADGEK-2026-09-24-42\.csv$/);
   assert.match(exportFilename(GUARD, "json", 42, Date.parse("2026-09-24T10:00:00Z")), /\.json$/);
 });

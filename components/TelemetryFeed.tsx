@@ -111,7 +111,9 @@ export function TelemetryFeed() {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    announce(`Exported ${rows.length} event${rows.length === 1 ? "" : "s"} as ${format.toUpperCase()}`);
+    announce(
+      `Exported ${rows.length} event${rows.length === 1 ? "" : "s"} as ${format.toUpperCase()}`,
+    );
   }
 
   // The three controls and the exports all act on the same projection, so a
