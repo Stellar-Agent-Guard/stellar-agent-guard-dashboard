@@ -73,7 +73,6 @@ Enforcement happens **inside the account itself**, via Soroban's native Custom A
 - **Operator accelerators**: A `Cmd`/`Ctrl`+`K` command palette, dark/light/high-contrast themes, an address book, a drag-to-reorder dashboard grid, and an unsigned-XDR export/import path for multisig or air-gapped signing.
 - **Fleet overview (`/fleet`)**: One table of every registered guard instance with its live on-chain state, so an operator running more than one agent does not have to open them one at a time.
 - **Printable compliance report**: A `@media print` stylesheet and a "Print compliance report" action render a clean, paginated summary of the contract id, pinned bytecode hash, active policy and freeze state for auditors.
-- **Per-read recovery**: The discrete per-read error reporting above comes with matching per-read retry — a failed read renders an error block with a retry button that re-invokes only that read (never a full-page refetch), in-flight retries are debounced so a double-click cannot stack two fetches, and repeated failures stay retryable.
 
 ## Quick Start
 
@@ -110,7 +109,7 @@ Demo mode is strictly opt-in. When neither the environment flag nor the query pa
 
 ### Copy and confirmation micro-UX
 
-Operator-facing identifiers (guard addresses, transaction hashes, deploy result IDs) render with one-click copy buttons (`components/CopyButton.tsx`) that write the **full** value, swap to `Copied ✓` for two seconds, announce the outcome through the shared announcer, and — when the async Clipboard API is unavailable (insecure-context dev over plain http, or denied permission) — show an inline "select manually" hint instead of failing silently. Destructive actions go through the shared `ConfirmDialog` (`components/ConfirmDialog.tsx`), whose `consequence` prop is required: a confirmation that cannot state what it is about to destroy does not compile.
+Operator-facing identifiers (guard addresses, transaction hashes, deploy result IDs) render with one-click copy buttons (`components/CopyButton.tsx`) that write the **full** value, swap to `Copied ✓` for two seconds, announce the outcome through the shared announcer, and — when the async Clipboard API is unavailable (insecure-context dev over plain http, or denied permission) — show an inline "select manually" hint instead of failing silently.
 
 ### Verification and Development
 
