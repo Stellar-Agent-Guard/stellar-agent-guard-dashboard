@@ -103,7 +103,7 @@ Demo mode is strictly opt-in. When neither the environment flag nor the query pa
 
 ### Copy and confirmation micro-UX
 
-Operator-facing identifiers (guard addresses, transaction hashes, deploy result IDs) render with one-click copy buttons (`components/CopyButton.tsx`) that write the **full** value, swap to `Copied ✓` for two seconds, announce the outcome through the shared announcer, and — when the async Clipboard API is unavailable (insecure-context dev over plain http, or denied permission) — show an inline "select manually" hint instead of failing silently. Destructive actions go through the shared `ConfirmDialog` (`components/ConfirmDialog.tsx`), whose `consequence` prop is required: a confirmation that cannot state what it is about to destroy does not compile. Destructive actions go through the shared `ConfirmDialog` (`components/ConfirmDialog.tsx`), whose `consequence` prop is required: a confirmation that cannot state what it is about to destroy does not compile.
+Operator-facing identifiers (guard addresses, transaction hashes, deploy result IDs) render with one-click copy buttons (`components/CopyButton.tsx`) that write the **full** value, swap to `Copied ✓` for two seconds, announce the outcome through the shared announcer, and — when the async Clipboard API is unavailable (insecure-context dev over plain http, or denied permission) — show an inline "select manually" hint instead of failing silently. Destructive actions go through the shared `ConfirmDialog` (`components/ConfirmDialog.tsx`), whose `consequence` prop is required: a confirmation that cannot state what it is about to destroy does not compile.
 
 ### Verification and Development
 
