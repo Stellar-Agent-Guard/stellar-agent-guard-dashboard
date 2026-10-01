@@ -9,11 +9,11 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "dev": "next dev",
+    "dev": "node api.js && next dev",
     "dev:demo": "NEXT_PUBLIC_DEMO_MODE=true next dev",
-    "build": "next build",
+    "build": "node api.js && next build",
     "export": "EXPORT_BUILD=true next build",
-    "start": "next start",
+    "start": "node api.js && next start",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
