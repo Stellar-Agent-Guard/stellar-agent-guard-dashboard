@@ -29,18 +29,12 @@ import type { rpc } from "@stellar/stellar-sdk";
 import { createServer } from "../lib/guard/chain.ts";
 import { readGuardSnapshot, type GuardSnapshot } from "../lib/guard/guardOps.ts";
 import { NETWORK } from "../lib/guard/network.ts";
+import { GuardFeed } from "../lib/guard/telemetry.ts";
 import {
-  GuardFeed,
-  clearStreamRows,
-  emptyStreamBuffer,
-  eventKey,
-  historicalBuffer,
-  ingestEvents,
-  pauseStream as pauseBuffer,
-  resumeStream as resumeBuffer,
-  type StreamBuffer,
-  type TelemetryEvent,
-} from "../lib/guard/telemetry.ts";
+  FEED_GUARD_CAP,
+  MultiGuardFeed,
+  type FeedSource,
+} from "../lib/guard/feedSubscriptions.ts";
 import { createTabSync, type TabSyncEventType } from "../lib/guard/tabSync.ts";
 import {
   KNOWN_INSTANCES,
@@ -131,6 +125,12 @@ interface GuardContextValue {
     latestLedger: number | null;
     error: string | null;
     lastPolledAt: string | null;
+    /** The guards currently tailed (up to `cap`), with their registry labels. */
+    guards: FeedSource[];
+    /** How many registry entries the cap is excluding right now. */
+    capped: number;
+    /** Labels of the excluded guards, so the cap can be named, not just counted. */
+    cappedLabels: string[];
   };
   startWatching: () => void;
   stopWatching: () => void;
@@ -175,19 +175,19 @@ interface GuardContextValue {
 
 const GuardContext = createContext<GuardContextValue | null>(null);
 
-/**
- * The event feed lives in its own context, deliberately separate from the
- * console's general state.
- *
- * The feed is the only high-churn state here: batches arrive on every poll (or,
- * under the #114 benchmark's seam, on every animation frame), and if `events`
- * rode along on `GuardContext` then every value's identity would change with
- * every batch — re-rendering the wallet bar, status panel, panic panel and the
- * rest for a change only the telemetry table can see. Splitting the feed out
- * keeps the cost of a batch proportional to the one panel that renders it.
- * Only `TelemetryFeed` subscribes.
- */
-const GuardEventsContext = createContext<TelemetryEvent[] | null>(null);
+/** A stable identity for an event, so re-polling the same page cannot duplicate rows. */
+function eventKey(event: GuardEvent): string {
+  return [
+    event.contractId ?? "-",
+    event.source,
+    event.transactionHash ?? "-",
+    event.ledger ?? "-",
+    event.topic,
+    event.decision?.result ?? "-",
+    event.decision?.reason ?? "-",
+    typeof event.data === "object" && event.data !== null ? JSON.stringify(event.data) : String(event.data),
+  ].join("|");
+}
 
 export function GuardProvider({ children }: { children: ReactNode }) {
   const server = useMemo(() => createServer(NETWORK.rpcUrl), []);
@@ -232,11 +232,17 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     latestLedger: null,
     error: null,
     lastPolledAt: null,
+    guards: [],
+    capped: 0,
+    cappedLabels: [],
   });
 
-  // The feed instance is kept in a ref so a re-render never resets its cursor —
-  // losing the cursor would silently re-scan and re-deliver events.
-  const feedRef = useRef<GuardFeed | null>(null);
+  // The multi-guard supervisor is kept in a ref so a re-render never resets the
+  // per-guard cursors — losing a cursor would silently re-scan and re-deliver
+  // events. It fans out one listener per tailed guard, reconciled on registry
+  // changes (see `lib/guard/feedSubscriptions.ts`).
+  const multiFeedRef = useRef<MultiGuardFeed | null>(null);
+  const seenRef = useRef<Set<string>>(new Set());
   // The active guard, readable from the (long-lived) sync listener without
   // re-subscribing on every guard change.
   const guardRef = useRef(guard);
@@ -542,14 +548,34 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   }, [pushEvents]);
 
   const startWatching = useCallback(() => {
-    if (!demo && (!feedRef.current || feedRef.current.guard !== guard)) {
-      feedRef.current = new GuardFeed(server, guard);
+    if (!demo) {
+      if (!multiFeedRef.current) {
+        multiFeedRef.current = new MultiGuardFeed({
+          cap: FEED_GUARD_CAP,
+          createFeed: (target) => new GuardFeed(server, target),
+        });
+      }
+      multiFeedRef.current.sync(
+        instances.map((instance) => ({ guard: instance.guard, label: instance.label })),
+      );
+      const dropped = multiFeedRef.current.dropped();
+      setFeed((current) => ({
+        ...current,
+        watching: true,
+        error: null,
+        guards: multiFeedRef.current?.guards() ?? [],
+        capped: dropped.length,
+        cappedLabels: dropped.map((source) => source.label),
+      }));
+      return;
     }
     setFeed((current) => ({ ...current, watching: true, error: null }));
-  }, [guard, server, demo]);
+  }, [instances, server, demo]);
 
   const stopWatching = useCallback(() => {
-    setFeed((current) => ({ ...current, watching: false }));
+    multiFeedRef.current?.stopAll();
+    multiFeedRef.current = null;
+    setFeed((current) => ({ ...current, watching: false, guards: [], capped: 0, cappedLabels: [] }));
   }, []);
 
   const clearEvents = useCallback(() => {
@@ -665,17 +691,22 @@ export function GuardProvider({ children }: { children: ReactNode }) {
 
     let cancelled = false;
     const tick = async () => {
-      const feedRunner = feedRef.current;
+      const feedRunner = multiFeedRef.current;
       if (!feedRunner) return;
       try {
-        const page = await feedRunner.pollOnce();
+        const page = await feedRunner.pollAll();
         if (cancelled) return;
         pushEvents(page.events);
+        // One guard failing to poll is reported on its own line and does not
+        // blank the guards that answered. `error` carries the first failure so
+        // the panel still has a headline to show.
+        const failed = page.watch.find((entry) => !entry.ok);
         setFeed((current) => ({
           ...current,
           latestLedger: page.latestLedger,
           lastPolledAt: new Date().toISOString(),
-          error: null,
+          guards: feedRunner.guards(),
+          error: failed ? `${failed.label}: ${failed.error}` : null,
         }));
       } catch (error) {
         if (cancelled) return;

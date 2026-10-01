@@ -11,6 +11,7 @@ export default function ConfigurePage() {
     <GuardProvider>
       <HardwareWalletGuide />
       <WalletBar />
+      <SetupWizard />
       <DeployPanel />
       <PolicyForm />
       <ScopeNotice compact />

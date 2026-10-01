@@ -243,7 +243,7 @@ export function PolicyForm() {
   }
 
   return (
-    <div className="panel">
+    <div className="panel" id="policy">
       <h2>Guardrail policy</h2>
       <ScopeNotice />
       <CsvImportExport />
