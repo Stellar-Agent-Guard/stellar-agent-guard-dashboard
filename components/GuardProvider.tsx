@@ -33,7 +33,6 @@ import {
   GuardFeed,
   clearStreamRows,
   emptyStreamBuffer,
-  eventKey,
   historicalBuffer,
   ingestEvents,
   pauseStream as pauseBuffer,
@@ -69,6 +68,7 @@ import {
   type NetworkSwitchOutcome,
 } from "../lib/guard/networkSwitch.ts";
 import { isObserverSession, readSourceFor } from "../lib/guard/observerMode.ts";
+import { memoryWiper } from "../lib/guard/memoryWiper.ts";
 import type { WalletSigner } from "../lib/guard/submit.ts";
 import {
   useIdleTimer,
@@ -86,7 +86,12 @@ import {
   isDemoMode,
   syntheticDemoEvent,
 } from "../lib/guard/demoFixtures.ts";
-import { resolvePreset, validateRange, type RangePreset, type TimeRange } from "../lib/guard/ledgerTime.ts";
+import {
+  resolvePreset,
+  validateRange,
+  type RangePreset,
+  type TimeRange,
+} from "../lib/guard/ledgerTime.ts";
 
 const SNAPSHOT_INTERVAL_MS = 15_000;
 const FEED_INTERVAL_MS = 5_000;
@@ -205,7 +210,9 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   // The wallet scope is read once per tab: an injected `window.xbull` does not
   // appear mid-session, and re-probing on every render would mean a popup.
   const scope = useMemo(() => readWalletScope(), []);
-  const [providerId, setProviderId] = useState<WalletProviderId | null>(() => loadPreferredProvider());
+  const [providerId, setProviderId] = useState<WalletProviderId | null>(() =>
+    loadPreferredProvider(),
+  );
   const [availableProviders, setAvailableProviders] = useState<WalletProviderId[]>([]);
   const [networkMismatch, setNetworkMismatch] = useState<NetworkMismatch | null>(null);
   // The connector that produced the current session. Kept in a ref because a
@@ -266,6 +273,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   // `?demo=true` is only visible in the browser, so demo mode is settled here.
   useEffect(() => {
     if (demoFlagFromQuery(window.location.search)) setDemo(true);
+    return memoryWiper.registerBrowserEvents();
   }, []);
 
   // In demo mode the feed is seeded and watching immediately: a visitor should
@@ -274,7 +282,12 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!demo) return;
     setBuffer(ingestEvents(emptyStreamBuffer(), demoEvents(), { dedupe: false }));
-    setFeed((current) => ({ ...current, watching: true, latestLedger: DEMO_BASE_LEDGER, error: null }));
+    setFeed((current) => ({
+      ...current,
+      watching: true,
+      latestLedger: DEMO_BASE_LEDGER,
+      error: null,
+    }));
   }, [demo]);
 
   // Which wallets this browser can serve, probed without prompting so the
@@ -387,6 +400,7 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     setWallet(null);
     setNetworkMismatch(null);
     tabSync.broadcast("WALLET_DISCONNECTED", { guard: guardRef.current });
+    memoryWiper.wipe();
   }, [tabSync]);
 
   const notifyTabs = useCallback(
@@ -487,7 +501,11 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh();
     const timer = setInterval(() => void refresh(), SNAPSHOT_INTERVAL_MS);
-    return () => clearInterval(timer);
+    const unregister = memoryWiper.add(() => clearInterval(timer));
+    return () => {
+      clearInterval(timer);
+      unregister();
+    };
   }, [refresh]);
 
   const selectGuard = useCallback(
@@ -582,12 +600,11 @@ export function GuardProvider({ children }: { children: ReactNode }) {
       if (demo) {
         const from = range.fromUnixSecs ?? 0;
         const to = range.toUnixSecs ?? Number.MAX_SAFE_INTEGER;
-        const inRange = demoEvents()
-          .filter((event) => {
-            if (!event.ledgerClosedAt) return false;
-            const closedAt = Math.floor(new Date(event.ledgerClosedAt).getTime() / 1000);
-            return closedAt >= from && closedAt <= to;
-          });
+        const inRange = demoEvents().filter((event) => {
+          if (!event.ledgerClosedAt) return false;
+          const closedAt = Math.floor(new Date(event.ledgerClosedAt).getTime() / 1000);
+          return closedAt >= from && closedAt <= to;
+        });
         setBuffer(historicalBuffer(inRange));
         setRangeLabel(label);
         return;
@@ -657,9 +674,11 @@ export function GuardProvider({ children }: { children: ReactNode }) {
         }));
       };
       const demoTimer = setInterval(emit, 4_000);
+      const unregister = memoryWiper.add(() => clearInterval(demoTimer));
       return () => {
         demoCancelled = true;
         clearInterval(demoTimer);
+        unregister();
       };
     }
 
@@ -688,9 +707,14 @@ export function GuardProvider({ children }: { children: ReactNode }) {
     };
     void tick();
     const timer = setInterval(() => void tick(), FEED_INTERVAL_MS);
+    const unregister = memoryWiper.add(() => {
+      cancelled = true;
+      clearInterval(timer);
+    });
     return () => {
       cancelled = true;
       clearInterval(timer);
+      unregister();
     };
   }, [feed.watching, pushEvents, demo]);
 
@@ -698,7 +722,10 @@ export function GuardProvider({ children }: { children: ReactNode }) {
   // these unchanged — does not change the context value's identity.
   const { paused, dropped } = buffer;
   const pendingCount = buffer.pending.length;
-  const stream = useMemo(() => ({ paused, pendingCount, dropped }), [paused, pendingCount, dropped]);
+  const stream = useMemo(
+    () => ({ paused, pendingCount, dropped }),
+    [paused, pendingCount, dropped],
+  );
 
   // Memoised so an `events` batch — the frequent update — cannot change this
   // object's identity and re-render every consumer that has nothing to do with
@@ -827,4 +854,4 @@ export function useGuardEvents(): TelemetryEvent[] {
   return value;
 }
 
-export { eventKey, GuardContext, GuardEventsContext };
+export { GuardContext, GuardEventsContext };
