@@ -14,6 +14,7 @@ import {
 import { CopyButton } from "./CopyButton.tsx";
 import { PHASE1_ARTIFACT, NETWORK } from "../lib/guard/network.ts";
 import { compilePrintReport } from "../lib/guard/printReport.ts";
+import { formatRemaining } from "../lib/guard/time.ts";
 import { calculateVelocity } from "../lib/guard/velocity.ts";
 
 /**
@@ -119,8 +120,13 @@ export function StatusPanel() {
                     const policy = snapshot.policy.ok ? snapshot.policy.value : null;
                     const remaining = deadManRemaining(status, policy);
                     if (remaining === null) return "switch disabled (grace 0)";
-                    if (remaining < 0n) return "grace elapsed; account refuses calls";
-                    return `${remaining}s of grace left`;
+                    // The formatter only reports the fact of expiry; the
+                    // "account refuses calls" consequence is this panel's
+                    // wording, not the formatter's (issue #16 scope boundary).
+                    const { text, expired } = formatRemaining(remaining);
+                    return expired
+                      ? "grace elapsed; account refuses calls"
+                      : `${text} of grace left`;
                   }}
                 />
               }
