@@ -76,7 +76,13 @@ export function ConfirmDialog({
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  useModalFocus({ open: true, dialogRef, onClose, restoreFocus: triggerRef === undefined, triggerRef });
+  useModalFocus({
+    open: true,
+    dialogRef,
+    onClose,
+    restoreFocus: triggerRef === undefined,
+    triggerRef,
+  });
 
   return (
     <div className="modal-backdrop">
@@ -141,7 +147,8 @@ export function useModalFocus({
       );
 
     // Remember where focus came from only when nothing else will provide it.
-    const prior = restoreFocus && !triggerRef ? document.activeElement as HTMLElement | null : null;
+    const prior =
+      restoreFocus && !triggerRef ? (document.activeElement as HTMLElement | null) : null;
 
     // Focus the dialog itself first, so a screen reader announces the title
     // before the operator tabs into its controls.

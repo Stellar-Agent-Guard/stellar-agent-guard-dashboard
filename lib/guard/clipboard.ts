@@ -53,7 +53,8 @@ export async function copyToClipboard(text: string, writer?: ClipboardWriter): P
   if (!target) {
     return {
       ok: false,
-      error: "clipboard is unavailable — this browser context is not secure or has denied clipboard access",
+      error:
+        "clipboard is unavailable — this browser context is not secure or has denied clipboard access",
     };
   }
   try {
