@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it, beforeEach, mock } from "node:test";
-import {
-  HISTORY_LIMIT,
-  HistoryStore,
-  historyShortcut,
-} from "../../lib/guard/useHistoryState.ts";
+import { HISTORY_LIMIT, HistoryStore, historyShortcut } from "../../lib/guard/useHistoryState.ts";
 
 const HISTORY_DEBOUNCE = 400;
 
