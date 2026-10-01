@@ -181,7 +181,10 @@ test.describe("telemetry feed: filtering and export", () => {
       expect(record["topic"]).toBe(GUARD_EVENT_TOPICS.authChecked);
       expect(record["decision"]).toBe("blocked");
       expect(record["reason"]).toBe(MIXED_FEED_BLOCK_REASON);
-      expect(record["guard"]).toBe(WATCHED_GUARD);
+      // The NDJSON button streams upstream's telemetryToNdjson, which keys the
+      // emitting contract as contract_id (the CSV above is our exporter's
+      // append-only schema, where the column is `guard`).
+      expect(record["contract_id"]).toBe(WATCHED_GUARD);
       expect(String(record["ledger"])).toMatch(/^\d+$/);
     }
     // The two formats describe the same events, line for line.
