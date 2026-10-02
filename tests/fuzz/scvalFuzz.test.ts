@@ -26,8 +26,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import fc from "fast-check";
-import { scValToNative, xdr } from "@stellar/stellar-sdk";
-import { decodeAuthDecision, decodeCheckResult, guardEventsFromDiagnostics } from "stellar-agent-guard-sdk";
+import { nativeToScVal, scValToNative, xdr } from "@stellar/stellar-sdk";
+import {
+  decodeAuthDecision,
+  decodeCheckResult,
+  guardEventsFromDiagnostics,
+} from "stellar-agent-guard-sdk";
 import { validateInitParameters } from "../../lib/guard/initValidator.ts";
 import {
   formatRawStroops,
@@ -35,7 +39,7 @@ import {
   formatStroopsWithUnit,
 } from "../../lib/guard/formatters.ts";
 import { EMPTY_DRAFT, buildPolicyConfig, type PolicyDraft } from "../../lib/guard/policyForm.ts";
-import { hexToBytes, i128ToScVal } from "../../lib/guard/scval.ts";
+import { hexToBytes } from "../../lib/guard/scval.ts";
 
 /** The issue requires at least 1,000 iterations per property. */
 const NUM_RUNS = 1_000;
@@ -192,18 +196,21 @@ test("stroop formatters never throw for a non-negative BigInt", () => {
 
 test("stroop formatters reject unusable input with a structured RangeError only", () => {
   fc.assert(
-    fc.property(fc.oneof(fc.string({ unit: "grapheme" }), fc.double(), fc.constant(-1n)), (value) => {
-      for (const format of [formatStroops, formatRawStroops, formatStroopsWithUnit]) {
-        try {
-          format(value as never);
-        } catch (error) {
-          assert.ok(
-            error instanceof RangeError,
-            `expected a structured RangeError, got ${String(error)}`,
-          );
+    fc.property(
+      fc.oneof(fc.string({ unit: "grapheme" }), fc.double(), fc.constant(-1n)),
+      (value) => {
+        for (const format of [formatStroops, formatRawStroops, formatStroopsWithUnit]) {
+          try {
+            format(value as never);
+          } catch (error) {
+            assert.ok(
+              error instanceof RangeError,
+              `expected a structured RangeError, got ${String(error)}`,
+            );
+          }
         }
-      }
-    }),
+      },
+    ),
     { numRuns: NUM_RUNS },
   );
 });
@@ -301,7 +308,9 @@ test("arbitrary bytes at the ScVal boundary decode or fail, never crash", () => 
 });
 
 test("mutated valid XDR is safely rejected or safely decoded", () => {
-  const base = new Uint8Array(i128ToScVal(42n).toXDR());
+  // `lib/guard/scval.ts` no longer wraps this: build the i128 ScVal the same
+  // way the removed helper did, straight from the SDK.
+  const base = new Uint8Array(nativeToScVal(42n, { type: "i128" }).toXDR());
   fc.assert(
     fc.property(
       fc.integer({ min: 0, max: base.length - 1 }),
