@@ -14,11 +14,7 @@ import {
 import { CopyButton } from "./CopyButton.tsx";
 import { PHASE1_ARTIFACT, NETWORK } from "../lib/guard/network.ts";
 import { compilePrintReport } from "../lib/guard/printReport.ts";
-import {
-  evaluateDmsAlert,
-  formatDmsDuration,
-  type DmsAlert,
-} from "../lib/guard/dmsAlert.ts";
+import { evaluateDmsAlert, formatDmsDuration, type DmsAlert } from "../lib/guard/dmsAlert.ts";
 
 /**
  * The proactive dead-man-switch deadline banner, shown above the on-chain
@@ -97,11 +93,17 @@ export function StatusPanel() {
           <h2 style={{ margin: 0 }}>On-chain state</h2>
 
           <div className="row">
-            {snapshot && <span className="tiny muted">read {relativeTime(snapshot.fetchedAt)}</span>}
+            {snapshot && (
+              <span className="tiny muted">read {relativeTime(snapshot.fetchedAt)}</span>
+            )}
             <button className="secondary no-print" onClick={() => window.print()}>
               Print Compliance Report
             </button>
-            <button className="secondary no-print" onClick={() => void refresh()} disabled={refreshing}>
+            <button
+              className="secondary no-print"
+              onClick={() => void refresh()}
+              disabled={refreshing}
+            >
               {refreshing ? "Reading…" : "Refresh"}
             </button>
           </div>
@@ -125,7 +127,13 @@ export function StatusPanel() {
             <div className="grid" style={{ marginTop: 12 }}>
               <Stat
                 label="Admin freeze"
-                tone={snapshot.status.ok ? (snapshot.status.value.admin_frozen ? "danger" : "ok") : undefined}
+                tone={
+                  snapshot.status.ok
+                    ? snapshot.status.value.admin_frozen
+                      ? "danger"
+                      : "ok"
+                    : undefined
+                }
                 value={
                   <Read
                     result={snapshot.status}
@@ -138,14 +146,22 @@ export function StatusPanel() {
               <Stat
                 label="Dead-man switch"
                 tone={
-                  snapshot.status.ok ? (snapshot.status.value.heartbeat_expired ? "danger" : "ok") : undefined
+                  snapshot.status.ok
+                    ? snapshot.status.value.heartbeat_expired
+                      ? "danger"
+                      : "ok"
+                    : undefined
                 }
                 value={
                   <Read
                     result={snapshot.status}
                     label="status()"
                     render={(status) =>
-                      isDeadManFrozen(status) ? "FIRED" : status.heartbeat_expired ? "expired" : "within grace"
+                      isDeadManFrozen(status)
+                        ? "FIRED"
+                        : status.heartbeat_expired
+                          ? "expired"
+                          : "within grace"
                     }
                   />
                 }
@@ -165,7 +181,13 @@ export function StatusPanel() {
               />
               <Stat
                 label="Policy installed"
-                value={<Read result={snapshot.status} label="status()" render={(s) => (s.has_policy ? "yes" : "no — default deny")} />}
+                value={
+                  <Read
+                    result={snapshot.status}
+                    label="status()"
+                    render={(s) => (s.has_policy ? "yes" : "no — default deny")}
+                  />
+                }
                 note="With no policy the account refuses every call"
               />
               <Stat
@@ -193,7 +215,9 @@ export function StatusPanel() {
                 const policy = snapshot.policy.ok ? snapshot.policy.value : null;
                 if (!window || !policy) {
                   return (
-                    <p className="tiny muted">No spend recorded yet in this policy&apos;s window.</p>
+                    <p className="tiny muted">
+                      No spend recorded yet in this policy&apos;s window.
+                    </p>
                   );
                 }
                 const cap = policy.window_cap;
@@ -202,7 +226,8 @@ export function StatusPanel() {
                 const now = snapshot.status.ok ? snapshot.status.value.now : null;
                 let velocityStats = null;
                 if (now !== null) {
-                  const remaining = cap > 0n ? (cap > window.total ? cap - window.total : 0n) : null;
+                  const remaining =
+                    cap > 0n ? (cap > window.total ? cap - window.total : 0n) : null;
                   const metrics = calculateVelocity(window.entries, now, remaining);
                   const exhaust = metrics.exhaustionMinutes;
 
@@ -295,20 +320,44 @@ export function StatusPanel() {
               label="policy()"
               render={(policy) =>
                 policy === null ? (
-                  <p className="tiny muted">No policy installed — the account is in default-deny.</p>
+                  <p className="tiny muted">
+                    No policy installed — the account is in default-deny.
+                  </p>
                 ) : (
                   <>
                     <p className="tiny mono">{describePolicy(policy)}</p>
                     <div className="grid">
-                      <Stat label="Per-transaction cap" value={policy.per_tx_cap === 0n ? "off" : policy.per_tx_cap.toString()} />
-                      <Stat label="Rolling cap" value={policy.window_cap === 0n ? "off" : `${policy.window_cap} / ${policy.window_secs}s`} />
-                      <Stat label="Assets" value={policy.assets.length} note="SAC tokens whose transfers are fully enforced" />
+                      <Stat
+                        label="Per-transaction cap"
+                        value={policy.per_tx_cap === 0n ? "off" : policy.per_tx_cap.toString()}
+                      />
+                      <Stat
+                        label="Rolling cap"
+                        value={
+                          policy.window_cap === 0n
+                            ? "off"
+                            : `${policy.window_cap} / ${policy.window_secs}s`
+                        }
+                      />
+                      <Stat
+                        label="Assets"
+                        value={policy.assets.length}
+                        note="SAC tokens whose transfers are fully enforced"
+                      />
                       <Stat
                         label="Recipients"
                         value={policy.allow_any_recipient ? "any" : policy.recipients.length}
-                        note={policy.allow_any_recipient ? "allowlist bypassed" : "allowlisted destinations"}
+                        note={
+                          policy.allow_any_recipient
+                            ? "allowlist bypassed"
+                            : "allowlisted destinations"
+                        }
                       />
-                      <Stat label="Protocols" value={policy.protocols.length} note="allowlisted non-asset contracts" />
+                      <Stat
+                        label="Protocols"
+                        value={policy.protocols.length}
+                        note="allowlisted non-asset contracts"
+                      />
                       <Stat
                         label="Account"
                         value={policy.paused ? "PAUSED" : "active"}
@@ -336,8 +385,12 @@ export function StatusPanel() {
                       label="Ledger reports"
                       value={
                         <>
-                          <span className="mono tiny no-print">{short(identity.reportedWasmHash ?? "-", 10, 6)}</span>
-                          <span className="mono tiny print-only">{identity.reportedWasmHash ?? "-"}</span>
+                          <span className="mono tiny no-print">
+                            {short(identity.reportedWasmHash ?? "-", 10, 6)}
+                          </span>
+                          <span className="mono tiny print-only">
+                            {identity.reportedWasmHash ?? "-"}
+                          </span>
                         </>
                       }
                     />
@@ -345,7 +398,9 @@ export function StatusPanel() {
                       label="Fetched bytes hash to"
                       value={
                         <>
-                          <span className="mono tiny no-print">{short(identity.fetchedSha256, 10, 6)}</span>
+                          <span className="mono tiny no-print">
+                            {short(identity.fetchedSha256, 10, 6)}
+                          </span>
                           <span className="mono tiny print-only">{identity.fetchedSha256}</span>
                         </>
                       }
@@ -375,13 +430,28 @@ export function StatusPanel() {
         {printReport && (
           <div className="print-only print-report">
             <h2>Compliance Audit Report</h2>
-            <p><strong>Timestamp:</strong> {printReport.timestamp}</p>
-            <p><strong>Network:</strong> {printReport.network}</p>
-            <p><strong>Contract ID:</strong> <span className="mono">{printReport.contractId}</span></p>
-            <p><strong>Bytecode Hash:</strong> <span className="mono">{printReport.bytecodeHash}</span></p>
-            <p><strong>Admin Key:</strong> <span className="mono">{printReport.adminKey}</span></p>
-            <p><strong>DMS Status:</strong> {printReport.dmsStatus}</p>
-            <p><strong>Policy Rules:</strong> {printReport.policyRules}</p>
+            <p>
+              <strong>Timestamp:</strong> {printReport.timestamp}
+            </p>
+            <p>
+              <strong>Network:</strong> {printReport.network}
+            </p>
+            <p>
+              <strong>Contract ID:</strong> <span className="mono">{printReport.contractId}</span>
+            </p>
+            <p>
+              <strong>Bytecode Hash:</strong>{" "}
+              <span className="mono">{printReport.bytecodeHash}</span>
+            </p>
+            <p>
+              <strong>Admin Key:</strong> <span className="mono">{printReport.adminKey}</span>
+            </p>
+            <p>
+              <strong>DMS Status:</strong> {printReport.dmsStatus}
+            </p>
+            <p>
+              <strong>Policy Rules:</strong> {printReport.policyRules}
+            </p>
             <div>
               <strong>Allowlists:</strong>
               <ul>

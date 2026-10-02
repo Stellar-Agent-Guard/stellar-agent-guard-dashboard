@@ -739,12 +739,21 @@ code {
  * reduced-motion users, for whom a pulsing alarm is noise, not signal.
  */
 @keyframes dms-critical-pulse {
-  0%, 100% { background-color: #331111; border-color: var(--danger); }
-  50% { background-color: #552020; border-color: #ff8a8a; }
+  0%,
+  100% {
+    background-color: #331111;
+    border-color: var(--danger);
+  }
+  50% {
+    background-color: #552020;
+    border-color: #ff8a8a;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dms-banner.critical { animation: none; }
+  .dms-banner.critical {
+    animation: none;
+  }
 }
 
 @media print {

@@ -38,7 +38,7 @@ export type DmsAlertLevel = "none" | "warning" | "critical" | "expired";
 export const DMS_WARNING_FRACTION = 0.25;
 
 /** Red-pulse below this fraction of the grace period (spec: critical < 10%). */
-export const DMS_CRITICAL_FRACTION = 0.10;
+export const DMS_CRITICAL_FRACTION = 0.1;
 
 /** Yellow below this absolute remaining time (acceptance: under 1 hour). */
 export const DMS_WARNING_SECONDS = 3600;

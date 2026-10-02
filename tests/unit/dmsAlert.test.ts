@@ -42,7 +42,10 @@ function policy(dmsGraceSecs: bigint): PolicyConfig {
  * A status/policy pair positioned so exactly `remainingSecs` of grace are left
  * on the ledger clock, given a grace window of `graceSecs`.
  */
-function countdown(remainingSecs: number, graceSecs: number): {
+function countdown(
+  remainingSecs: number,
+  graceSecs: number,
+): {
   st: GuardStatus;
   pol: PolicyConfig;
 } {
@@ -116,7 +119,10 @@ test("expired once the deadline is reached or passed", () => {
 
   // `heartbeat_expired` from `status()` is the chain's own verdict and wins —
   // even when the policy read needed to reconstruct the countdown failed.
-  const chainSaysExpired = evaluateDmsAlert(status({ heartbeat_expired: true, last_heartbeat: 7n }), null);
+  const chainSaysExpired = evaluateDmsAlert(
+    status({ heartbeat_expired: true, last_heartbeat: 7n }),
+    null,
+  );
   assert.equal(chainSaysExpired.level, "expired");
   assert.equal(chainSaysExpired.remainingSecs, null);
 });
