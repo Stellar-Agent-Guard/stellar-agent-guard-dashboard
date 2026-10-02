@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { InvokeResult } from "../lib/guard/submit.ts";
 import {
   freezeGuard,
@@ -8,12 +8,21 @@ import {
   unfreezeGuard,
   type FreezeSimulationResult,
 } from "../lib/guard/guardOps.ts";
+import { readNativeXlmBalance } from "../lib/guard/chain.ts";
+import {
+  FREEZE_CHALLENGE_SUFFIX_LENGTH,
+  FREEZE_CHALLENGE_THRESHOLD_XLM,
+  freezeChallengeMatches,
+  requiresFreezeChallenge,
+} from "../lib/guard/freezeChallenge.ts";
+import { formatStroops, formatStroopsWithUnit } from "../lib/guard/formatters.ts";
 import { refusedEventsFromDiagnostics } from "../lib/guard/telemetry.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { WRITE_DISABLED_HINT, writeControlState } from "../lib/guard/observerMode.ts";
 import { ErrorBlock, starLink } from "./bits.tsx";
 import { CopyButton } from "./CopyButton.tsx";
+import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 
 /**
  * The emergency panic button.
@@ -26,6 +35,16 @@ import { CopyButton } from "./CopyButton.tsx";
  */
 
 type Phase = "idle" | "confirming" | "signing" | "verifying" | "done";
+
+/**
+ * The live XLM balance the freeze-challenge threshold is compared against
+ * (issue #15). Three states, deliberately no fourth: `unread` covers both
+ * "not read yet" and demo mode (which makes no RPC call at all), and `error`
+ * keeps the failure's detail so the dialog can say *why* the typed
+ * confirmation is showing. Both non-`ok` states fail safe to the challenge.
+ */
+type BalanceState =
+  { status: "unread" } | { status: "ok"; stroops: bigint } | { status: "error"; detail: string };
 
 interface Report {
   action: "freeze" | "unfreeze";
@@ -157,17 +176,136 @@ export function PanicPanel() {
   // while the read-only call is in flight.
   const [simulation, setSimulation] = useState<FreezeSimulationResult | null>(null);
   const [simulating, setSimulating] = useState(false);
+  // Freeze-challenge state (issue #15): the live balance that decides the
+  // confirmation's shape, and the operator's typed answer.
+  const [balance, setBalance] = useState<BalanceState>({ status: "unread" });
+  const [challengeInput, setChallengeInput] = useState("");
+  const demoMode = useDemoMode();
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  // Newest balance read wins: every (re)read bumps this token, and a reply
+  // that arrives after a newer read — or after unmount — is dropped instead
+  // of overwriting fresher state with a stale number.
+  const balanceToken = useRef(0);
   const confirming = phase === "confirming";
 
-  // Focus management for the confirmation dialog lives in the shared
-  // `ConfirmDialog` (issue #34): move focus in on open, keep Tab cycling inside
-  // it, close on Escape, and restore focus to the trigger whenever the dialog
-  // goes away. Without this a modal is either a keyboard trap (focus escapes
-  // into the page behind it) or a dead end (focus lands nowhere on dismissal) —
-  // both fail WCAG 2.1 AA keyboard requirements.
+  /**
+   * Read the guard's live XLM balance — the threshold input for the freeze
+   * challenge. Called on mount and again each time the confirm dialog opens,
+   * because the decision must use a *current* number: an account that was
+   * small when the page loaded and large by the time the operator freezes it
+   * has to be challenged. Demo mode makes no RPC call at all, so the balance
+   * stays `unread` there — which shows the challenge, the fail-safe side.
+   */
+  const loadBalance = useCallback(() => {
+    if (demoMode) return;
+    const token = ++balanceToken.current;
+    const settle = (state: BalanceState): void => {
+      if (token !== balanceToken.current) return;
+      setBalance(state);
+    };
+    void readNativeXlmBalance(server, guard)
+      .then((result) => {
+        settle(
+          result.ok
+            ? { status: "ok", stroops: result.value }
+            : { status: "error", detail: result.error },
+        );
+      })
+      .catch((caught) => {
+        settle({
+          status: "error",
+          detail: caught instanceof Error ? caught.message : String(caught),
+        });
+      });
+  }, [server, guard, demoMode]);
+
+  useEffect(() => {
+    loadBalance();
+    return () => {
+      // Invalidate the in-flight read on unmount or context change, so its
+      // reply can neither update a dead dialog nor cross a guard switch.
+      balanceToken.current += 1;
+    };
+  }, [loadBalance]);
+
+  // ── Freeze-challenge decision (issue #15) ──────────────────────────────
+  // `null` for every non-`ok` balance (unread/error), which
+  // `requiresFreezeChallenge` maps to "challenge shown": when the stakes are
+  // unknown the friction goes up, never down.
+  const challengeRequired = requiresFreezeChallenge(
+    balance.status === "ok" ? balance.stroops : null,
+  );
+  const challengeSatisfied = !challengeRequired || freezeChallengeMatches(challengeInput, guard);
+  const challengeError =
+    challengeRequired && challengeInput.trim() !== "" && !challengeSatisfied
+      ? `That is not the last ${FREEZE_CHALLENGE_SUFFIX_LENGTH} characters — type them exactly as shown.`
+      : null;
+
+  // Focus management for the confirmation dialog: move focus in on open, keep
+  // Tab cycling inside it, close on Escape, and restore focus to the trigger
+  // whenever the dialog goes away. Without this a modal is either a keyboard
+  // trap (focus escapes into the page behind it) or a dead end (focus lands
+  // nowhere on dismissal) — both fail WCAG 2.1 AA keyboard requirements.
+  // (Extracted into the shared ConfirmDialog in issue #34.)
+  useEffect(() => {
+    if (!confirming) return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const focusables = () =>
+      Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+
+    // Focus the dialog itself first, so a screen reader announces the title
+    // before the operator tabs into its controls.
+    dialog.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setPhase("idle");
+        setAcknowledged(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement as HTMLElement | null;
+      const inside = active !== null && dialog.contains(active);
+      if (event.shiftKey && (active === first || !inside)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !inside)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      // Dismissal in any form (Escape, Cancel, or proceeding to sign) returns
+      // focus to the trigger. The trigger row is re-created when the dialog
+      // closes, and React re-attaches refs during the commit — before this
+      // cleanup runs — so the ref already points at the live button. Reading
+      // `.current` at cleanup time is the whole point; a snapshot taken when
+      // the effect started would be null (the row is unmounted while the
+      // dialog is open) or a detached node.
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate late ref read, see above
+      triggerRef.current?.focus();
+    };
+  }, [confirming]);
 
   const alreadyFrozen = snapshot?.status.ok ? snapshot.status.value.admin_frozen : null;
   // The panic button is the write an operator reaches for under pressure, so an
@@ -299,8 +437,13 @@ export function PanicPanel() {
             title={freezeControl.title}
             onClick={() => {
               setAcknowledged(false);
+              setChallengeInput("");
               setPhase("confirming");
               setReport(null);
+              // Re-read the balance at the decision point, not just at mount:
+              // the threshold must be judged against the account's exposure
+              // *now*, and a read still in flight keeps the challenge on.
+              loadBalance();
             }}
           >
             Freeze this account
@@ -344,26 +487,94 @@ export function PanicPanel() {
               account is unfrozen. This will prompt your wallet to sign an <code>unfreeze</code>
               -able <code>freeze()</code> call on{" "}
               <span className="mono">{guard.slice(0, 10)}…</span>.
-            </>
-          }
-          onClose={() => {
-            setPhase("idle");
-            setAcknowledged(false);
-          }}
-          onConfirm={() => void run("freeze")}
-          confirmDisabled={!acknowledged}
-        >
-          <div className="checkline">
-            <input
-              id="ack-freeze"
-              type="checkbox"
-              checked={acknowledged}
-              onChange={(event) => setAcknowledged(event.target.checked)}
-            />
-            <label htmlFor="ack-freeze">
-              I understand this halts the agent&apos;s spending, and that undoing it needs a second
-              signed <code>unfreeze()</code>.
-            </label>
+            </p>
+            <div className="checkline">
+              <input
+                id="ack-freeze"
+                type="checkbox"
+                checked={acknowledged}
+                onChange={(event) => setAcknowledged(event.target.checked)}
+              />
+              <label htmlFor="ack-freeze">
+                I understand this halts the agent&apos;s spending, and that undoing it needs a
+                second signed <code>unfreeze()</code>.
+              </label>
+            </div>
+            {challengeRequired && (
+              <div data-testid="freeze-challenge-block">
+                <p className="tiny" id="freeze-challenge-why">
+                  {balance.status === "ok" ? (
+                    <>
+                      This guard holds <strong>{formatStroopsWithUnit(balance.stroops)}</strong> —
+                      at or above the{" "}
+                      {formatStroops(BigInt(FREEZE_CHALLENGE_THRESHOLD_XLM), { decimals: 0 })} XLM
+                      large-exposure threshold.{" "}
+                    </>
+                  ) : balance.status === "error" ? (
+                    <>
+                      The balance could not be read ({balance.detail}), so this freeze keeps the
+                      typed confirmation — when the stakes are unknown the friction goes up, never
+                      down.{" "}
+                    </>
+                  ) : (
+                    <>
+                      Reading this guard&apos;s live XLM balance; until the read settles, the typed
+                      confirmation stays on.{" "}
+                    </>
+                  )}
+                  Typing the last {FREEZE_CHALLENGE_SUFFIX_LENGTH} characters of the guard address
+                  below prevents an accidental freeze — deliberate friction against a mis-click, not
+                  protection against anyone who can already see this page.
+                </p>
+                <p className="tiny mono" style={{ margin: "0 0 6px" }}>
+                  {guard}
+                </p>
+                <label className="tiny" htmlFor="freeze-challenge">
+                  Last {FREEZE_CHALLENGE_SUFFIX_LENGTH} characters of the guard address
+                </label>
+                <input
+                  id="freeze-challenge"
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={challengeInput}
+                  onChange={(event) => setChallengeInput(event.target.value)}
+                  aria-invalid={challengeError === null ? undefined : true}
+                  aria-describedby={`freeze-challenge-why${
+                    challengeError === null ? "" : " freeze-challenge-error"
+                  }`}
+                />
+                {challengeError !== null && (
+                  <p
+                    className="error tiny"
+                    id="freeze-challenge-error"
+                    role="alert"
+                    style={{ marginTop: 6, marginBottom: 0 }}
+                  >
+                    {challengeError}
+                  </p>
+                )}
+              </div>
+            )}
+            <div className="row">
+              <button
+                className="danger"
+                disabled={!acknowledged || !challengeSatisfied}
+                onClick={() => void run("freeze")}
+              >
+                Sign freeze
+              </button>
+              <button
+                className="secondary"
+                disabled={!acknowledged || !challengeSatisfied}
+                onClick={() => void run("freeze", true)}
+              >
+                Export XDR
+              </button>
+              <button className="secondary" onClick={() => setPhase("idle")}>
+                Cancel
+              </button>
+            </div>
           </div>
           <div className="row">
             <button
