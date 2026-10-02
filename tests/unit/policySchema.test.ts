@@ -70,7 +70,9 @@ test("exported JSON carries the versioned schema and issue-specified field names
   assert.equal(parsed.window_cap, "5000");
   assert.equal(parsed.window_seconds, "86400");
   assert.equal(parsed.dead_man_switch_seconds, "3600");
-  assert.deepEqual(parsed.allowed_protocols, [{ contract: PROTOCOL, functions: ["swap", "deposit"] }]);
+  assert.deepEqual(parsed.allowed_protocols, [
+    { contract: PROTOCOL, functions: ["swap", "deposit"] },
+  ]);
   assert.deepEqual(parsed.denied_recipients, [RECIPIENT]);
   assert.deepEqual(parsed.per_asset_caps, [
     { asset_contract_address: ASSET, max_cap_stroops: "1000000", symbol: "USDC" },
@@ -140,7 +142,7 @@ test("importPolicyFromJson rejects an unknown schema version with a precise path
   assert.equal(result.ok, false);
   if (result.ok) return;
   const versionIssue = result.issues.find((issue) => issue.path === "version");
-  assert.ok(versionIssue, "expected a validation issue at path \"version\"");
+  assert.ok(versionIssue, 'expected a validation issue at path "version"');
   assert.match(versionIssue!.message, /Unknown schema version/);
 });
 
@@ -151,7 +153,7 @@ test("importPolicyFromJson rejects an invalid Stellar address with a precise fie
   assert.equal(result.ok, false);
   if (result.ok) return;
   const assetIssue = result.issues.find((issue) => issue.path === "assets[0]");
-  assert.ok(assetIssue, "expected a validation issue at path \"assets[0]\"");
+  assert.ok(assetIssue, 'expected a validation issue at path "assets[0]"');
   assert.match(assetIssue!.message, /valid Stellar address/);
 });
 
@@ -162,7 +164,7 @@ test("importPolicyFromJson rejects a negative amount with a precise field path",
   assert.equal(result.ok, false);
   if (result.ok) return;
   const capIssue = result.issues.find((issue) => issue.path === "max_amount_per_tx");
-  assert.ok(capIssue, "expected a validation issue at path \"max_amount_per_tx\"");
+  assert.ok(capIssue, 'expected a validation issue at path "max_amount_per_tx"');
   assert.match(capIssue!.message, /non-negative/);
 });
 
@@ -172,8 +174,10 @@ test("importPolicyFromJson rejects a non-positive per-asset cap with a precise f
   const result = importPolicyFromJson(JSON.stringify(parsed));
   assert.equal(result.ok, false);
   if (result.ok) return;
-  const capIssue = result.issues.find((issue) => issue.path === "per_asset_caps[0].max_cap_stroops");
-  assert.ok(capIssue, "expected a validation issue at path \"per_asset_caps[0].max_cap_stroops\"");
+  const capIssue = result.issues.find(
+    (issue) => issue.path === "per_asset_caps[0].max_cap_stroops",
+  );
+  assert.ok(capIssue, 'expected a validation issue at path "per_asset_caps[0].max_cap_stroops"');
 });
 
 test("importPolicyFromJson rejects a malformed protocol entry (invalid contract address)", () => {
@@ -182,8 +186,10 @@ test("importPolicyFromJson rejects a malformed protocol entry (invalid contract 
   const result = importPolicyFromJson(JSON.stringify(parsed));
   assert.equal(result.ok, false);
   if (result.ok) return;
-  const protocolIssue = result.issues.find((issue) => issue.path === "allowed_protocols[0].contract");
-  assert.ok(protocolIssue, "expected a validation issue at path \"allowed_protocols[0].contract\"");
+  const protocolIssue = result.issues.find(
+    (issue) => issue.path === "allowed_protocols[0].contract",
+  );
+  assert.ok(protocolIssue, 'expected a validation issue at path "allowed_protocols[0].contract"');
 });
 
 test("importPolicyFromJson reports multiple validation issues at once, each with its own path", () => {

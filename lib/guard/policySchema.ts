@@ -45,7 +45,11 @@ export interface PolicyExportV1 {
   allowed_protocols: Array<{ contract: string; functions: string[] | null }>;
   /** See NAMING NOTE above: this is the recipient allowlist, not a denylist. */
   denied_recipients: string[];
-  per_asset_caps: Array<{ asset_contract_address: string; max_cap_stroops: string; symbol: string }>;
+  per_asset_caps: Array<{
+    asset_contract_address: string;
+    max_cap_stroops: string;
+    symbol: string;
+  }>;
   assets: string[];
   allow_any_recipient: boolean;
   active_from: string;
@@ -72,34 +76,30 @@ function addressField(label: string) {
 
 /** A cap/duration field: digits only, blank means "off" (0). Rejects negative values by construction. */
 function nonNegativeAmountField(label: string) {
-  return z
-    .string()
-    .refine((value) => /^\d*$/.test(value), {
-      message: `${label} must be a non-negative whole number of units (digits only), or blank to disable`,
-    });
+  return z.string().refine((value) => /^\d*$/.test(value), {
+    message: `${label} must be a non-negative whole number of units (digits only), or blank to disable`,
+  });
 }
 
 const protocolRuleSchema = z.object({
   contract: addressField("allowed_protocols contract"),
-  functions: z.array(z.string().min(1, "allowed_protocols function name cannot be blank")).nullable(),
+  functions: z
+    .array(z.string().min(1, "allowed_protocols function name cannot be blank"))
+    .nullable(),
 });
 
 const assetCapEntrySchema = z.object({
   asset_contract_address: addressField("per_asset_caps asset_contract_address"),
-  max_cap_stroops: z
-    .string()
-    .refine((value) => /^\d+$/.test(value) && BigInt(value) > 0n, {
-      message: "per_asset_caps max_cap_stroops must be a positive whole number",
-    }),
+  max_cap_stroops: z.string().refine((value) => /^\d+$/.test(value) && BigInt(value) > 0n, {
+    message: "per_asset_caps max_cap_stroops must be a positive whole number",
+  }),
   symbol: z.string().min(1, "per_asset_caps symbol is required"),
 });
 
 export const policyExportSchemaV1 = z.object({
-  version: z
-    .number()
-    .refine((value) => value === POLICY_SCHEMA_VERSION, {
-      message: `Unknown schema version; this build only supports version ${POLICY_SCHEMA_VERSION}`,
-    }),
+  version: z.number().refine((value) => value === POLICY_SCHEMA_VERSION, {
+    message: `Unknown schema version; this build only supports version ${POLICY_SCHEMA_VERSION}`,
+  }),
   max_amount_per_tx: nonNegativeAmountField("max_amount_per_tx"),
   window_cap: nonNegativeAmountField("window_cap"),
   window_seconds: nonNegativeAmountField("window_seconds"),
@@ -142,14 +142,20 @@ function renderAmount(value: bigint): string {
   return value === 0n ? "" : value.toString();
 }
 
-export function policyToExport(config: PolicyConfig, assetCaps: AssetCapOverride[]): PolicyExportV1 {
+export function policyToExport(
+  config: PolicyConfig,
+  assetCaps: AssetCapOverride[],
+): PolicyExportV1 {
   return {
     version: POLICY_SCHEMA_VERSION,
     max_amount_per_tx: renderAmount(config.per_tx_cap),
     window_cap: renderAmount(config.window_cap),
     window_seconds: renderAmount(config.window_secs),
     dead_man_switch_seconds: renderAmount(config.dms_grace_secs),
-    allowed_protocols: config.protocols.map((rule) => ({ contract: rule.contract, functions: rule.fns })),
+    allowed_protocols: config.protocols.map((rule) => ({
+      contract: rule.contract,
+      functions: rule.fns,
+    })),
     denied_recipients: config.recipients,
     per_asset_caps: assetCaps.map((row) => ({
       asset_contract_address: row.assetContractAddress,
@@ -176,8 +182,7 @@ export function policyExportFilename(now: Date = new Date()): string {
 }
 
 export type PolicyExportOutcome =
-  | { ok: true; json: string; filename: string }
-  | { ok: false; issues: FieldIssue[] };
+  { ok: true; json: string; filename: string } | { ok: false; issues: FieldIssue[] };
 
 /**
  * The single call the UI needs: validates the draft (including asset-cap
@@ -185,10 +190,12 @@ export type PolicyExportOutcome =
  * valid, produces the file text and a timestamped filename.
  */
 export function exportPolicyDraft(draft: PolicyDraft): PolicyExportOutcome {
-  const assetCapIssues: FieldIssue[] = validateAssetCapOverrides(draft.assetCaps).map((message) => ({
-    field: "assetCaps",
-    message,
-  }));
+  const assetCapIssues: FieldIssue[] = validateAssetCapOverrides(draft.assetCaps).map(
+    (message) => ({
+      field: "assetCaps",
+      message,
+    }),
+  );
   const built = buildPolicyConfig(draft);
 
   if (!built.ok || assetCapIssues.length > 0) {
@@ -212,8 +219,7 @@ function parseAmount(value: string): bigint {
 }
 
 export type PolicyImportResult =
-  | { ok: true; draft: PolicyDraft }
-  | { ok: false; issues: PolicyImportIssue[] };
+  { ok: true; draft: PolicyDraft } | { ok: false; issues: PolicyImportIssue[] };
 
 export function importPolicyFromJson(source: string): PolicyImportResult {
   let parsed: unknown;
@@ -241,7 +247,10 @@ export function importPolicyFromJson(source: string): PolicyImportResult {
     window_secs: parseAmount(data.window_seconds),
     dms_grace_secs: parseAmount(data.dead_man_switch_seconds),
     assets: data.assets,
-    protocols: data.allowed_protocols.map((rule) => ({ contract: rule.contract, fns: rule.functions })),
+    protocols: data.allowed_protocols.map((rule) => ({
+      contract: rule.contract,
+      fns: rule.functions,
+    })),
     recipients: data.denied_recipients,
     allow_any_recipient: data.allow_any_recipient,
     active_from: parseAmount(data.active_from),
@@ -258,4 +267,3 @@ export function importPolicyFromJson(source: string): PolicyImportResult {
 
   return { ok: true, draft };
 }
-
