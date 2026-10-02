@@ -15,6 +15,7 @@ import { CopyButton } from "./CopyButton.tsx";
 import { PHASE1_ARTIFACT, NETWORK } from "../lib/guard/network.ts";
 import { compilePrintReport } from "../lib/guard/printReport.ts";
 import { evaluateDmsAlert, formatDmsDuration, type DmsAlert } from "../lib/guard/dmsAlert.ts";
+import { calculateVelocity } from "../lib/guard/velocity.ts";
 
 /**
  * The proactive dead-man-switch deadline banner, shown above the on-chain
@@ -58,7 +59,6 @@ function DmsAlertBanner({ alert }: { alert: DmsAlert }) {
     </div>
   );
 }
-import { calculateVelocity } from "../lib/guard/velocity.ts";
 
 /**
  * The guard's live state, every field read from the chain on each refresh.
@@ -110,7 +110,7 @@ export function StatusPanel() {
         </div>
 
         <p className="tiny muted" style={{ marginTop: 10 }}>
-          <span className="mono">{guard}</span>
+          <span className="mono">{guard}</span> <CopyButton value={guard} label="guard address" />
         </p>
 
         {snapshotError && (
@@ -135,9 +135,11 @@ export function StatusPanel() {
                     : undefined
                 }
                 value={
-                  <Read
+                  <ReadWithRetry
                     result={snapshot.status}
                     label="status()"
+                    onRetry={() => void retryRead("status")}
+                    retrying={retryingField === "status"}
                     render={(status) => (status.admin_frozen ? "FROZEN" : "clear")}
                   />
                 }
@@ -208,9 +210,12 @@ export function StatusPanel() {
             </div>
 
             <h3>Rolling window</h3>
-            <Read
+            {retryingField === "window" && <ReadSkeleton label="window" />}
+            <ReadWithRetry
               result={snapshot.window}
               label="Window"
+              onRetry={() => void retryRead("window")}
+              retrying={retryingField === "window"}
               render={(window) => {
                 const policy = snapshot.policy.ok ? snapshot.policy.value : null;
                 if (!window || !policy) {
@@ -233,6 +238,7 @@ export function StatusPanel() {
 
                   // orange/red if exhaustion < 30 minutes
                   const isCritical = exhaust !== null && exhaust < 30;
+                  const velocityTone = isCritical ? "danger" : "ok";
 
                   velocityStats = (
                     <>
@@ -315,9 +321,12 @@ export function StatusPanel() {
             />
 
             <h3>Policy in force</h3>
-            <Read
+            {retryingField === "policy" && <ReadSkeleton label="policy" />}
+            <ReadWithRetry
               result={snapshot.policy}
               label="policy()"
+              onRetry={() => void retryRead("policy")}
+              retrying={retryingField === "policy"}
               render={(policy) =>
                 policy === null ? (
                   <p className="tiny muted">
@@ -375,9 +384,12 @@ export function StatusPanel() {
             />
 
             <h3>Artifact identity</h3>
-            <Read
+            {retryingField === "identity" && <ReadSkeleton label="identity" />}
+            <ReadWithRetry
               result={snapshot.identity}
               label="wasm identity"
+              onRetry={() => void retryRead("identity")}
+              retrying={retryingField === "identity"}
               render={(identity) => (
                 <>
                   <div className="grid">
