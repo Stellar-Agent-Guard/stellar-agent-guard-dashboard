@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { describeGuardEvent, explainReason, GUARD_EVENT_TOPICS } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { STREAM_BUFFER_LIMIT, type TelemetryEvent } from "../lib/guard/telemetry.ts";
@@ -17,6 +17,7 @@ import {
   telemetryToAuditLog,
 } from "../lib/guard/exportFormats.ts";
 import { NETWORK } from "../lib/guard/network.ts";
+import { loadScopedValue, saveScopedValue } from "../lib/guard/guardScoped.ts";
 import { useAnnounce } from "../lib/guard/useAnnounce.ts";
 import { eventsToCsv, eventsToJson, exportFilename } from "../lib/guard/eventExport.ts";
 import { useDemoMode } from "../lib/guard/useDemoMode.ts";
@@ -29,6 +30,9 @@ import {
   type VerdictFilter,
 } from "../lib/guard/telemetryExport.ts";
 import { severityFor } from "../lib/guard/feedSeverity.ts";
+
+/** The scoped-state base under which each guard's feed filter is remembered. */
+const SCOPED_FILTER_BASE = "feedFilter";
 
 /** Human names for the topic filter's options, keyed by the topic symbol. */
 const TOPIC_LABELS: Record<string, string> = {
@@ -94,7 +98,7 @@ export function TelemetryFeed() {
     queryRange,
     rangeLabel,
   } = useGuard();
-  const [filter, setFilter] = useState<TelemetryFilter>(EMPTY_TELEMETRY_FILTER);
+  const [filters, setFilters] = useState<Record<string, TelemetryFilter>>({});
   const announce = useAnnounce();
   const demo = useDemoMode();
 
@@ -249,7 +253,7 @@ export function TelemetryFeed() {
             aria-label="Verdict filter"
             value={filter.verdict}
             onChange={(event) =>
-              setFilter((current) => ({ ...current, verdict: event.target.value as VerdictFilter }))
+              applyFilter((current) => ({ ...current, verdict: event.target.value as VerdictFilter }))
             }
           >
             <option value="all">All verdicts</option>
@@ -320,7 +324,7 @@ export function TelemetryFeed() {
           Export audit log
         </button>
         {filterActive && (
-          <button className="secondary" onClick={() => setFilter(EMPTY_TELEMETRY_FILTER)}>
+          <button className="secondary" onClick={() => applyFilter(() => EMPTY_TELEMETRY_FILTER)}>
             Clear filters
           </button>
         )}
