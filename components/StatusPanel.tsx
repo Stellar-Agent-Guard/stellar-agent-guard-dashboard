@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { deadManRemaining, describePolicy, isDeadManFrozen } from "stellar-agent-guard-sdk";
 import { useGuard } from "./GuardProvider.tsx";
 import {
@@ -15,6 +16,7 @@ import { CopyButton } from "./CopyButton.tsx";
 import { PHASE1_ARTIFACT, NETWORK } from "../lib/guard/network.ts";
 import { compilePrintReport } from "../lib/guard/printReport.ts";
 import { calculateVelocity } from "../lib/guard/velocity.ts";
+import { density, initDensityStore } from "../lib/guard/densityStore.ts";
 
 /**
  * The guard's live state, every field read from the chain on each refresh.
@@ -68,7 +70,7 @@ export function StatusPanel() {
 
       {snapshot && (
         <>
-          <div className="grid" style={{ marginTop: 12 }}>
+          <div className={`grid ${densityState === "compact" ? "compact" : ""}`} style={{ marginTop: 12 }}>
             <Stat
               label="Admin freeze"
               tone={
@@ -331,7 +333,7 @@ export function StatusPanel() {
             retrying={retryingField === "identity"}
             render={(identity) => (
               <>
-                <div className="grid">
+                <div className={`grid ${densityState === "compact" ? "compact" : ""}`}>
                   <Stat
                     label="Ledger reports"
                     value={

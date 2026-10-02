@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo, useState, useEffect } from "react";
 import { describeGuardEvent, explainReason, GUARD_EVENT_TOPICS } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { STREAM_BUFFER_LIMIT } from "../lib/guard/telemetry.ts";
@@ -10,6 +10,7 @@ import { TelemetryChart } from "./TelemetryChart.tsx";
 import { ErrorBlock, relativeTime, short, starLink, TxHashCell } from "./bits.tsx";
 import { DateRangePicker } from "./DateRangePicker.tsx";
 import type { RangePreset, TimeRange } from "../lib/guard/ledgerTime.ts";
+import { density, initDensityStore } from "../lib/guard/densityStore.ts";
 import {
   NDJSON_MIME,
   auditLogFilename,
@@ -88,6 +89,20 @@ export function TelemetryFeed() {
     rangeLabel,
   } = useGuard();
   const [filter, setFilter] = useState<TelemetryFilter>(EMPTY_TELEMETRY_FILTER);
+  const [densityState, setDensityState] = useState<"comfortable" | "compact">("comfortable");
+
+  useEffect(() => {
+    const unsubscribe = initDensityStore();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDensityState(density.get());
+    const densityUnsubscribe = density.subscribe((value) => {
+      setDensityState(value);
+    });
+    return () => {
+      unsubscribe();
+      densityUnsubscribe();
+    };
+  }, []);
   const announce = useAnnounce();
   const demo = useDemoMode();
 
@@ -198,6 +213,12 @@ export function TelemetryFeed() {
             title="Empty the list. The poll cursor is kept, so nothing is re-fetched and nothing is skipped."
           >
             Clear buffer
+          </button>
+          {/* Density toggle */}
+          <button className="secondary" onClick={() => {
+            density.set(densityState === "comfortable" ? "compact" : "comfortable");
+          }}>
+            {densityState === "comfortable" ? "Compact" : "Comfortable"}
           </button>
         </div>
       </div>
@@ -356,7 +377,7 @@ export function TelemetryFeed() {
         </p>
       ) : (
         <div className="scrolly">
-          <table className="events">
+          <table className={`events ${densityState === "compact" ? "compact" : ""}`}>
             <thead>
               <tr>
                 <th>Event</th>
