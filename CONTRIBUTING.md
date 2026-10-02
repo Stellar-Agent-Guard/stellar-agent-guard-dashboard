@@ -22,6 +22,7 @@ npm run format:check # prettier --check (npm run format rewrites the tree)
 npm test            # node --test (unit suite)
 npm run test:e2e    # Playwright browser suites (npx playwright install chromium first)
 npm run build       # Next.js production build
+npm run check:docs-scripts  # validates README.md + CONTRIBUTING.md references
 ```
 
 Three extra scripts are not part of the CI gate:
@@ -32,6 +33,25 @@ Three extra scripts are not part of the CI gate:
 - `npm run test:perf` — the telemetry throughput benchmark (`tests/perf`, 10k
   events in 30s with FPS/heap assertions); frame-rate numbers depend on the
   runner's hardware, so it is measured locally and never gates a merge.
+
+### Script audit inventory
+
+The mini checker enforces the asymmetric rule: a script referenced in docs must exist,
+while extra scripts are reported as informational rather than failing CI. The current
+inventory is:
+
+| Script | Documented in README/CONTRIBUTING | Verdict |
+| --- | --- | --- |
+| `dev` | Yes — quick start | documented |
+| `dev:demo` | Yes — demo mode section | documented |
+| `build` | Yes — verification block | documented |
+| `start` | No | intentional-with-note (local runtime entrypoint, kept out of the docs) |
+| `lint` | Yes — verification block | documented |
+| `typecheck` | Yes — verification block | documented |
+| `test` | Yes — verification block | documented |
+| `check:docs-scripts` | Yes — this section | documented |
+| `prove:phase3` | Yes — extra scripts note | documented |
+| `inspect` | Yes — verification block and extra scripts note | documented |
 
 ## Branch protection and CI
 

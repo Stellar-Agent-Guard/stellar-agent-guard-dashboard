@@ -118,6 +118,7 @@ npm run typecheck    # tsc --noEmit
 npm run lint         # eslint
 npm test             # full unit suite (see CI for the current count)
 npm run build        # Next.js production build
+npm run check:docs-scripts  # guard README.md + CONTRIBUTING.md script references
 npm run inspect      # read-only dump of an instance's state
 ```
 

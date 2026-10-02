@@ -54,6 +54,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Docs-referenced npm scripts exist
+        run: npm run check:docs-scripts
+
       # The scope statement is a hard requirement of this project, not a
       # documentation nicety: fail the build if the code, README and SPEC.md
       # have drifted apart on what is and is not enforced.
