@@ -111,11 +111,7 @@ jobs:
     steps:
       - name: Wait for the analysis run of this head SHA
         id: wait
-        # Waiting is best-effort: an API failure here should degrade to the
-        # fallback comment below, not fail the job — the analysis run's own
-        # check carries the real signal, this job only reports it.
-        continue-on-error: true
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const headSha = context.payload.pull_request.head.sha;
@@ -130,66 +126,86 @@ jobs:
                 event: "pull_request",
                 per_page: 10,
               });
-              run = data.workflow_runs.find((candidate) => candidate.status !== "in_progress" && candidate.status !== "queued")
-                ?? data.workflow_runs[0] ?? null;
-              if (run && run.status === "completed") break;
-              run = null;
+              // Only accept a completed run that actually produced the report
+              // artifact — a cancelled/failure run (e.g. cancelled by the
+              // workflow's own concurrency group) never reaches the upload
+              // step, and download-artifact would fail with "Artifact not
+              // found". Skipped/cancelled runs resolve immediately rather
+              // than polling until the deadline.
+              const candidates = [];
+              for (const candidate of data.workflow_runs) {
+                if (candidate.status === "in_progress" || candidate.status === "queued") {
+                  candidates.push(null); // still running: keep polling
+                  continue;
+                }
+                if (candidate.conclusion !== "success") continue;
+                const { data: artifacts } = await github.rest.actions.listWorkflowRunArtifacts({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: candidate.id,
+                  per_page: 100,
+                });
+                if (artifacts.artifacts.some((artifact) => artifact.name === "bundle-size-report")) {
+                  candidates.push(candidate);
+                  break;
+                }
+              }
+              run = candidates.find(Boolean) ?? null;
+              if (run) break;
+              if (!candidates.includes(null)) {
+                // No in-flight run of this head SHA: nothing to wait for.
+                break;
+              }
               await new Promise((resolve) => setTimeout(resolve, 15000));
             }
             core.setOutput("run-id", run ? String(run.id) : "");
             core.setOutput("conclusion", run ? (run.conclusion ?? "") : "timeout");
 
+      # Belt-and-braces: the wait script only selects runs that verifiably
+      # have the artifact, but a download can still race an expiry or be
+      # interrupted. The next step renders a fallback comment when
+      # bundle-report.md is missing, so a failed download must not fail the
+      # job.
       - name: Download the report artifact
         id: artifact
-        # Only a concluded analysis run can have produced a report. A budget
-        # failure still uploads its report (the upload step is `if: always()`),
-        # so `failure` is worth an attempt too — and `continue-on-error` keeps
-        # a missing artifact (a run cancelled between conclusion and upload,
-        # or a run that never executed because it is awaiting the workflow
-        # approval fork PRs require) from failing the whole comment job. When
-        # the download yields nothing, the comment step below posts the
-        # explanatory fallback instead.
-        if: steps.wait.outputs.conclusion == 'success' || steps.wait.outputs.conclusion == 'failure'
+        # Only attempt download when analyze actually completed (not action_required/timeout).
+        if: |
+          steps.wait.outputs.run-id != '' &&
+          steps.wait.outputs.conclusion != 'action_required' &&
+          steps.wait.outputs.conclusion != 'timeout'
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
           name: bundle-size-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ steps.wait.outputs.run-id }}
+        continue-on-error: true
 
       - name: Post or update the PR comment
-        # Always comment, even after an unexpected failure above: a missing
-        # report is itself an outcome worth reporting on the PR.
         if: always()
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require("fs");
             const marker = "<!-- bundle-size-report -->";
+            const conclusion = process.env.conclusion;
             let body = null;
             if (fs.existsSync("bundle-report.md")) {
               body = fs.readFileSync("bundle-report.md", "utf8");
             } else {
-              // No report reached this job. Post why rather than crash: the
-              // job's purpose is to report the analysis outcome on the PR, and
-              // "the analysis never produced a report" is an outcome the
-              // operator can act on. (`inputs` is undefined in a normal job —
-              // the conclusion arrives through the step `env` below.)
-              const conclusion = (process.env.conclusion || "").trim();
-              const reason =
-                conclusion === "timeout"
-                  ? "the wait for the analysis run timed out"
-                  : conclusion === "action_required"
-                    ? "the analysis run is awaiting workflow approval — fork pull requests need a maintainer to approve their workflow runs (\"Approve and run workflows\" on the Actions tab)"
-                    : conclusion === ""
-                      ? "no completed analysis run was found for this commit"
-                      : `the analysis run concluded as \`${conclusion}\` without uploading a report`;
+              let reason = "";
+              if (conclusion === "action_required") {
+                reason = " The analysis workflow is awaiting maintainer approval for this fork PR. Once approved and re-run, this comment will update automatically.";
+              } else if (conclusion === "timeout") {
+                reason = " (timed out waiting for the analysis run)";
+              }
               body = [
                 marker,
                 "## Bundle size report",
                 "",
-                `No bundle-size report was produced — ${reason}.`,
-                "Check the `bundle-size` workflow runs on this pull request.",
+                "The bundle-size analysis run did not produce a report" +
+                  `${process.env.conclusion === "timeout" ? " (timed out waiting for it)" : ""}.`,
+                "Check the `bundle-size` workflow logs on this pull request.",
               ].join("\n");
             }
 
