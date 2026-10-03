@@ -63,16 +63,10 @@ Enforcement happens **inside the account itself**, via Soroban's native Custom A
 - **No-code guardrail configurator (`/configure`)**: Interactive form for defining spending policies without writing code: per-transaction cap, rolling-window cap and length, asset allowlists, recipient allowlists, protocol allowlists, active execution windows, pause state, and dead-man switch grace periods. Validates inputs locally before prompting Freighter, encodes via SDK `policyToScVal`, and executes `set_policy`.
 - **Artifact-verified guard deployment**: Deploys fresh guard accounts from verified on-chain WASM bytecode with cryptographic address prediction.
 - **Emergency panic button (`PanicPanel`)**: Two-step confirmation modal with wallet-signed `freeze()` execution, followed by a mandatory on-chain re-read of `status()` confirming `admin_frozen = true` before updating UI state. Provides matching wallet-signed `unfreeze()` reversal.
-- **Live event telemetry feed (`TelemetryFeed`)**: Cursor-based polling of `event_auth_checked` topics from Soroban RPC, decoding contract outcomes and reason codes using the SDK's verified vocabulary.
+- **Live event telemetry feed (`TelemetryFeed`)**: Cursor-based polling of `event_auth_checked` topics from Soroban RPC, decoding contract outcomes and reason codes using the SDK's verified vocabulary, with CSV/JSON export under the stable schema documented in [docs/export-schema.md](./docs/export-schema.md).
 - **Installable PWA shell**: A `manifest.json`, responsive vector icons and a static-shell-only service worker let the console be installed and opened instantly on a phone or after a local network drop. Every `/soroban/rpc` and Horizon request is hard-bypassed — the worker never reads or writes a cache for chain state, so an offline shell can never present a cached balance or freeze flag as if it were live.
 - **Cross-tab lockstep**: A `BroadcastChannel` coordinator (with a `localStorage` fallback) propagates guard switches, confirmed freezes and policy installs across every open tab. Receiving tabs re-read the chain rather than trusting the broadcast, and never overwrite a form edit in progress.
-- **Multi-wallet connectors**: One `WalletConnector` interface over Freighter, Albedo and xBull, with a detection modal that names what the browser found and links to install what it did not. The operator's choice persists so a returning session is not asked again.
-- **Observer mode**: With no wallet connected, reads still run by attributing the read-only simulation to a fallback source account. The header says the session is observing, and every write control explains why it is disabled instead of going silently inert.
-- **Wallet/network guard**: A detected network mismatch renders as an inline warning bar with a one-click switch request, and a declined request is reported as declined — never as a false breakdown.
-- **Opt-in security alerts**: An optional two-beep Web Audio chime and a browser notification when the guard blocks a call, an admin freeze lands, or a policy is revoked. Both channels default off.
-- **Operator accelerators**: A `Cmd`/`Ctrl`+`K` command palette, dark/light/high-contrast themes, an address book, a drag-to-reorder dashboard grid, and an unsigned-XDR export/import path for multisig or air-gapped signing.
-- **Fleet overview (`/fleet`)**: One table of every registered guard instance with its live on-chain state, so an operator running more than one agent does not have to open them one at a time.
-- **Printable compliance report**: A `@media print` stylesheet and a "Print compliance report" action render a clean, paginated summary of the contract id, pinned bytecode hash, active policy and freeze state for auditors.
+- **Per-read recovery**: The discrete per-read error reporting above comes with matching per-read retry — a failed read renders an error block with a retry button that re-invokes only that read (never a full-page refetch), and repeated failures stay retryable. The telemetry feed exports the visible events as CSV or JSON under a stable, append-only column schema (see [docs/export-schema.md](./docs/export-schema.md)): reason codes carry both the raw symbol and the SDK's human explanation, amounts and timestamps export as strings to keep i128/ISO precision intact, and the CSV is BOM-prefixed for Excel.
 
 ## Quick Start
 
@@ -109,14 +103,14 @@ Demo mode is strictly opt-in. When neither the environment flag nor the query pa
 
 ### Copy and confirmation micro-UX
 
-Operator-facing identifiers (guard addresses, transaction hashes, deploy result IDs) render with one-click copy buttons (`components/CopyButton.tsx`) that write the **full** value, swap to `Copied ✓` for two seconds, announce the outcome through the shared announcer, and — when the async Clipboard API is unavailable (insecure-context dev over plain http, or denied permission) — show an inline "select manually" hint instead of failing silently.
+Operator-facing identifiers (guard addresses, transaction hashes, deploy result IDs) render with one-click copy buttons (`components/CopyButton.tsx`) that write the **full** value, swap to `Copied ✓` for two seconds, announce the outcome through the shared announcer, and — when the async Clipboard API is unavailable (insecure-context dev over plain http, or denied permission) — show an inline "select manually" hint instead of failing silently. Destructive actions go through the shared `ConfirmDialog` (`components/ConfirmDialog.tsx`), whose `consequence` prop is required: a confirmation that cannot state what it is about to destroy does not compile.
 
 ### Verification and Development
 
 ```bash
 npm run typecheck    # tsc --noEmit
 npm run lint         # eslint
-npm test             # full unit suite (see CI for the current count)
+npm test             # unit tests (31/31 passing)
 npm run build        # Next.js production build
 npm run inspect      # read-only dump of an instance's state
 ```
@@ -141,8 +135,8 @@ npm run inspect      # read-only dump of an instance's state
 
 ### Key Components & Actions
 
-- **`DeployPanel`**: Fetches bytecode, verifies SHA-256 hash (`f47919...`), predicts custom account address, prompts the wallet signature, and initializes admin + agent keys.
-- **`PolicyForm`**: Real-time form validation, encoding via SDK `policyToScVal`, wallet signing, and transaction broadcast.
+- **`DeployPanel`**: Fetches bytecode, verifies SHA-256 hash (`f47919...`), predicts custom account address, prompts Freighter signature, and initializes admin + agent keys.
+- **`PolicyForm`**: Real-time form validation, encoding via SDK `policyToScVal`, Freighter signing, and transaction broadcast.
 - **`PanicPanel`**: Emergency freeze workflow:
   - Prompts explicit operator confirmation modal.
   - Submits wallet-signed `freeze()` transaction.
@@ -151,15 +145,7 @@ npm run inspect      # read-only dump of an instance's state
 - **`TelemetryFeed`**: Cursor-based polling of `event_auth_checked` topics from Soroban RPC, decoding contract outcomes and reason codes. Each row carries a severity tier — blocked rows are marked from the danger token, diagnostic-stream rows from the warn token, and the committed-vs-diagnostic stream is labelled on every row — so blocks are findable by looking rather than by reading, with the tier always also stated in words. No sound: operator consoles run unattended and muted.
 - **`WalletBar`**: Displays Freighter connection status, address, and network validation.
 - **`TelemetryFeed`**: Cursor-based polling of `event_auth_checked` topics from Soroban RPC, decoding contract outcomes and reason codes.
-- **`WalletBar`**: Wallet connection status, address, network validation, and the Freighter / Albedo / xBull connector picker.
-- **`FleetTable`**: Live per-instance status across every registered guard account.
-- **`TxHistoryTable`** / **`MultisigTracker`**: The locally recorded submission history and pending multisig approvals.
-- **`SubmitSignedXDRPanel`**: Imports and broadcasts an externally signed transaction envelope for multisig or air-gapped signing.
-- **`CommandPalette`** (`Cmd`/`Ctrl`+`K`): Keyboard-navigable navigation, guard-instance search, and quick actions.
-- **`ThemeToggle`**: Dark / light / high-contrast themes, following the OS preference until the operator chooses.
-- **`AddressBookModal`** / **`MigrationWizard`**: Saved recipients and a guided policy-migration flow.
-- **`DashboardGrid`**: Operator-arranged, persisted panel layout.
-- **`TelemetryAlerts`**: Opt-in audio and browser-notification alerts for blocked calls and freezes.
+- **`WalletBar`**: Displays Freighter connection status, address, and network validation.
 
 ## Operator Runbooks
 
@@ -212,11 +198,9 @@ Stellar Agent Guard operates across three dedicated repositories:
 | [**stellar-agent-guard-sdk**](https://github.com/aigbagbobila/stellar-agent-guard-sdk)                         | TypeScript SDK for pre-flight interception, simulation pricing, and AI agent framework integration  | [GitHub](https://github.com/aigbagbobila/stellar-agent-guard-sdk)                        |
 | [**stellar-agent-guard-dashboard**](https://github.com/aigbagbobila/stellar-agent-guard-dashboard) (this repo) | Client-side operator dashboard for policy deployment, inspection, and emergency panic-button freeze | [GitHub](https://github.com/aigbagbobila/stellar-agent-guard-dashboard)                  |
 
-The dashboard's own internal contract — data flow, the derived-vs-stored state model, the complete write surface and the trust model — is normative in [`SPEC.md`](./SPEC.md).
-
 ## ✅ Verified against live testnet
 
-The dashboard core logic (`lib/guard/*`) was proven against live Stellar testnet via `scripts/prove-phase3.ts` using the identical module pipeline that powers the UI. The table below is a **dated record** of that run (its exact timestamp is `ranAt` in [`tests/fixtures/phase3-proof.json`](./tests/fixtures/phase3-proof.json)), not a claim re-verified on every build:
+The dashboard core logic (`lib/guard/*`) was proven against live Stellar testnet via `scripts/prove-phase3.ts` using the identical module pipeline that powers the UI:
 
 | Step                         | Result                                                                 | Evidence                                                                                                                      |
 | ---------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |

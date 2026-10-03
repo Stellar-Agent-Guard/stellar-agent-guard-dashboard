@@ -18,6 +18,7 @@ import {
 import { formatStroops, formatStroopsWithUnit } from "../lib/guard/formatters.ts";
 import { refusedEventsFromDiagnostics } from "../lib/guard/telemetry.ts";
 import { useGuard } from "./GuardProvider.tsx";
+import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { WRITE_DISABLED_HINT, writeControlState } from "../lib/guard/observerMode.ts";
 import { ErrorBlock, starLink } from "./bits.tsx";
 import { CopyButton } from "./CopyButton.tsx";
@@ -475,19 +476,13 @@ export function PanicPanel() {
       )}
 
       {phase === "confirming" && (
-        <div className="modal-backdrop">
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="freeze-confirm-title"
-            ref={dialogRef}
-            tabIndex={-1}
-          >
-            <strong id="freeze-confirm-title">
-              Confirm the freeze — this stops the agent immediately
-            </strong>
-            <p className="tiny">
+        <ConfirmDialog
+          title="Confirm the freeze — this stops the agent immediately"
+          labelledById="freeze-confirm-title"
+          confirmLabel="Sign freeze"
+          triggerRef={triggerRef}
+          consequence={
+            <>
               The agent will not be able to make any call that requires its authorization until the
               account is unfrozen. This will prompt your wallet to sign an <code>unfreeze</code>
               -able <code>freeze()</code> call on{" "}
@@ -581,7 +576,16 @@ export function PanicPanel() {
               </button>
             </div>
           </div>
-        </div>
+          <div className="row">
+            <button
+              className="secondary"
+              disabled={!acknowledged}
+              onClick={() => void run("freeze", true)}
+            >
+              Export XDR
+            </button>
+          </div>
+        </ConfirmDialog>
       )}
 
       {(phase === "signing" || phase === "verifying") && (
