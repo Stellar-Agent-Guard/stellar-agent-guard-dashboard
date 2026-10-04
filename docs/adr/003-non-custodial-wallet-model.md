@@ -3,9 +3,11 @@
 Date: 2026-09-25
 
 ## Status
+
 Accepted
 
 ## Context
+
 Every privileged action this console offers — deploying the pinned artifact, initializing a guard,
 installing or revoking a policy, freezing and unfreezing — is a write to a smart account that holds
 an agent's funds. Whoever can produce a signature the account accepts can change what that account
@@ -17,7 +19,7 @@ removes the obvious place a secret key would live, but it does not by itself ans
 the write path must answer:
 
 1. Where, physically, is a signature produced, and what exactly gets signed?
-2. How can the application enforce the guard's decision *before* the operator is asked to approve
+2. How can the application enforce the guard's decision _before_ the operator is asked to approve
    anything, given the browser never holds a key?
 3. What stops a signature produced for one Stellar network from being replayed against another?
 
@@ -25,6 +27,7 @@ Freighter — the operator's browser-extension wallet — is the component that 
 question. The console's job is to integrate it in a way that never weakens the answer.
 
 ## Decision
+
 The dashboard is strictly non-custodial: **secret keys are never handled by application JavaScript,
 never transmitted, never stored, and never derivable from anything the application sees.** All
 signing happens inside the operator's wallet, and the application's role is limited to building
@@ -75,7 +78,7 @@ Two properties of this sequence are load-bearing:
 
 The seam is [`lib/guard/wallet.ts`](../../lib/guard/wallet.ts): every signing capability in the
 console is expressed as the `WalletSigner` interface (`address`, `signTransaction`, `signAuthEntry`)
-— it can *request* signatures, and nothing else. The Freighter adapter implements that interface by
+— it can _request_ signatures, and nothing else. The Freighter adapter implements that interface by
 calling the extension; there is no code path in which a private key is an argument, a return value,
 or a byte in application memory:
 
@@ -100,7 +103,7 @@ A Stellar signature is made over a payload that includes the **network passphras
 signed envelope is therefore meaningless on a different network: Testnet's `Test SDF Network ;
 September 2015` and Mainnet's `Public Global Stellar Network ; September 2015` produce different
 signatures over identical operations. Cross-network replay — taking a Testnet approval and
-broadcasting it to Mainnet — fails at the host for that reason *by protocol design*.
+broadcasting it to Mainnet — fails at the host for that reason _by protocol design_.
 
 The console does not rely on that alone, because a signature the host will refuse is still a
 signature the operator was tricked into approving. Two layers are enforced:
@@ -113,7 +116,7 @@ signature the operator was tricked into approving. Two layers are enforced:
    did not understand.
 2. **At signing.** `freighterSigner(address, networkPassphrase)` is constructed with the pinned
    passphrase and passes it explicitly to both `signAuthEntry` and `signTransaction`. The wallet is
-   therefore asked to sign *for this network* rather than for whichever network it happens to be
+   therefore asked to sign _for this network_ rather than for whichever network it happens to be
    showing at that moment — a wallet switched mid-session cannot produce a signature for the wrong
    network through this console.
 
@@ -121,9 +124,9 @@ signature the operator was tricked into approving. Two layers are enforced:
 
 The console and the wallet trust each other for nothing beyond the interface:
 
-- The console decides *what* to build (operation, arguments, footprint) but cannot decide *whether*
+- The console decides _what_ to build (operation, arguments, footprint) but cannot decide _whether_
   a signature happens — the operator does, per prompt, in the extension.
-- The wallet decides *whether* to sign but cannot decide *what* was signed — it signs the payload it
+- The wallet decides _whether_ to sign but cannot decide _what_ was signed — it signs the payload it
   was handed, which the operator can inspect on the extension's prompt (and, with a hardware wallet,
   on the device screen — see the threat model below).
 - Refusals at either layer are terminal and visible: a declined entry or envelope aborts the write
@@ -146,7 +149,7 @@ What this model guarantees:
 
 What it does **not** guarantee (stated plainly, per the repo's no-overclaim convention):
 
-- It cannot stop an operator from approving a *correctly-displayed but harmful* operation. The
+- It cannot stop an operator from approving a _correctly-displayed but harmful_ operation. The
   guard's policy is the control for that; the wallet prompt is confirmation, not a policy engine.
 - It cannot detect a compromised wallet extension that signs payloads without displaying them. The
   mitigations are the operator's choice of wallet (see threat model) and the guard contract itself,
@@ -159,13 +162,13 @@ What it does **not** guarantee (stated plainly, per the repo's no-overclaim conv
 The signing model is identical for both; what differs is where the operator's confirmation happens
 and what an attacker must defeat to forge it.
 
-| | **Software wallet** (Freighter holding a key in the extension) | **Hardware wallet** (Freighter backed by a Ledger-class device) |
-| --- | --- | --- |
-| Key storage | Encrypted in the browser extension's storage | Secure element / sealed in the device; never extractable |
-| Operator confirmation | The extension's UI in the same browser as the app | The **device's own screen and buttons**, independent of the browser |
-| Defeat requires | Compromising the extension or the browser profile | Physical possession of the device **and** its PIN |
-| Residual risk | A malicious or compromised extension can display one payload and sign another; browser-level malware can overlay or misrender prompts | Blind-signing if the device's firmware cannot decode the payload — mitigated by verifying the transaction hash in chunks on the device screen |
-| Suited for | Day-to-day policy edits, testnet work, low-value guards | High-value admin writes: deploys, `set_policy` on production guards, `freeze`/`unfreeze` |
+|                       | **Software wallet** (Freighter holding a key in the extension)                                                                        | **Hardware wallet** (Freighter backed by a Ledger-class device)                                                                               |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Key storage           | Encrypted in the browser extension's storage                                                                                          | Secure element / sealed in the device; never extractable                                                                                      |
+| Operator confirmation | The extension's UI in the same browser as the app                                                                                     | The **device's own screen and buttons**, independent of the browser                                                                           |
+| Defeat requires       | Compromising the extension or the browser profile                                                                                     | Physical possession of the device **and** its PIN                                                                                             |
+| Residual risk         | A malicious or compromised extension can display one payload and sign another; browser-level malware can overlay or misrender prompts | Blind-signing if the device's firmware cannot decode the payload — mitigated by verifying the transaction hash in chunks on the device screen |
+| Suited for            | Day-to-day policy edits, testnet work, low-value guards                                                                               | High-value admin writes: deploys, `set_policy` on production guards, `freeze`/`unfreeze`                                                      |
 
 Two console behaviours exist specifically to support hardware verification:
 
@@ -186,8 +189,9 @@ incidents are precisely when one wants the stronger confirmation channel.
 ## Consequences
 
 ### Positive
+
 - **Custody is structurally impossible, not procedentially discouraged.** There is no component in
-  this repository that *could* hold a key, so "we promise not to look at the keys" is never part of
+  this repository that _could_ hold a key, so "we promise not to look at the keys" is never part of
   the trust model.
 - **Approvals are informed.** Every wallet prompt corresponds to a payload that has already passed
   the guard's enforced simulation, and the extension displays the exact bytes being signed.
@@ -198,6 +202,7 @@ incidents are precisely when one wants the stronger confirmation channel.
   shrinks to the thin Freighter adapter.
 
 ### Negative
+
 - **Every write requires the wallet's presence.** A missing extension, a locked extension, or a
   mismatched network blocks all admin actions; the CLI fallback in the runbooks exists for this.
 - **Two prompts per write** (authorization entry, then envelope) is more friction than a
@@ -207,12 +212,14 @@ incidents are precisely when one wants the stronger confirmation channel.
   prompt trustworthy, so it is not optional.
 
 ### Neutral
+
 - The Freighter adapter is the single browser-extension touchpoint in `lib/`; swapping or adding a
   wallet means implementing `WalletSigner`, not reworking the write path.
 - Hardware-wallet verification depends on device firmware rendering Soroban payloads; the
   hash-comparison guide is the fallback that does not depend on richer payload decoding.
 
 ## References
+
 - [ADR 001 — Zero-Server Client-Only Architecture](./001-zero-server-architecture.md)
 - [ADR 002 — Diagnostic Simulation for Rejected Transaction Visibility](./002-diagnostic-simulation-for-rejections.md)
 - [SPEC.md §5 — Write path](../../../SPEC.md)

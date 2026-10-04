@@ -18,16 +18,16 @@ scheduled hygiene or suspected compromise.
 
 A guard account has exactly two principals, and their powers are disjoint **by design**:
 
-| | **Admin key** | **Agent key** |
-| --- | --- | --- |
-| **Lives in** | The operator's wallet (Freighter; hardware for high-value guards) | The agent runtime, via the SDK |
-| **Is** | A plain Stellar account (`G…`) named at `initialize` | A raw Ed25519 public key registered on the smart account |
-| **Can** | `set_policy`, `revoke_policy`, `freeze`, `unfreeze`, `rotate_agent_key`, deploy/initialize | Authorize the account's own outbound calls through `__check_auth`, `heartbeat()` |
-| **Cannot** | Move funds, forge a heartbeat, or authenticate as the agent | Change the policy, freeze/unfreeze, rotate itself, or call any admin function |
-| **Loses custody of the other key?** | **Never** — rotation replaces the registered agent *public* key; the admin never sees any agent secret | **Never** — the agent runtime never holds, nor ever needed, the admin key |
+|                                     | **Admin key**                                                                                          | **Agent key**                                                                    |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| **Lives in**                        | The operator's wallet (Freighter; hardware for high-value guards)                                      | The agent runtime, via the SDK                                                   |
+| **Is**                              | A plain Stellar account (`G…`) named at `initialize`                                                   | A raw Ed25519 public key registered on the smart account                         |
+| **Can**                             | `set_policy`, `revoke_policy`, `freeze`, `unfreeze`, `rotate_agent_key`, deploy/initialize             | Authorize the account's own outbound calls through `__check_auth`, `heartbeat()` |
+| **Cannot**                          | Move funds, forge a heartbeat, or authenticate as the agent                                            | Change the policy, freeze/unfreeze, rotate itself, or call any admin function    |
+| **Loses custody of the other key?** | **Never** — rotation replaces the registered agent _public_ key; the admin never sees any agent secret | **Never** — the agent runtime never holds, nor ever needed, the admin key        |
 
-This is the trust boundary in one sentence: **the admin key controls *which* agent key the account
-will honour, but can never *be* the agent key.** The contract enforces the second half directly —
+This is the trust boundary in one sentence: **the admin key controls _which_ agent key the account
+will honour, but can never _be_ the agent key.** The contract enforces the second half directly —
 admin-only functions reject agent-signed calls (`self_function_not_allowed` class), and
 `heartbeat()` requires the guard's own authorization, so no admin action can fake agent liveness.
 `SPEC.md` §5 states it as "`rotate_agent_key`… the admin can replace the key the account
@@ -35,7 +35,7 @@ authenticates but can never authenticate as the agent."
 
 ### Why `rotate_agent_key` is an admin action
 
-The agent key is the credential that authorizes spending. If the *agent* could rotate it, then any
+The agent key is the credential that authorizes spending. If the _agent_ could rotate it, then any
 party holding the agent key — including a runtime that has been prompt-injected or whose key has
 leaked, which is exactly when rotation is needed — could replace it with its own fresh key and
 launder the compromise. Rotation therefore requires the **admin** signature: the human who owns the
@@ -45,7 +45,7 @@ payments.
 
 ### How the smart account updates its authentication identity
 
-A guard is a Soroban **custom account**: the "account address" *is* a contract, and the host routes
+A guard is a Soroban **custom account**: the "account address" _is_ a contract, and the host routes
 every authorization that contract makes through its `__check_auth`. The registered agent key lives
 in the contract's own storage. `rotate_agent_key(new_agent_pubkey)` — admin-authorized — overwrites
 that single storage entry with the new 32-byte Ed25519 public key:
@@ -65,12 +65,12 @@ that single storage entry with the new 32-byte Ed25519 public key:
 1. **In the dashboard's code.** The admin path (`lib/guard/guardOps.ts`) constructs
    `rotate_agent_key` with one argument: `xdr.ScVal.scvBytes(pubkey)` — the **public** key's 32
    bytes, hex-decoded from the string the operator pasted. There is no field in the call, the
-   interface, or the wallet prompt for a secret. A signature from the admin over a *public* key
+   interface, or the wallet prompt for a secret. A signature from the admin over a _public_ key
    cannot conjure the corresponding private key.
 2. **In the signing model.** Per [ADR 003](../adr/003-non-custodial-wallet-model.md), the admin's
    signature is produced inside their wallet over a payload the wallet displays; the dashboard never
    handles admin secret material either. The only secret that ever exists in connection with a
-   rotation is the *new agent's* private key — generated off-dashboard (section 3, step 1), held
+   rotation is the _new agent's_ private key — generated off-dashboard (section 3, step 1), held
    only by the agent runtime, and never passed to this console or the contract.
 3. **In the contract's storage.** Only a public key is ever written on chain. At no point in the
    system — repo, build artifact, chain state, or event payload — does agent secret material
@@ -81,13 +81,13 @@ that single storage entry with the new 32-byte Ed25519 public key:
 
 ## 2. When to rotate
 
-| Trigger | Urgency | Sequence |
-| --- | --- | --- |
-| Scheduled hygiene (e.g. quarterly) | Routine | section 3, unhurried; freeze not required |
-| Agent key was on a machine that is being decommissioned | Routine, but before wiping | section 3 |
-| The runtime behaved abnormally; cause unknown | **Suspected compromise** | **freeze first** ([emergency runbook](./emergency-freeze.md)), then section 3 |
-| The agent key is known or strongly suspected leaked | **SEV-1** | **freeze immediately**, then section 3 |
-| Admin key is compromised | **SEV-1, different remedy** | Do **not** use this runbook — the admin cannot rotate itself. Follow the [emergency runbook §8b](./emergency-freeze.md#8-key-rotation-after-suspected-compromise): freeze, then retire the account |
+| Trigger                                                 | Urgency                     | Sequence                                                                                                                                                                                           |
+| ------------------------------------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scheduled hygiene (e.g. quarterly)                      | Routine                     | section 3, unhurried; freeze not required                                                                                                                                                          |
+| Agent key was on a machine that is being decommissioned | Routine, but before wiping  | section 3                                                                                                                                                                                          |
+| The runtime behaved abnormally; cause unknown           | **Suspected compromise**    | **freeze first** ([emergency runbook](./emergency-freeze.md)), then section 3                                                                                                                      |
+| The agent key is known or strongly suspected leaked     | **SEV-1**                   | **freeze immediately**, then section 3                                                                                                                                                             |
+| Admin key is compromised                                | **SEV-1, different remedy** | Do **not** use this runbook — the admin cannot rotate itself. Follow the [emergency runbook §8b](./emergency-freeze.md#8-key-rotation-after-suspected-compromise): freeze, then retire the account |
 
 **Order when compromise is suspected: freeze → rotate → investigate.** Rotation with the account
 open lets a leaked key keep transacting (under the old policy) up to the ledger in which the new
@@ -106,7 +106,7 @@ one.
 > The console deliberately does **not** wire a `rotate_agent_key` UI (`SPEC.md` §5: the panel is
 > "not wired — holds a key-management decision this console has no UI to make safely"). New-key
 > generation, custody handover and out-of-band confirmation are human steps; a form field asking the
-> operator to paste a fresh public key would invite pasting the *secret* by mistake, and the CLI
+> operator to paste a fresh public key would invite pasting the _secret_ by mistake, and the CLI
 > path (below) is auditable. Until that decision is made, use the CLI fallback in
 > [emergency-freeze §6](./emergency-freeze.md#6-quick-reference-cli-fallback-web-ui-unavailable)
 > for step 4 — the dashboard's `rotateAgentKey` library path exists and is unit-tested
@@ -138,7 +138,7 @@ path refuses it pre-broadcast with "the new agent public key must be 32 raw Ed25
 Sequence the swap so the runtime is never the missing party:
 
 1. Configure the runtime to load the **new** key for signing `SorobanAuthorizationEntry`s.
-2. Keep the **old** key loaded but *unused* until the rotation lands. If the runtime signs anything
+2. Keep the **old** key loaded but _unused_ until the rotation lands. If the runtime signs anything
    with the old key after the rotation ledger, the host refuses it (`unauthorized`) — those
    signatures are harmless but noisy, so switch over cleanly.
 3. Restart the runtime and watch its first heartbeat cycle. With a policy whose dead-man grace is
@@ -148,7 +148,7 @@ Sequence the swap so the runtime is never the missing party:
 
 **Rollout order rationale:** if the runtime is switched first and the chain second, there is a short
 window where the runtime holds a key the account does not yet honour — but the failure mode is
-*blocked agent transactions* (no fund risk, `unauthorized` in the telemetry feed), whereas the
+_blocked agent transactions_ (no fund risk, `unauthorized` in the telemetry feed), whereas the
 reverse order leaves the runtime unable to sign at all while the account already expects a key
 nobody has. Both are recoverable; the first is quieter and needs no admin action.
 
@@ -178,18 +178,18 @@ ledger, and who authorized it. Do **not** log the new secret.
 
 ### Step 4 — Verify the new authentication end-to-end
 
-The rotation is real when the account *behaves* differently, not when a transaction lands:
+The rotation is real when the account _behaves_ differently, not when a transaction lands:
 
 1. **On-chain confirmation.** The transaction result shows success. (The contract has no dedicated
    read for "current agent key" — it is treated as a secret-adjacent identity, and its rotation is
    observable only through behaviour. That is deliberate.)
 2. **The new key authorizes.** Trigger one benign agent action the policy allows (a small SAC
-   transfer to an allowlisted recipient) and confirm it is **allowed** — signed by the *new* agent
+   transfer to an allowlisted recipient) and confirm it is **allowed** — signed by the _new_ agent
    key. This is the same end-to-end check the Phase 3 proof records in
    [`tests/fixtures/phase3-proof.json`](../../tests/fixtures/phase3-proof.json).
 3. **The old key is dead.** Attempt one agent-authorized call signed with the **old** key and
-   confirm it is refused before broadcast with `unauthorized` — *"The presented signature did not
-   verify against the account's registered agent key."* Refused calls have no transaction hash by
+   confirm it is refused before broadcast with `unauthorized` — _"The presented signature did not
+   verify against the account's registered agent key."_ Refused calls have no transaction hash by
    construction ([ADR 002](../adr/002-diagnostic-simulation-for-rejections.md)); the evidence is the
    contract's own blocked-diagnostic, which the telemetry feed surfaces as a `diagnostic` row.
 4. **Telemetry agrees.** The feed shows the allowed decision from the new key and, if you ran step
@@ -201,8 +201,8 @@ Only after 1–4 pass is the rotation proven.
 
 ## 4. Decommissioning the old agent keypair
 
-Verification proves the old key no longer *works*; decommissioning ensures it also no longer
-*exists* anywhere it could be revived from. Work through the list in order:
+Verification proves the old key no longer _works_; decommissioning ensures it also no longer
+_exists_ anywhere it could be revived from. Work through the list in order:
 
 - [ ] **Runtime secret store purged** — the old key removed from the runtime's env/secret store,
       not merely overwritten; config references updated so a rollback does not silently resurrect
@@ -220,7 +220,7 @@ Verification proves the old key no longer *works*; decommissioning ensures it al
 - [ ] **Ops log updated** with the key's retirement date and the reason. Public fingerprints only.
 
 A decommissioned key that survives in a forgotten backup is not a working credential (the account
-will not honour it), but it is still a *correlation* leak: anything signed with it identifies the
+will not honour it), but it is still a _correlation_ leak: anything signed with it identifies the
 same agent. Retire means gone.
 
 ## 5. Anti-patterns
@@ -230,9 +230,9 @@ same agent. Retire means gone.
 - **Generating the new key on the possibly-compromised machine.** The rotation exists to escape the
   compromise; a new key generated inside the blast radius inherits it.
 - **Pasting the new key's secret into any dashboard field, ticket, or chat.** The contract wants 32
-  *public* bytes; if you are typing 100+ characters starting with `S`, stop.
+  _public_ bytes; if you are typing 100+ characters starting with `S`, stop.
 - **Deleting the old key before verifying.** If verification (section 3, step 4) fails, the old
-  key's removal from the runtime is your rollback for *its* half; on-chain you cannot roll back a
+  key's removal from the runtime is your rollback for _its_ half; on-chain you cannot roll back a
   rotation, but you can rotate again — to a key you still possess.
 - **Rotating "to be safe" with a DMS grace you have not checked.** If the runtime restart in step 2
   outlasts the grace window, the account will DMS-freeze mid-procedure. Plan the swap inside the
