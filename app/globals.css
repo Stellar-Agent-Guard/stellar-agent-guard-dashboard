@@ -694,6 +694,46 @@ code {
   margin-top: 12px;
 }
 
+/*
+ * Flagged-address warning (issue #146). The only place in the shell that
+ * deliberately breaks the neutral card treatment: the operator is being told
+ * something about an address they are about to authorise permanently, and a
+ * modal styled like every other dialog would not carry that. The danger token
+ * is used for the card's own frame, the title and the confirm control, so the
+ * severity survives a glance and not only a read.
+ */
+.modal.security-warning {
+  border-color: var(--danger);
+  border-left: 4px solid var(--danger);
+}
+
+.modal.security-warning > strong {
+  color: var(--danger);
+  font-size: 14.5px;
+}
+
+.security-findings {
+  list-style: none;
+  margin: 10px 0;
+  padding: 0;
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.security-findings li {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--danger);
+  border-radius: 0 7px 7px 0;
+  background: #1c1113;
+  padding: 8px 11px;
+  margin-bottom: 8px;
+  font-size: 12.5px;
+}
+
+.security-findings li > * {
+  margin-bottom: 3px;
+}
+
 /* Toast notification queue (issue #105) — fixed corner viewport. */
 .toast-viewport {
   position: fixed;

@@ -31,6 +31,7 @@ import {
   parseAssetCapsJson,
   type AssetCapChange,
 } from "../lib/guard/assetCapsCsv.ts";
+import { screenDraft, screenKey } from "../lib/guard/securityChecker.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, ScopeNotice, WarningBanner, starLink } from "./bits.tsx";
 import { ProtocolFunctionSelector } from "./ProtocolFunctionSelector.tsx";
@@ -140,6 +141,17 @@ export function PolicyForm() {
     setError(null);
     setPendingPreset(null);
   }
+
+  // The flagged-address gate (issue #146). A hit on the embedded warning registry
+  // must not reach a signature prompt, so a submit is intercepted and turned into
+  // the warning modal until the operator has cleared both of its gates.
+  //
+  // `clearedKey` rather than a boolean, because consent is to a specific list of
+  // addresses: confirming the policy above and then appending another flagged
+  // address re-arms the gate instead of riding in on the earlier approval.
+  const [clearedKey, setClearedKey] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<null | { exportOnly: boolean }>(null);
+  const submitRef = useRef<HTMLButtonElement>(null);
 
   // Editing starts from the policy that is actually installed, not from an empty
   // form that looks like a reset. With nothing installed yet, it starts empty.
