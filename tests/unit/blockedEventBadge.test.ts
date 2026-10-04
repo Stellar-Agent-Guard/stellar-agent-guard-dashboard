@@ -37,7 +37,9 @@ function eventAt(sequence: number, blocked: boolean): GuardEvent {
   return specToGuardEvent(
     {
       kind: "auth_checked",
-      decision: blocked ? { result: "blocked", reason: "per_tx_cap_exceeded" } : { result: "allowed" },
+      decision: blocked
+        ? { result: "blocked", reason: "per_tx_cap_exceeded" }
+        : { result: "allowed" },
       ledger: 8_000_000 + sequence,
       ledgerClosedAt: new Date(BASE_TIME + sequence * 1_000).toISOString(),
       transactionHash: fixtureTxHash(sequence),

@@ -118,7 +118,11 @@ test("a poll that re-reads the same state announces nothing, however often it ru
     assert.deepEqual(h.announcer.observe(snapshot({})), [], `poll ${poll} found no change`);
     h.travel(15_000);
   }
-  assert.deepEqual(h.spoken, [], "a timer that repeats itself is the firehose this rule exists to prevent");
+  assert.deepEqual(
+    h.spoken,
+    [],
+    "a timer that repeats itself is the firehose this rule exists to prevent",
+  );
 });
 
 test("a freeze nobody performed is announced", () => {

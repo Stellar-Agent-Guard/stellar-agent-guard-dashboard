@@ -230,7 +230,11 @@ test("the count comes from the event data, not from what is on screen", () => {
   const fresh = countNewBlockedEvents(all, seen);
   assert.equal(all.length, 5_000);
   assert.equal(fresh, 10, "every blocked decision in the buffer is counted");
-  assert.equal(countNewBlockedEvents(all, seen), 10, "and the count is a pure function of the data");
+  assert.equal(
+    countNewBlockedEvents(all, seen),
+    10,
+    "and the count is a pure function of the data",
+  );
 
   const time = fakeTime(0);
   const spoken = recorder();
@@ -246,10 +250,7 @@ test("the shared mixed feed's ten refusals are the ten that get counted", () => 
   // disagree, and the badge would contradict the filtered table underneath it.
   const events = mixedGuardEvents(TEST_CONTRACT);
   const fresh = countNewBlockedEvents(events, new Set());
-  assert.equal(
-    fresh,
-    events.filter((event) => event.decision?.result === "blocked").length,
-  );
+  assert.equal(fresh, events.filter((event) => event.decision?.result === "blocked").length);
   assert.equal(fresh, 10);
 });
 

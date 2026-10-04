@@ -100,6 +100,8 @@ export function StatusPanel() {
   const { snapshot, snapshotError, refreshing, refresh, guard, wallet, retryRead, retryingField } =
     useGuard();
 
+  useStatusTransitionAnnouncer(snapshot);
+
   const printReport = snapshot
     ? compilePrintReport(snapshot, NETWORK.name, wallet?.address || "Disconnected")
     : null;

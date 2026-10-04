@@ -57,7 +57,8 @@ import { exportPolicyDraft, importPolicyFromJson } from "../lib/guard/policySche
  * the host converts the map into a typed struct by walking entries in a required
  * order, so a second encoder would be a second place to get the field order wrong.
  */
-type PolicyOutcome = { kind: "invalid"; issues: string[] } | { kind: "invoked"; result: InvokeResult };
+type PolicyOutcome =
+  { kind: "invalid"; issues: string[] } | { kind: "invoked"; result: InvokeResult };
 
 /** Speak a policy write's outcome, with the reason when it did not land. */
 function speakPolicy(operation: PolicyOperation, reason: string): void {
@@ -75,9 +76,16 @@ function speakPolicy(operation: PolicyOperation, reason: string): void {
  * the XDR is in the operator's hands and the account's policy is exactly as it
  * was, so that is what is said.
  */
-function speakPolicyOutcome(operation: PolicyOperation, outcome: PolicyOutcome, exportOnly: boolean): void {
+function speakPolicyOutcome(
+  operation: PolicyOperation,
+  outcome: PolicyOutcome,
+  exportOnly: boolean,
+): void {
   if (outcome.kind === "invalid") {
-    speakPolicy(operation, `the policy was not valid, so nothing was sent: ${outcome.issues.join("; ")}`);
+    speakPolicy(
+      operation,
+      `the policy was not valid, so nothing was sent: ${outcome.issues.join("; ")}`,
+    );
     return;
   }
   if (outcome.result.kind === "submitted") {

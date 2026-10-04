@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { GuardStatus } from "stellar-agent-guard-sdk";
+import type { rpc } from "@stellar/stellar-sdk";
 import type { InvokeResult } from "../lib/guard/submit.ts";
 import {
   freezeGuard,
@@ -9,6 +11,7 @@ import {
   type FreezeSimulationResult,
 } from "../lib/guard/guardOps.ts";
 import { readNativeXlmBalance } from "../lib/guard/chain.ts";
+import type { ReadResult } from "../lib/guard/chain.ts";
 import {
   FREEZE_CHALLENGE_SUFFIX_LENGTH,
   FREEZE_CHALLENGE_THRESHOLD_XLM,
@@ -20,6 +23,15 @@ import { refusedEventsFromDiagnostics } from "../lib/guard/telemetry.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { WRITE_DISABLED_HINT, writeControlState } from "../lib/guard/observerMode.ts";
 import { ErrorBlock, starLink } from "./bits.tsx";
+import {
+  freezeConfirmed,
+  freezeFailed,
+  writeFailureReason,
+  type FreezeAction,
+} from "../lib/guard/announceCopy.ts";
+import { useModalFocus } from "../lib/guard/useModalFocus.ts";
+import { noteVerifiedOutcome } from "../lib/guard/statusTransitions.ts";
+import { announce } from "../lib/guard/useAnnounce.ts";
 import { CopyButton } from "./CopyButton.tsx";
 import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 
@@ -65,6 +77,61 @@ interface Report {
 }
 
 /**
+/**
+ * The announcement for a write that has finished.
+ *
+ * The reason carried by a failure is whichever one explains it best: what the
+ * enforced simulation refused and why, what the network rejected, or — for a
+ * write that was included but changed nothing — the note saying the re-read
+ * disagreed. "Freeze failed" on its own would leave a screen-reader operator
+ * with less than the sighted operator can read, at the exact moment when the
+ * only question is whether the account is frozen.
+ */
+function speakFreezeOutcome(
+  action: FreezeAction,
+  confirmed: boolean,
+  note: string,
+  result?: InvokeResult,
+): void {
+  const spoken = confirmed
+    ? freezeConfirmed(action)
+    : freezeFailed(action, result ? writeFailureReason(result, note) : note);
+  announce(spoken.message, spoken.priority);
+}
+
+/**
+ * The chain operations this panel drives.
+ *
+ * Injected rather than imported straight into the handler so the a11y
+ * behaviour can be asserted without a wallet or a network: the ordering that
+ * matters (announce the result, then let the dialog close and restore focus)
+ * is a property of the panel, not of the chain, and it is testable only if the
+ * chain behind it can be replaced. Defaults are the real operations, so the
+ * console's own pages — and the end-to-end specs that drive them — run the
+ * production path unchanged. Same seam discipline as the perf harness's
+ * `__guardFeedInject` and `pollFleet`'s `_readSnapshot`.
+ */
+export interface PanicPanelOps {
+  freeze: typeof freezeGuard;
+  unfreeze: typeof unfreezeGuard;
+  readStatus: (
+    server: rpc.Server,
+    guard: string,
+    source?: string,
+  ) => Promise<ReadResult<GuardStatus>>;
+}
+
+const DEFAULT_OPS: PanicPanelOps = {
+  freeze: freezeGuard,
+  unfreeze: unfreezeGuard,
+  // Dynamic, as before: `chain.ts` is not needed until a write is verified, and
+  // keeping it out of the panel's first-paint graph is the point of the import.
+  readStatus: async (server, guard, source) =>
+    (await import("../lib/guard/chain.ts")).readStatus(server, guard, source),
+};
+
+/**
+
  * Render a freeze dry run.
  *
  * The banner is not decoration: a simulation output looks similar enough to a
@@ -173,7 +240,7 @@ function DryRunReport({
   );
 }
 
-export function PanicPanel() {
+export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
   const { signer, guard, server, refresh, snapshot, pushEvents, wallet, notifyTabs } = useGuard();
   const { freeze, unfreeze, readStatus: readStatusAfter } = { ...DEFAULT_OPS, ...ops };
   const [phase, setPhase] = useState<Phase>("idle");
@@ -257,64 +324,15 @@ export function PanicPanel() {
   // whenever the dialog goes away. Without this a modal is either a keyboard
   // trap (focus escapes into the page behind it) or a dead end (focus lands
   // nowhere on dismissal) — both fail WCAG 2.1 AA keyboard requirements.
-  // (Extracted into the shared ConfirmDialog in issue #34.)
-  useEffect(() => {
-    if (!confirming) return;
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-
-    const focusables = () =>
-      Array.from(
-        dialog.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
-        ),
-      );
-
-    // Focus the dialog itself first, so a screen reader announces the title
-    // before the operator tabs into its controls.
-    dialog.focus();
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setPhase("idle");
-        setAcknowledged(false);
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const items = focusables();
-      if (items.length === 0) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-      const first = items[0]!;
-      const last = items[items.length - 1]!;
-      const active = document.activeElement as HTMLElement | null;
-      const inside = active !== null && dialog.contains(active);
-      if (event.shiftKey && (active === first || !inside)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (active === last || !inside)) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown, true);
-      // Dismissal in any form (Escape, Cancel, or proceeding to sign) returns
-      // focus to the trigger. The trigger row is re-created when the dialog
-      // closes, and React re-attaches refs during the commit — before this
-      // cleanup runs — so the ref already points at the live button. Reading
-      // `.current` at cleanup time is the whole point; a snapshot taken when
-      // the effect started would be null (the row is unmounted while the
-      // dialog is open) or a detached node.
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate late ref read, see above
-      triggerRef.current?.focus();
-    };
-  }, [confirming]);
+  useModalFocus({
+    open: confirming,
+    containerRef: dialogRef,
+    returnFocusRef: triggerRef,
+    onDismiss: () => {
+      setPhase("idle");
+      setAcknowledged(false);
+    },
+  });
 
   const alreadyFrozen = snapshot?.status.ok ? snapshot.status.value.admin_frozen : null;
   // The panic button is the write an operator reaches for under pressure, so an
@@ -347,7 +365,7 @@ export function PanicPanel() {
     }
   }
 
-  async function run(action: "freeze" | "unfreeze", exportOnly = false) {
+  async function run(action: FreezeAction, exportOnly = false) {
     setError(null);
     setReport(null);
     setPhase("signing");

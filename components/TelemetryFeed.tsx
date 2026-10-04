@@ -20,6 +20,8 @@ import { NETWORK } from "../lib/guard/network.ts";
 import { loadScopedValue, saveScopedValue } from "../lib/guard/guardScoped.ts";
 import { useAnnounce } from "../lib/guard/useAnnounce.ts";
 import { eventsToCsv, eventsToJson, exportFilename } from "../lib/guard/eventExport.ts";
+import { streamPaused, streamResumed } from "../lib/guard/announceCopy.ts";
+import { BlockedEventBadge } from "./BlockedEventBadge.tsx";
 import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 import {
   EMPTY_TELEMETRY_FILTER,
@@ -232,6 +234,11 @@ export function TelemetryFeed() {
         <div className="row">
           {feed.watching && <span className="pill ok">polling</span>}
           {stream.paused && <span className="pill warn">paused</span>}
+          {/* Counted from the buffer, not from the rows on screen: a paused,
+              filtered or empty table can hide a blocked decision that is plainly
+              in the stream, and a count the operator cannot reconcile with the
+              feed is worse than no count. */}
+          <BlockedEventBadge events={events} />
           {feed.latestLedger !== null && (
             <span className="tiny muted">ledger {feed.latestLedger}</span>
           )}
@@ -243,7 +250,9 @@ export function TelemetryFeed() {
             <button onClick={startWatching}>Start watching</button>
           )}
           {stream.paused ? (
-            <button onClick={onResume}>Resume{stream.pendingCount > 0 ? ` (${stream.pendingCount})` : ""}</button>
+            <button onClick={onResume}>
+              Resume{stream.pendingCount > 0 ? ` (${stream.pendingCount})` : ""}
+            </button>
           ) : (
             <button
               className="secondary"

@@ -59,7 +59,10 @@ const REFUSED: InvokeResult = {
 // restate `GuardContextValue` while pinning this test to fields it never uses.
 function guardContext(overrides: Record<string, unknown> = {}): any {
   return {
-    server: new Proxy({}, { get: () => () => Promise.reject(new Error("no network in unit tests")) }),
+    server: new Proxy(
+      {},
+      { get: () => () => Promise.reject(new Error("no network in unit tests")) },
+    ),
     wallet: {
       address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWH",
       networkPassphrase: "Test SDF Network ; September 2015",
@@ -99,7 +102,10 @@ interface Mounted {
  * The app's own arrangement: the announcer is a sibling of the panel, both
  * inside one root, exactly as `app/layout.tsx` mounts them.
  */
-async function mount(ops: Partial<PanicPanelOps>, context: Record<string, unknown> = {}): Promise<Mounted> {
+async function mount(
+  ops: Partial<PanicPanelOps>,
+  context: Record<string, unknown> = {},
+): Promise<Mounted> {
   clearAnnouncements();
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -154,6 +160,17 @@ async function freezeThroughDialog(container: HTMLElement): Promise<void> {
   assert.ok(ack, "the confirmation must be acknowledged before it can be signed");
   await act(async () => {
     ack.click();
+  });
+  // The freeze challenge (issue #15) fails safe to "shown" when the balance
+  // cannot be read, which is exactly the case in a unit harness with no
+  // network. Type the suffix before signing, as the operator must.
+  const challenge = container.querySelector<HTMLInputElement>("#freeze-challenge");
+  assert.ok(challenge, "the typed challenge must render when the balance is unread");
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    setter?.call(challenge, TEST_GUARD_ID.slice(-6));
+    challenge.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await sleep(0);
   });
   await act(async () => {
     buttonByText("Sign freeze").click();
@@ -233,10 +250,7 @@ test("a freeze the chain disagrees with is announced assertively, with the reaso
   const mounted = await mount(ops);
   try {
     await freezeThroughDialog(mounted.container);
-    await waitFor(
-      () => mounted.assertive.textContent !== "",
-      "the failed freeze to be spoken",
-    );
+    await waitFor(() => mounted.assertive.textContent !== "", "the failed freeze to be spoken");
     const spoken = mounted.assertive.textContent ?? "";
     assert.match(spoken, /^Freeze failed: /, "a failure is announced as a failure");
     assert.match(spoken, /status\(\)/, "and it carries the reason the chain disagreed");

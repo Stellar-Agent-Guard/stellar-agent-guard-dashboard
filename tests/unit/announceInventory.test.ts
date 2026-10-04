@@ -72,14 +72,32 @@ test("every operation outcome has a template, and each is wired to a call site",
   // feature.
   const templates: { what: string; used: boolean }[] = [
     { what: "freeze confirmed", used: callSites(ANNOUNCE_COPY).includes("freezeConfirmed(") },
-    { what: "freeze failed with its reason", used: callSites(ANNOUNCE_COPY).includes("freezeFailed(") },
+    {
+      what: "freeze failed with its reason",
+      used: callSites(ANNOUNCE_COPY).includes("freezeFailed("),
+    },
     { what: "unfreeze confirmed", used: callSites(ANNOUNCE_COPY).includes("freezeConfirmed(") },
-    { what: "policy install confirmed", used: callSites(ANNOUNCE_COPY).includes("policyConfirmed(") },
-    { what: "policy install failed with its reason", used: callSites(ANNOUNCE_COPY).includes("policyFailed(") },
+    {
+      what: "policy install confirmed",
+      used: callSites(ANNOUNCE_COPY).includes("policyConfirmed("),
+    },
+    {
+      what: "policy install failed with its reason",
+      used: callSites(ANNOUNCE_COPY).includes("policyFailed("),
+    },
     { what: "feed paused", used: callSites(ANNOUNCE_COPY).includes("streamPaused(") },
-    { what: "feed resumed, with what was queued", used: callSites(ANNOUNCE_COPY).includes("streamResumed(") },
-    { what: "a broadcast freeze nobody verified", used: callSites(ANNOUNCE_COPY).includes("freezeSubmitted(") },
-    { what: "the reason a write failed", used: callSites(ANNOUNCE_COPY).includes("writeFailureReason(") },
+    {
+      what: "feed resumed, with what was queued",
+      used: callSites(ANNOUNCE_COPY).includes("streamResumed("),
+    },
+    {
+      what: "a broadcast freeze nobody verified",
+      used: callSites(ANNOUNCE_COPY).includes("freezeSubmitted("),
+    },
+    {
+      what: "the reason a write failed",
+      used: callSites(ANNOUNCE_COPY).includes("writeFailureReason("),
+    },
     {
       what: "an on-chain state transition",
       used: callSites("lib/guard/statusTransitions.ts").includes("useStatusTransitionAnnouncer("),
@@ -119,7 +137,9 @@ test("every message in the inventory is built in a copy module, not in a compone
     const code = stripComments(file.text);
     for (const literal of literals) {
       assert.equal(
-        code.includes(`"${literal}`) || code.includes(`'${literal}`) || code.includes(`\`${literal}`),
+        code.includes(`"${literal}`) ||
+          code.includes(`'${literal}`) ||
+          code.includes(`\`${literal}`),
         false,
         `${file.path} builds the message "${literal}" itself; it belongs in a copy module`,
       );
@@ -150,9 +170,15 @@ test("a freeze speaks the operator's words, and only once the chain agrees", () 
 
 test("a failure always carries its reason, assertively", () => {
   for (const action of FREEZE_ACTIONS) {
-    const spoken = freezeFailed(action, "status().admin_frozen reads false — the effect is not on chain");
+    const spoken = freezeFailed(
+      action,
+      "status().admin_frozen reads false — the effect is not on chain",
+    );
     assert.equal(spoken.priority, "assertive", "a failure interrupts: it is not news for later");
-    assert.match(spoken.message, new RegExp(`^${action === "freeze" ? "Freeze" : "Unfreeze"} failed: `));
+    assert.match(
+      spoken.message,
+      new RegExp(`^${action === "freeze" ? "Freeze" : "Unfreeze"} failed: `),
+    );
     assert.ok(
       spoken.message.length > "Freeze failed: ".length,
       "a failure with nothing after it tells the operator strictly less than the screen does",
@@ -235,7 +261,8 @@ test("a blocked batch is announced as a count, assertively, and is greppable", (
   assert.equal(blockedBatchMessage(10), "10 new blocked events");
   // The badge's visible text and the spoken text are the same string, so the
   // operator can check one against the other.
-  const badge = SOURCES.find((file) => file.path === "components/BlockedEventBadge.tsx")?.text ?? "";
+  const badge =
+    SOURCES.find((file) => file.path === "components/BlockedEventBadge.tsx")?.text ?? "";
   assert.match(badge, /blockedBatchMessage\(pending\)/);
 });
 
@@ -274,10 +301,13 @@ test("every announcement leaves through the queue, not through a component-local
   // queue's own markup. `role="status"` elements are exempt: they announce
   // validation as a side effect of a re-render, which is the correct pattern for
   // a form error and not what this rule is about.
-  const liveRegions = SOURCES.filter((file) => /aria-live=/.test(file.text)).map((file) => file.path);
+  const liveRegions = SOURCES.filter((file) => /aria-live=/.test(file.text)).map(
+    (file) => file.path,
+  );
   assert.deepEqual(liveRegions.sort(), [
     "components/AriaAnnouncer.tsx",
     "components/HardwareWalletGuide.tsx",
+    "components/StatusPanel.tsx",
     "components/TelemetryChart.tsx",
     "components/ToastContainer.tsx",
   ]);
@@ -301,5 +331,9 @@ test("the announcer is mounted in the page shell, not inside a dialog", () => {
   assert.match(component, /aria-live="polite"/);
   assert.match(component, /aria-live="assertive"/);
   assert.match(component, /aria-atomic="true"/, "each region must be read as one message");
-  assert.match(component, /visually-hidden/, "the regions are for screen readers, not for the page");
+  assert.match(
+    component,
+    /visually-hidden/,
+    "the regions are for screen readers, not for the page",
+  );
 });
