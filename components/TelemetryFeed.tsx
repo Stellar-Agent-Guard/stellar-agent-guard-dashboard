@@ -1,13 +1,13 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { describeGuardEvent, explainReason, GUARD_EVENT_TOPICS } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { STREAM_BUFFER_LIMIT, type TelemetryEvent } from "../lib/guard/telemetry.ts";
 import { useGuard, useGuardEvents } from "./GuardProvider.tsx";
 import { TelemetryAlerts } from "./TelemetryAlerts.tsx";
 import { TelemetryChart } from "./TelemetryChart.tsx";
-import { ErrorBlock, TimeAgo, short, starLink, TxHashCell } from "./bits.tsx";
+import { ErrorBlock, Skeleton, TimeAgo, short, starLink, TxHashCell } from "./bits.tsx";
 import { DateRangePicker } from "./DateRangePicker.tsx";
 import type { RangePreset, TimeRange } from "../lib/guard/ledgerTime.ts";
 import {
@@ -17,6 +17,7 @@ import {
   telemetryToAuditLog,
 } from "../lib/guard/exportFormats.ts";
 import { NETWORK } from "../lib/guard/network.ts";
+import { loadScopedValue, saveScopedValue } from "../lib/guard/guardScoped.ts";
 import { useAnnounce } from "../lib/guard/useAnnounce.ts";
 import { eventsToCsv, eventsToJson, exportFilename } from "../lib/guard/eventExport.ts";
 import { useDemoMode } from "../lib/guard/useDemoMode.ts";
@@ -29,6 +30,10 @@ import {
   type VerdictFilter,
 } from "../lib/guard/telemetryExport.ts";
 import { severityFor } from "../lib/guard/feedSeverity.ts";
+import { decodeUrlState, writeUrlState } from "../lib/guard/urlState.ts";
+
+/** The scoped-state base under which each guard's feed filter is remembered. */
+const SCOPED_FILTER_BASE = "feedFilter";
 
 /** Human names for the topic filter's options, keyed by the topic symbol. */
 const TOPIC_LABELS: Record<string, string> = {
@@ -94,7 +99,33 @@ export function TelemetryFeed() {
     queryRange,
     rangeLabel,
   } = useGuard();
-  const [filter, setFilter] = useState<TelemetryFilter>(EMPTY_TELEMETRY_FILTER);
+  // Restore a shared verdict filter from the URL, while retaining the other
+  // filter dimensions independently for each guard in local storage.
+  const [filters, setFilters] = useState<Record<string, TelemetryFilter>>(() => {
+    const saved =
+      loadScopedValue<TelemetryFilter>(SCOPED_FILTER_BASE, NETWORK.name, guard) ??
+      EMPTY_TELEMETRY_FILTER;
+    const shared =
+      typeof window === "undefined" ? undefined : decodeUrlState(window.location.search).filter;
+    return {
+      [guard]: shared === undefined ? saved : { ...saved, verdict: shared },
+    };
+  });
+  const filter =
+    filters[guard] ??
+    loadScopedValue<TelemetryFilter>(SCOPED_FILTER_BASE, NETWORK.name, guard) ??
+    EMPTY_TELEMETRY_FILTER;
+
+  function applyFilter(update: (current: TelemetryFilter) => TelemetryFilter) {
+    const next = update(filter);
+    setFilters((current) => ({ ...current, [guard]: next }));
+    saveScopedValue(SCOPED_FILTER_BASE, NETWORK.name, guard, next);
+    // Keep the shareable verdict and panel in the URL without navigating.
+    writeUrlState({
+      filter: next.verdict,
+      tab: next.verdict === "all" ? "console" : "telemetry",
+    });
+  }
   const announce = useAnnounce();
   const demo = useDemoMode();
 
@@ -249,7 +280,10 @@ export function TelemetryFeed() {
             aria-label="Verdict filter"
             value={filter.verdict}
             onChange={(event) =>
-              setFilter((current) => ({ ...current, verdict: event.target.value as VerdictFilter }))
+              applyFilter((current) => ({
+                ...current,
+                verdict: event.target.value as VerdictFilter,
+              }))
             }
           >
             <option value="all">All verdicts</option>
@@ -266,7 +300,7 @@ export function TelemetryFeed() {
             aria-label="Topic filter"
             value={filter.topic}
             onChange={(event) =>
-              setFilter((current) => ({ ...current, topic: event.target.value }))
+              applyFilter((current) => ({ ...current, topic: event.target.value }))
             }
           >
             <option value="all">All topics</option>
@@ -282,7 +316,7 @@ export function TelemetryFeed() {
           placeholder="Contract address contains…"
           value={filter.contract}
           onChange={(event) =>
-            setFilter((current) => ({ ...current, contract: event.target.value }))
+            applyFilter((current) => ({ ...current, contract: event.target.value }))
           }
           style={{ maxWidth: 240 }}
         />
@@ -315,12 +349,12 @@ export function TelemetryFeed() {
           className="secondary"
           onClick={exportAuditLog}
           disabled={rows.length === 0}
-          title="NDJSON audit log: a header line, then decoded fields, verdict, ledger, transaction hash and the raw event XDR per event"
+          title="NDJSON audit log: a header line, then decoded fields, verdict, ledger, transaction hash and the raw event XDR per event (terms in docs/glossary.md — XDR, Ledger, Stroop)"
         >
           Export audit log
         </button>
         {filterActive && (
-          <button className="secondary" onClick={() => setFilter(EMPTY_TELEMETRY_FILTER)}>
+          <button className="secondary" onClick={() => applyFilter(() => EMPTY_TELEMETRY_FILTER)}>
             Clear filters
           </button>
         )}
@@ -356,11 +390,45 @@ export function TelemetryFeed() {
       <TelemetryChart />
 
       {events.length === 0 ? (
-        <p className="tiny muted">
-          {feed.watching
-            ? "No events from this guard yet. Lifecycle events (policy set, frozen, heartbeat) and allowed decisions appear here as they settle."
-            : "Start watching to tail this guard's events."}
-        </p>
+        feed.watching && feed.latestLedger === null ? (
+          /* The initial load: watching has started but the first poll has not
+             returned (no ledger cursor yet). This is a pending read, not an
+             empty result, so it renders as skeleton rows in the same table
+             shape the events will land in — not as an empty-looking message
+             and not as zeros. */
+          <div className="scrolly" aria-busy="true">
+            <table className="events">
+              {feedHead}
+              <tbody aria-hidden="true">
+                {[0, 1, 2].map((row) => (
+                  <tr key={row}>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="tiny muted">
+            {feed.watching
+              ? "No events from this guard yet. Lifecycle events (policy set, frozen, heartbeat) and allowed decisions appear here as they settle."
+              : "Start watching to tail this guard's events."}
+          </p>
+        )
       ) : rows.length === 0 ? (
         <p className="tiny muted">
           No events match the current filter. The feed still holds {events.length} event(s); widen
@@ -369,15 +437,7 @@ export function TelemetryFeed() {
       ) : (
         <div className="scrolly">
           <table className="events">
-            <thead>
-              <tr>
-                <th>Event</th>
-                <th>Decision</th>
-                <th>Source</th>
-                <th>Time</th>
-                <th>Transaction</th>
-              </tr>
-            </thead>
+            {feedHead}
             <tbody>
               {rows.map((event) => (
                 <TelemetryRow key={event.id} event={event} />
@@ -463,6 +523,18 @@ const TelemetryRow = memo(function TelemetryRow({ event }: { event: TelemetryEve
     </tr>
   );
 });
+
+const feedHead = (
+  <thead>
+    <tr>
+      <th>Event</th>
+      <th>Decision</th>
+      <th>Source</th>
+      <th>Time</th>
+      <th>Transaction</th>
+    </tr>
+  </thead>
+);
 
 function labelFor(event: GuardEvent): string {
   switch (event.kind) {

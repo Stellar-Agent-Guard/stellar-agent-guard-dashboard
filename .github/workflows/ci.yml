@@ -20,7 +20,7 @@ jobs:
       # any time, which would let changed third-party code execute here with no
       # reviewable diff in this repository. Dependabot (.github/dependabot.yml)
       # keeps these pins current through reviewable PRs.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -50,6 +50,13 @@ jobs:
       # deliberately and is not part of the CI gate.
       - name: Unit tests
         run: npm test
+
+      # Every relative path and section anchor in the README, SPEC.md, CONTRIBUTING.md
+      # and docs/ is a promise that the docs still line up. This checks it, offline:
+      # it never fetches an external URL, so a broken link to another host cannot
+      # fail a build for reasons that have nothing to do with this commit.
+      - name: Documentation links
+        run: npm run test:docs
 
       - name: Build
         run: npm run build

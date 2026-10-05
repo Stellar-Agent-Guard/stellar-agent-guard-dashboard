@@ -121,6 +121,14 @@ npm run build        # Next.js production build
 npm run inspect      # read-only dump of an instance's state
 ```
 
+### Offline development against a local network
+
+`npm run sandbox` boots a local standalone Soroban network in Docker, deploys the _same_
+pinned guard artifact to it, and writes `.env.local` so the console talks to that node
+instead of public testnet — no dependency on public RPC nodes, and no wallet needed for
+reads or telemetry. See [Local sandbox](CONTRIBUTING.md#local-sandbox) for the startup
+steps and for what it does and does not prove.
+
 ## Screens & Actions Reference
 
 ### Screens
@@ -151,7 +159,7 @@ npm run inspect      # read-only dump of an instance's state
 - **`TelemetryFeed`**: Cursor-based polling of `event_auth_checked` topics from Soroban RPC, decoding contract outcomes and reason codes. Each row carries a severity tier — blocked rows are marked from the danger token, diagnostic-stream rows from the warn token, and the committed-vs-diagnostic stream is labelled on every row — so blocks are findable by looking rather than by reading, with the tier always also stated in words. No sound: operator consoles run unattended and muted.
 - **`WalletBar`**: Displays Freighter connection status, address, and network validation.
 - **`TelemetryFeed`**: Cursor-based polling of `event_auth_checked` topics from Soroban RPC, decoding contract outcomes and reason codes.
-- **`WalletBar`**: Wallet connection status, address, network validation, and the Freighter / Albedo / xBull connector picker.
+- **`WalletBar`**: Wallet connection status, address, network validation, the Freighter / Albedo / xBull connector picker, and the multi-guard switcher (saved per network, add-by-address verified with a live `status()` read, rename, and confirm-gated delete).
 - **`FleetTable`**: Live per-instance status across every registered guard account.
 - **`TxHistoryTable`** / **`MultisigTracker`**: The locally recorded submission history and pending multisig approvals.
 - **`SubmitSignedXDRPanel`**: Imports and broadcasts an externally signed transaction envelope for multisig or air-gapped signing.
@@ -163,7 +171,7 @@ npm run inspect      # read-only dump of an instance's state
 
 ## Operator Runbooks
 
-Two step-by-step procedures cover the console's high-stakes operations. They are written to be followed under pressure, and both include CLI fallback commands for when the browser UI is unavailable.
+Three step-by-step procedures cover the console's high-stakes operations. They are written to be followed under pressure, and each includes CLI fallback commands for when the browser UI is unavailable.
 
 | Runbook                                                                                  | Use it when                                                                                                                                                                                                                                                                                                                                                                           |
 | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -172,9 +180,10 @@ Two step-by-step procedures cover the console's high-stakes operations. They are
 
 ## Developer Guides
 
-| Guide                                                             | Description                                                                                                                                                                                         |
-| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [**Agent Integration Guide**](./docs/guides/agent-integration.md) | Connecting custom AI agent runtimes (TypeScript, Python, LangChain, ElizaOS) to a deployed Guard, configuring environment variables, sending heartbeats, and diagnosing telemetry in the dashboard. |
+| Guide                                                             | Description                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**Agent Integration Guide**](./docs/guides/agent-integration.md) | Connecting custom AI agent runtimes (TypeScript, Python, LangChain, ElizaOS) to a deployed Guard, configuring environment variables, sending heartbeats, and diagnosing telemetry in the dashboard.                                                                                                                                               |
+| [**Glossary**](./docs/glossary.md)                                | Precise technical definitions of every Stellar, Soroban and Stellar Agent Guard term used across this project — Soroban Auth Context, SAC, Stroop, Rolling Window, DMS, Diagnostic Event, Pre-flight Simulation, Pinned Bytecode, Footprint and more — with an alphabetical index, cross-references, and links to official Stellar documentation. |
 
 ## Architecture
 
