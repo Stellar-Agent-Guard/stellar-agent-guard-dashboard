@@ -124,7 +124,7 @@ const RANGE_PRESET_LABELS: Record<Exclude<RangePreset, "custom">, string> = {
   "7d": "last 7 days",
 };
 
-interface GuardContextValue {
+export interface GuardContextValue {
   server: rpc.Server;
   wallet: ConnectedWallet | null;
   walletError: string | null;

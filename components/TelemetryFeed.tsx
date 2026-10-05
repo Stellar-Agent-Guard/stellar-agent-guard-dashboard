@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { describeGuardEvent, explainReason, GUARD_EVENT_TOPICS } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { STREAM_BUFFER_LIMIT, type TelemetryEvent } from "../lib/guard/telemetry.ts";
@@ -10,6 +10,7 @@ import { TelemetryChart } from "./TelemetryChart.tsx";
 import { ErrorBlock, Skeleton, TimeAgo, short, starLink, TxHashCell } from "./bits.tsx";
 import { DateRangePicker } from "./DateRangePicker.tsx";
 import type { RangePreset, TimeRange } from "../lib/guard/ledgerTime.ts";
+import { density, initDensityStore } from "../lib/guard/densityStore.ts";
 import {
   NDJSON_MIME,
   auditLogFilename,
@@ -20,6 +21,8 @@ import { NETWORK } from "../lib/guard/network.ts";
 import { loadScopedValue, saveScopedValue } from "../lib/guard/guardScoped.ts";
 import { useAnnounce } from "../lib/guard/useAnnounce.ts";
 import { eventsToCsv, eventsToJson, exportFilename } from "../lib/guard/eventExport.ts";
+import { streamPaused, streamResumed } from "../lib/guard/announceCopy.ts";
+import { BlockedEventBadge } from "./BlockedEventBadge.tsx";
 import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 import {
   EMPTY_TELEMETRY_FILTER,
@@ -137,6 +140,22 @@ export function TelemetryFeed() {
       tab: next.verdict === "all" ? "console" : "telemetry",
     });
   }
+
+  const [densityState, setDensityState] = useState<"comfortable" | "compact">("comfortable");
+
+  useEffect(() => {
+    const unsubscribe = initDensityStore();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDensityState(density.get());
+    const densityUnsubscribe = density.subscribe((value) => {
+      setDensityState(value);
+    });
+    return () => {
+      unsubscribe();
+      densityUnsubscribe();
+    };
+  }, []);
+
   const announce = useAnnounce();
   const demo = useDemoMode();
 
@@ -231,6 +250,33 @@ export function TelemetryFeed() {
     startWatching();
   }
 
+  /**
+   * Pausing and resuming are announced once each, through the shell's polite
+   * region, and the count that goes with them is the operator's own number to
+   * check the table against.
+   *
+   * The notice below is deliberately *not* a live region. It carries the queue
+   * depth, so as a live region it would re-announce on every event that arrived
+   * while the table was frozen — a burst of interruptions for a number that is
+   * already on screen. One announcement per transition, and the live number
+   * stays where the operator can read it.
+   */
+  function onPause() {
+    pauseStream();
+    const spoken = streamPaused();
+    announce(spoken.message, spoken.priority);
+  }
+
+  function onResume() {
+    // Read the depth before the buffer is drained: afterwards it is always zero,
+    // and "resumed with 0 queued" is a claim the operator can check against the
+    // badge they just watched fill.
+    const queued = stream.pendingCount;
+    resumeStream();
+    const spoken = streamResumed(queued);
+    announce(spoken.message, spoken.priority);
+  }
+
   return (
     <div className="panel">
       <div className="row" style={{ justifyContent: "space-between" }}>
@@ -238,6 +284,11 @@ export function TelemetryFeed() {
         <div className="row">
           {feed.watching && <span className="pill ok">polling</span>}
           {stream.paused && <span className="pill warn">paused</span>}
+          {/* Counted from the buffer, not from the rows on screen: a paused,
+              filtered or empty table can hide a blocked decision that is plainly
+              in the stream, and a count the operator cannot reconcile with the
+              feed is worse than no count. */}
+          <BlockedEventBadge events={events} />
           {feed.latestLedger !== null && (
             <span className="tiny muted">ledger {feed.latestLedger}</span>
           )}
@@ -249,13 +300,13 @@ export function TelemetryFeed() {
             <button onClick={startWatching}>Start watching</button>
           )}
           {stream.paused ? (
-            <button onClick={resumeStream}>
+            <button onClick={onResume}>
               Resume{stream.pendingCount > 0 ? ` (${stream.pendingCount})` : ""}
             </button>
           ) : (
             <button
               className="secondary"
-              onClick={pauseStream}
+              onClick={onPause}
               disabled={!feed.watching}
               title="Freeze the table so rows stop moving. Polling continues; new events queue until you resume."
             >
@@ -269,6 +320,15 @@ export function TelemetryFeed() {
             title="Empty the list. The poll cursor is kept, so nothing is re-fetched and nothing is skipped."
           >
             Clear buffer
+          </button>
+          {/* Density toggle */}
+          <button
+            className="secondary"
+            onClick={() => {
+              density.set(densityState === "comfortable" ? "compact" : "comfortable");
+            }}
+          >
+            {densityState === "comfortable" ? "Compact" : "Comfortable"}
           </button>
         </div>
       </div>
@@ -285,8 +345,7 @@ export function TelemetryFeed() {
         )}
       </div>
 
-      {/* Announced politely so a screen reader hears the queue grow without being interrupted. */}
-      <div role="status" aria-live="polite">
+      <div>
         {stream.paused && (
           <div className="notice" style={{ marginTop: 12 }}>
             <strong>
@@ -491,7 +550,7 @@ export function TelemetryFeed() {
              shape the events will land in — not as an empty-looking message
              and not as zeros. */
           <div className="scrolly" aria-busy="true">
-            <table className="events">
+            <table className={`events ${densityState === "compact" ? "compact" : ""}`}>
               {feedHead}
               <tbody aria-hidden="true">
                 {[0, 1, 2].map((row) => (
@@ -538,7 +597,7 @@ export function TelemetryFeed() {
         </p>
       ) : (
         <div className="scrolly">
-          <table className="events">
+          <table className={`events ${densityState === "compact" ? "compact" : ""}`}>
             {feedHead}
             <tbody>
               {rows.map((event) => (
