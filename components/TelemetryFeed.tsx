@@ -1,13 +1,26 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { describeGuardEvent, explainReason, GUARD_EVENT_TOPICS } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
-import { eventKey, useGuard, useGuardEvents } from "./GuardProvider.tsx";
+import { STREAM_BUFFER_LIMIT, type TelemetryEvent } from "../lib/guard/telemetry.ts";
+import { useGuard, useGuardEvents } from "./GuardProvider.tsx";
 import { TelemetryAlerts } from "./TelemetryAlerts.tsx";
-import { ErrorBlock, relativeTime, short, starLink } from "./bits.tsx";
+import { TelemetryChart } from "./TelemetryChart.tsx";
+import { ErrorBlock, Skeleton, TimeAgo, short, starLink, TxHashCell } from "./bits.tsx";
 import { DateRangePicker } from "./DateRangePicker.tsx";
 import type { RangePreset, TimeRange } from "../lib/guard/ledgerTime.ts";
+import {
+  NDJSON_MIME,
+  auditLogFilename,
+  isFilterActive,
+  telemetryToAuditLog,
+} from "../lib/guard/exportFormats.ts";
+import { NETWORK } from "../lib/guard/network.ts";
+import { loadScopedValue, saveScopedValue } from "../lib/guard/guardScoped.ts";
+import { useAnnounce } from "../lib/guard/useAnnounce.ts";
+import { eventsToCsv, eventsToJson, exportFilename } from "../lib/guard/eventExport.ts";
+import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 import {
   EMPTY_TELEMETRY_FILTER,
   filterGuardEvents,
@@ -16,6 +29,11 @@ import {
   type TelemetryFilter,
   type VerdictFilter,
 } from "../lib/guard/telemetryExport.ts";
+import { severityFor } from "../lib/guard/feedSeverity.ts";
+import { decodeUrlState, writeUrlState } from "../lib/guard/urlState.ts";
+
+/** The scoped-state base under which each guard's feed filter is remembered. */
+const SCOPED_FILTER_BASE = "feedFilter";
 
 /** Human names for the topic filter's options, keyed by the topic symbol. */
 const TOPIC_LABELS: Record<string, string> = {
@@ -48,7 +66,7 @@ function downloadText(filename: string, content: string, mime: string): void {
 /**
  * The live event feed.
  *
- * Two things are stated on the panel rather than glossed over, because both
+ * Three things are stated on the panel rather than glossed over, because all three
  * change how the feed should be read:
  *
  *   - Soroban RPC has no push stream, so this polls `getEvents` with a cursor and
@@ -58,23 +76,115 @@ function downloadText(filename: string, content: string, mime: string): void {
  *     that this console produced itself, decoded from the enforced simulation's
  *     diagnostics and labelled `diagnostic`. Absence of refusals here does not
  *     mean absence of refusals on chain.
+ *   - Rows are tiered by severity so a block is findable by looking, not by
+ *     reading: the tier is a class and a `data-severity`, and every tier's wording
+ *     is already in the row, so nothing here depends on colour.
+ *
+ * There is deliberately no sound. An operator console runs unattended and muted;
+ * a noise that can only be silenced in the tab that made it is not an alert.
  */
 export function TelemetryFeed() {
   // The feed subscribes to the events context itself: batches re-render this
   // panel and nothing else (see `GuardEventsContext`).
   const events = useGuardEvents();
-  const { feed, startWatching, stopWatching, clearEvents, guard, queryRange, rangeLabel } =
-    useGuard();
-  const [filter, setFilter] = useState<TelemetryFilter>(EMPTY_TELEMETRY_FILTER);
+  const {
+    feed,
+    stream,
+    pauseStream,
+    resumeStream,
+    startWatching,
+    stopWatching,
+    clearEvents,
+    guard,
+    queryRange,
+    rangeLabel,
+  } = useGuard();
+  // Restore a shared verdict filter from the URL, while retaining the other
+  // filter dimensions independently for each guard in local storage.
+  const [filters, setFilters] = useState<Record<string, TelemetryFilter>>(() => {
+    const saved =
+      loadScopedValue<TelemetryFilter>(SCOPED_FILTER_BASE, NETWORK.name, guard) ??
+      EMPTY_TELEMETRY_FILTER;
+    const shared =
+      typeof window === "undefined" ? undefined : decodeUrlState(window.location.search).filter;
+    return {
+      [guard]: shared === undefined ? saved : { ...saved, verdict: shared },
+    };
+  });
+  const filter =
+    filters[guard] ??
+    loadScopedValue<TelemetryFilter>(SCOPED_FILTER_BASE, NETWORK.name, guard) ??
+    EMPTY_TELEMETRY_FILTER;
+
+  function applyFilter(update: (current: TelemetryFilter) => TelemetryFilter) {
+    const next = update(filter);
+    setFilters((current) => ({ ...current, [guard]: next }));
+    saveScopedValue(SCOPED_FILTER_BASE, NETWORK.name, guard, next);
+    // Keep the shareable verdict and panel in the URL without navigating.
+    writeUrlState({
+      filter: next.verdict,
+      tab: next.verdict === "all" ? "console" : "telemetry",
+    });
+  }
+  const announce = useAnnounce();
+  const demo = useDemoMode();
+
+  /**
+   * Download the feed through the shared export path (issue #37). The schema,
+   * BOM and filename rules all live in `lib/guard/eventExport.ts` — this is a
+   * thin binding, not a second exporter.
+   */
+  function downloadExport(format: "csv" | "json") {
+    const content =
+      format === "csv"
+        ? eventsToCsv(rows, guard)
+        : JSON.stringify(eventsToJson(rows, guard), null, 2);
+    const type = format === "csv" ? "text/csv;charset=utf-8" : "application/json";
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = exportFilename(guard, format, rows.length);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    announce(
+      `Exported ${rows.length} event${rows.length === 1 ? "" : "s"} as ${format.toUpperCase()}`,
+    );
+  }
 
   // The three controls and the exports all act on the same projection, so a
   // CSV/NDJSON download is provably the filtered view on screen — one row in,
   // one line out, never a hidden superset.
   const rows = filterGuardEvents(events, filter);
-  const filterActive =
-    filter.verdict !== EMPTY_TELEMETRY_FILTER.verdict ||
-    filter.topic !== EMPTY_TELEMETRY_FILTER.topic ||
-    filter.contract.trim() !== EMPTY_TELEMETRY_FILTER.contract;
+  const filterActive = isFilterActive(filter);
+
+  /**
+   * Download the structured audit log: a header line naming the guard, network
+   * and filter, then one record per event with its raw XDR and every 64-bit
+   * value as a decimal string. Like the other exports it is the filtered view
+   * on screen; the header's `bufferedCount` shows how much the filter left out.
+   */
+  function exportAuditLog() {
+    const exportedAt = new Date();
+    const body = telemetryToAuditLog({
+      events: rows,
+      bufferedCount: events.length,
+      guard,
+      network: NETWORK.name,
+      filter,
+      latestLedger: feed.latestLedger,
+      demo,
+      exportedAt,
+    });
+    downloadText(
+      auditLogFilename(exportedAt, filterActive ? "filtered" : "full"),
+      body,
+      `${NDJSON_MIME};charset=utf-8`,
+    );
+    announce(`Exported ${rows.length} event${rows.length === 1 ? "" : "s"} to the audit log`);
+  }
 
   function applyRange(range: TimeRange, preset: RangePreset) {
     // A historical query replaces the live tail view: the feed shows exactly
@@ -94,7 +204,10 @@ export function TelemetryFeed() {
         <h2 style={{ margin: 0 }}>Telemetry</h2>
         <div className="row">
           {feed.watching && <span className="pill ok">polling</span>}
-          {feed.latestLedger !== null && <span className="tiny muted">ledger {feed.latestLedger}</span>}
+          {stream.paused && <span className="pill warn">paused</span>}
+          {feed.latestLedger !== null && (
+            <span className="tiny muted">ledger {feed.latestLedger}</span>
+          )}
           {feed.watching ? (
             <button className="secondary" onClick={stopWatching}>
               Stop
@@ -102,8 +215,27 @@ export function TelemetryFeed() {
           ) : (
             <button onClick={startWatching}>Start watching</button>
           )}
-          <button className="secondary" onClick={clearEvents} disabled={events.length === 0}>
-            Clear
+          {stream.paused ? (
+            <button onClick={resumeStream}>
+              Resume{stream.pendingCount > 0 ? ` (${stream.pendingCount})` : ""}
+            </button>
+          ) : (
+            <button
+              className="secondary"
+              onClick={pauseStream}
+              disabled={!feed.watching}
+              title="Freeze the table so rows stop moving. Polling continues; new events queue until you resume."
+            >
+              Pause stream
+            </button>
+          )}
+          <button
+            className="secondary"
+            onClick={clearEvents}
+            disabled={events.length === 0}
+            title="Empty the list. The poll cursor is kept, so nothing is re-fetched and nothing is skipped."
+          >
+            Clear buffer
           </button>
         </div>
       </div>
@@ -120,14 +252,38 @@ export function TelemetryFeed() {
         )}
       </div>
 
+      {/* Announced politely so a screen reader hears the queue grow without being interrupted. */}
+      <div role="status" aria-live="polite">
+        {stream.paused && (
+          <div className="notice" style={{ marginTop: 12 }}>
+            <strong>
+              Stream paused ({stream.pendingCount} new event{stream.pendingCount === 1 ? "" : "s"}{" "}
+              pending)
+            </strong>
+            <span className="tiny">
+              The table is frozen so you can read it. Polling carries on in the background and new
+              events queue here; resume to add them in order, with no duplicates and none skipped.
+              {stream.dropped > 0 &&
+                ` ${stream.dropped} older queued event${stream.dropped === 1 ? "" : "s"} fell past the ${STREAM_BUFFER_LIMIT}-event buffer and will not be shown.`}
+            </span>
+          </div>
+        )}
+      </div>
+
       <div className="row" style={{ marginTop: 10, flexWrap: "wrap", gap: 8 }}>
-        <label className="tiny muted" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <label
+          className="tiny muted"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+        >
           Verdict
           <select
             aria-label="Verdict filter"
             value={filter.verdict}
             onChange={(event) =>
-              setFilter((current) => ({ ...current, verdict: event.target.value as VerdictFilter }))
+              applyFilter((current) => ({
+                ...current,
+                verdict: event.target.value as VerdictFilter,
+              }))
             }
           >
             <option value="all">All verdicts</option>
@@ -135,12 +291,17 @@ export function TelemetryFeed() {
             <option value="blocked">Blocked Only</option>
           </select>
         </label>
-        <label className="tiny muted" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <label
+          className="tiny muted"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+        >
           Topic
           <select
             aria-label="Topic filter"
             value={filter.topic}
-            onChange={(event) => setFilter((current) => ({ ...current, topic: event.target.value }))}
+            onChange={(event) =>
+              applyFilter((current) => ({ ...current, topic: event.target.value }))
+            }
           >
             <option value="all">All topics</option>
             {Object.entries(TOPIC_LABELS).map(([topic, label]) => (
@@ -154,15 +315,26 @@ export function TelemetryFeed() {
           aria-label="Contract address search"
           placeholder="Contract address contains…"
           value={filter.contract}
-          onChange={(event) => setFilter((current) => ({ ...current, contract: event.target.value }))}
+          onChange={(event) =>
+            applyFilter((current) => ({ ...current, contract: event.target.value }))
+          }
           style={{ maxWidth: 240 }}
         />
         <button
           className="secondary"
-          onClick={() => downloadText("guard-telemetry.csv", telemetryToCsv(rows), "text/csv;charset=utf-8")}
+          onClick={() => downloadExport("csv")}
           disabled={rows.length === 0}
+          title="Stable append-only schema (docs/export-schema.md): schema_version, guard, topic, kind, source, decision, reason, reason_label, ledger, ledger_closed_at, transaction_hash — BOM-prefixed for Excel"
         >
           Export CSV
+        </button>
+        <button
+          className="secondary"
+          onClick={() => downloadExport("json")}
+          disabled={rows.length === 0}
+          title="Same schema as the CSV export, as one JSON object: schemaVersion, columns, guard, rows"
+        >
+          Export JSON
         </button>
         <button
           className="secondary"
@@ -173,18 +345,31 @@ export function TelemetryFeed() {
         >
           Export NDJSON
         </button>
+        <button
+          className="secondary"
+          onClick={exportAuditLog}
+          disabled={rows.length === 0}
+          title="NDJSON audit log: a header line, then decoded fields, verdict, ledger, transaction hash and the raw event XDR per event (terms in docs/glossary.md — XDR, Ledger, Stroop)"
+        >
+          Export audit log
+        </button>
         {filterActive && (
-          <button className="secondary" onClick={() => setFilter(EMPTY_TELEMETRY_FILTER)}>
+          <button className="secondary" onClick={() => applyFilter(() => EMPTY_TELEMETRY_FILTER)}>
             Clear filters
           </button>
         )}
       </div>
 
       <p className="tiny muted" style={{ marginTop: 8 }}>
-        Tailed from Soroban RPC&apos;s <code>getEvents</code> with a cursor, so no event is delivered
-        twice and none is skipped between polls. Soroban has no push stream — the floor on latency is
-        the ledger close interval (roughly 5s), not the 5s poll.
-        {feed.lastPolledAt && ` Last poll ${relativeTime(feed.lastPolledAt)}.`}
+        Tailed from Soroban RPC&apos;s <code>getEvents</code> with a cursor, so no event is
+        delivered twice and none is skipped between polls. Soroban has no push stream — the floor on
+        latency is the ledger close interval (roughly 5s), not the 5s poll.
+        {feed.lastPolledAt && (
+          <>
+            {" "}
+            Last poll <TimeAgo iso={feed.lastPolledAt} suffix=" ago" />.
+          </>
+        )}
       </p>
 
       <div className="notice info">
@@ -202,32 +387,60 @@ export function TelemetryFeed() {
 
       <TelemetryAlerts />
 
+      <TelemetryChart />
+
       {events.length === 0 ? (
-        <p className="tiny muted">
-          {feed.watching
-            ? "No events from this guard yet. Lifecycle events (policy set, frozen, heartbeat) and allowed decisions appear here as they settle."
-            : "Start watching to tail this guard's events."}
-        </p>
+        feed.watching && feed.latestLedger === null ? (
+          /* The initial load: watching has started but the first poll has not
+             returned (no ledger cursor yet). This is a pending read, not an
+             empty result, so it renders as skeleton rows in the same table
+             shape the events will land in — not as an empty-looking message
+             and not as zeros. */
+          <div className="scrolly" aria-busy="true">
+            <table className="events">
+              {feedHead}
+              <tbody aria-hidden="true">
+                {[0, 1, 2].map((row) => (
+                  <tr key={row}>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="tiny muted">
+            {feed.watching
+              ? "No events from this guard yet. Lifecycle events (policy set, frozen, heartbeat) and allowed decisions appear here as they settle."
+              : "Start watching to tail this guard's events."}
+          </p>
+        )
       ) : rows.length === 0 ? (
         <p className="tiny muted">
-          No events match the current filter. The feed still holds {events.length} event(s);
-          widen the verdict, topic or contract filter to see them.
+          No events match the current filter. The feed still holds {events.length} event(s); widen
+          the verdict, topic or contract filter to see them.
         </p>
       ) : (
         <div className="scrolly">
           <table className="events">
-            <thead>
-              <tr>
-                <th>Event</th>
-                <th>Decision</th>
-                <th>Source</th>
-                <th>Ledger</th>
-                <th>Transaction</th>
-              </tr>
-            </thead>
+            {feedHead}
             <tbody>
               {rows.map((event) => (
-                <TelemetryRow key={eventKey(event)} event={event} />
+                <TelemetryRow key={event.id} event={event} />
               ))}
             </tbody>
           </table>
@@ -237,7 +450,9 @@ export function TelemetryFeed() {
       <p className="tiny muted" style={{ marginTop: 8 }}>
         Feed holds the most recent {events.length} event(s) from{" "}
         <span className="mono">{short(guard, 8, 6)}</span>.
-        {filterActive && <> Showing {rows.length} matching the current filter.</>}
+        {filterActive && <> Showing {rows.length} matching the current filter.</>} The audit log
+        keeps 64-bit values (ledgers, stroop amounts, timestamps) as strings so no precision is
+        lost.
       </p>
     </div>
   );
@@ -253,14 +468,20 @@ export function TelemetryFeed() {
  * cap — the difference between holding frame rate and remounting the table on
  * every update.
  *
- * The key is `eventKey`, the provider's own identity for de-duplication, so
- * React reconciles against the same uniqueness the feed guarantees: a new
+ * The key is the SDK's `event.id`, the same identity the feed de-duplicates
+ * on, so React reconciles against the same uniqueness the feed guarantees: a new
  * event prepending shifts nothing, and no row is ever unmounted and rebuilt
  * merely because rows above it changed.
+ *
+ * Severity rides here, on the row's own attributes, so the tier costs no extra
+ * element and the cells stay exactly as they were — O(1) from fields the decoder
+ * already produced, with no topic or reason string parsed (see `severityFor`).
  */
-const TelemetryRow = memo(function TelemetryRow({ event }: { event: GuardEvent }) {
+const TelemetryRow = memo(function TelemetryRow({ event }: { event: TelemetryEvent }) {
+  const severity = severityFor(event);
+  const iso = event.ledgerClosedAt ?? event.observedAt ?? null;
   return (
-    <tr>
+    <tr className={`severity-${severity}`} data-severity={severity} data-stream={event.source}>
       <td>
         <div>{labelFor(event)}</div>
         <div className="tiny muted mono">{describeGuardEvent(event)}</div>
@@ -280,12 +501,21 @@ const TelemetryRow = memo(function TelemetryRow({ event }: { event: GuardEvent }
         )}
       </td>
       <td>
-        <span className={`pill${event.source === "diagnostic" ? " warn" : ""}`}>{event.source}</span>
+        <span className={`pill${event.source === "diagnostic" ? " warn" : ""}`}>
+          {event.source}
+        </span>
       </td>
-      <td className="mono tiny">{event.ledger ?? "—"}</td>
+      <td className="mono tiny">
+        {iso ? <TimeAgo iso={iso} /> : "—"}
+        {event.ledger ? (
+          <div className="muted" style={{ marginTop: 2 }}>
+            L{event.ledger}
+          </div>
+        ) : null}
+      </td>
       <td>
         {event.transactionHash ? (
-          starLink(event.transactionHash)
+          <TxHashCell hash={event.transactionHash} />
         ) : (
           <span className="tiny muted">none — never broadcast</span>
         )}
@@ -293,6 +523,18 @@ const TelemetryRow = memo(function TelemetryRow({ event }: { event: GuardEvent }
     </tr>
   );
 });
+
+const feedHead = (
+  <thead>
+    <tr>
+      <th>Event</th>
+      <th>Decision</th>
+      <th>Source</th>
+      <th>Time</th>
+      <th>Transaction</th>
+    </tr>
+  </thead>
+);
 
 function labelFor(event: GuardEvent): string {
   switch (event.kind) {
