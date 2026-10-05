@@ -297,10 +297,14 @@ test("there is exactly one imperative live-region writer, and it is the announce
 });
 
 test("every announcement leaves through the queue, not through a component-local region", () => {
-  // The two regions the shell owns are the only aria-live attributes outside the
-  // queue's own markup. `role="status"` elements are exempt: they announce
-  // validation as a side effect of a re-render, which is the correct pattern for
-  // a form error and not what this rule is about.
+  // Every entry here was checked to hold a live region whose text React re-renders
+  // from component state — a chart readout, a toast viewport, an on-page value.
+  // That is the correct pattern for state the page already displays, and it is not
+  // what this rule is about. `role="status"` elements are exempt for the same
+  // reason. What the rule is about is a component that speaks about an operator
+  // action: it must call announce(), so the queue gives it deduplication, ordering
+  // and the cap. A new entry is a judgement to make deliberately, not a list to
+  // widen when it goes red.
   const liveRegions = SOURCES.filter((file) => /aria-live=/.test(file.text)).map(
     (file) => file.path,
   );
@@ -308,6 +312,7 @@ test("every announcement leaves through the queue, not through a component-local
     "components/AriaAnnouncer.tsx",
     "components/HardwareWalletGuide.tsx",
     "components/StatusPanel.tsx",
+    "components/StorageExplorer.tsx",
     "components/TelemetryChart.tsx",
     "components/ToastContainer.tsx",
   ]);
