@@ -623,8 +623,15 @@ export function DeployPanel() {
       {wallet && plan && deployCost && (
         <div className={deployCost.warning ? "error" : "notice info"} style={{ marginTop: 12 }}>
           <strong>Deployment reserve check</strong>
-          <div className="tiny"
-            style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginTop: 8 }}>
+          <div
+            className="tiny"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: 10,
+              marginTop: 8,
+            }}
+          >
             <div>
               <div className="tiny muted">Base tx fee</div>
               <div className="mono">{deployCost.baseFeeXlm} XLM</div>
@@ -651,12 +658,17 @@ export function DeployPanel() {
             </div>
           </div>
           <div className="tiny muted" style={{ marginTop: 8 }}>
-            Remaining after required spend: <span className="mono">{deployCost.balanceAfterRequiredXlm} XLM</span>
+            Remaining after required spend:{" "}
+            <span className="mono">{deployCost.balanceAfterRequiredXlm} XLM</span>
           </div>
           {deployCost.warning && (
             <div className="tiny" style={{ marginTop: 8 }}>
-              Balance is below the reserve safety threshold ({deployCost.safetyBufferXlm} XLM cushion):
-              fund at least {(Number(deployCost.totalRequiredXlm) + Number(deployCost.safetyBufferXlm)).toFixed(7)} XLM before signing.
+              Balance is below the reserve safety threshold ({deployCost.safetyBufferXlm} XLM
+              cushion): fund at least{" "}
+              {(Number(deployCost.totalRequiredXlm) + Number(deployCost.safetyBufferXlm)).toFixed(
+                7,
+              )}{" "}
+              XLM before signing.
             </div>
           )}
         </div>

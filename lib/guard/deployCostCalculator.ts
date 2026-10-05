@@ -76,7 +76,9 @@ function computeInitialRentDeposit(input: DeployCostInput): string {
 
 export function calculateDeployCost(input: DeployCostInput): DeployCostBreakdown {
   const baseFeeXlm = stroopsToDecimal(BASE_TRANSACTION_FEE_STROOPS);
-  const wasmUploadFeeXlm = input.uploadWasm ? stroopsToDecimal(WASM_UPLOAD_FEE_STROOPS) : "0.0000000";
+  const wasmUploadFeeXlm = input.uploadWasm
+    ? stroopsToDecimal(WASM_UPLOAD_FEE_STROOPS)
+    : "0.0000000";
   const contractInstanceFeeXlm = stroopsToDecimal(CONTRACT_INSTANCE_FEE_STROOPS);
   const initialRentDepositXlm = computeInitialRentDeposit(input);
 
@@ -87,7 +89,8 @@ export function calculateDeployCost(input: DeployCostInput): DeployCostBreakdown
   const balanceXlm = normalizeNumericString(input.accountBalanceXlm ?? "0");
   const balanceAfterRequiredXlm = subtractDecimalStrings(balanceXlm, totalRequiredXlm);
   const safetyBufferXlm = "2";
-  const warning = compareDecimalStrings(balanceXlm, addDecimalStrings(totalRequiredXlm, safetyBufferXlm)) < 0;
+  const warning =
+    compareDecimalStrings(balanceXlm, addDecimalStrings(totalRequiredXlm, safetyBufferXlm)) < 0;
 
   return {
     baseFeeXlm,
