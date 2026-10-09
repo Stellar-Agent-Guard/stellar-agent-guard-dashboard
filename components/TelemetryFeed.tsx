@@ -1,5 +1,13 @@
 "use client";
 
+import { useState } from "react";
+import { describeGuardEvent, explainReason } from "stellar-agent-guard-sdk";
+import type { GuardEvent } from "stellar-agent-guard-sdk";
+import { filterEvents, DEFAULT_FILTER, type TelemetryFilter } from "../lib/guard/telemetry";
+import { useGuard } from "./GuardProvider.tsx";
+import { ErrorBlock, relativeTime, short, starLink } from "./bits.tsx";
+import { TelemetryFilterBar } from "./TelemetryFilterBar.tsx";
+import { memo, useState } from "react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { describeGuardEvent, explainReason, GUARD_EVENT_TOPICS } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
@@ -97,6 +105,10 @@ function downloadText(filename: string, content: string, mime: string): void {
  * a noise that can only be silenced in the tab that made it is not an alert.
  */
 export function TelemetryFeed() {
+  const { events, feed, startWatching, stopWatching, clearEvents, guard } = useGuard();
+  const [filter, setFilter] = useState<TelemetryFilter>(DEFAULT_FILTER);
+
+  const filtered = filterEvents(events, filter);
   // The feed subscribes to the events context itself: batches re-render this
   // panel and nothing else (see `GuardEventsContext`).
   const events = useGuardEvents();
@@ -538,11 +550,26 @@ export function TelemetryFeed() {
 
       {feed.error && <ErrorBlock title="The event feed could not poll" detail={feed.error} />}
 
+      <TelemetryFilterBar
+        filter={filter}
+        onChange={setFilter}
+        totalEvents={events.length}
+        filteredCount={filtered.length}
+      />
+
+      {filtered.length === 0 ? (
       <TelemetryAlerts />
 
       <TelemetryChart />
 
       {events.length === 0 ? (
+        <p className="tiny muted">
+          {events.length === 0
+            ? feed.watching
+              ? "No events from this guard yet. Lifecycle events (policy set, frozen, heartbeat) and allowed decisions appear here as they settle."
+              : "Start watching to tail this guard's events."
+            : "No events match the current filters."}
+        </p>
         feed.watching && feed.latestLedger === null ? (
           /* The initial load: watching has started but the first poll has not
              returned (no ledger cursor yet). This is a pending read, not an
@@ -600,6 +627,34 @@ export function TelemetryFeed() {
           <table className={`events ${densityState === "compact" ? "compact" : ""}`}>
             {feedHead}
             <tbody>
+              {filtered.map((event: GuardEvent, index: number) => (
+                <tr key={`${event.topic}-${event.transactionHash ?? "-"}-${event.ledger ?? "-"}-${index}`}>
+                  <td>
+                    <div>{labelFor(event)}</div>
+                    <div className="tiny muted mono">{describeGuardEvent(event)}</div>
+                  </td>
+                  <td>
+                    {event.decision ? (
+                      event.decision.result === "blocked" ? (
+                        <span className="pill danger">{event.decision.reason ?? "blocked"}</span>
+                      ) : (
+                        <span className="pill ok">allowed</span>
+                      )
+                    ) : (
+                      <span className="muted tiny">—</span>
+                    )}
+                    {event.decision?.result === "blocked" && event.decision.reason && (
+                      <div className="tiny muted">{explainReason(event.decision.reason)}</div>
+                    )}
+                  </td>
+                  <td>
+                    <span className={`pill${event.source === "diagnostic" ? " warn" : ""}`}>
+                      {event.source}
+                    </span>
+                  </td>
+                  <td className="mono tiny">{event.ledger ?? "—"}</td>
+                  <td>{event.transactionHash ? starLink(event.transactionHash) : <span className="tiny muted">none — never broadcast</span>}</td>
+                </tr>
               {rows.map((event) => (
                 <TelemetryRow
                   key={event.id}
