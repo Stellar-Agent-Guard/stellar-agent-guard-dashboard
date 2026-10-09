@@ -19,7 +19,7 @@ import { announce } from "../lib/guard/useAnnounce.ts";
 import { NETWORK } from "../lib/guard/network.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { fleetTableState, fleetEmptyCopy } from "../lib/guard/fleetTableState.ts";
-import { Skeleton, starLink } from "./bits.tsx";
+import { NetworkBadge, Skeleton, starContractLink } from "./bits.tsx";
 import { useRouter } from "next/navigation";
 import { freighterSigner } from "../lib/guard/wallet.ts";
 
@@ -253,9 +253,11 @@ export function FleetTable() {
                     <div>
                       <strong>{row.contact.label}</strong>
                     </div>
-                    <div className="mono tiny">{starLink(row.contact.address)}</div>
+                    <div className="mono tiny">{starContractLink(row.contact.address)}</div>
                   </td>
-                  <td className="tiny">{row.network}</td>
+                  <td>
+                    <NetworkBadge network={row.network} />
+                  </td>
                   <td>{renderStatus(row.derivedStatus)}</td>
                   <td className="mono tiny">{formatStroopsWithUnit(row.spend24h)}</td>
                   <td className="mono tiny">

@@ -307,6 +307,40 @@ label.field .hint {
   background: #2a1010;
 }
 
+/*
+ * Per-display network chip (issue #202).
+ *
+ * This is the shared style home for the network context every network-touching
+ * display carries. It is appended here, under the pill family it extends, so a
+ * later change to the badge tokens happens in one place rather than in each
+ * panel. The chip is deliberately quiet — `.pill` geometry, no extra colour —
+ * because it repeats on many values; it is the *presence* of the word next to
+ * an address or hash that is the safety feature, not its emphasis. `data-network`
+ * mirrors the visible text so tests can assert the network without parsing it.
+ */
+.network-chip {
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  text-transform: lowercase;
+  vertical-align: middle;
+}
+
+.address-with-network {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+@media print {
+  /* The chip is context, not decoration: it prints, but flattened to a rule so
+   * it survives the black-on-white report like the other pills. */
+  .network-chip {
+    border: 1px solid black !important;
+    background: transparent !important;
+  }
+}
+
 .error {
   border-left: 3px solid var(--danger);
   background: #1c1113;

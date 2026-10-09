@@ -20,7 +20,7 @@ import {
   type TxHistoryEntry,
 } from "../lib/guard/txHistory.ts";
 import { useAnnounce } from "../lib/guard/useAnnounce.ts";
-import { starLink, TxHashCell } from "./bits.tsx";
+import { NetworkBadge, TxHashCell } from "./bits.tsx";
 
 const PAGE_SIZE = 10;
 
@@ -63,7 +63,10 @@ export function TxHistoryTable() {
   return (
     <div className="panel">
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <h2 style={{ margin: 0 }}>Transaction history</h2>
+        <div className="row" style={{ gap: 8 }}>
+          <h2 style={{ margin: 0 }}>Transaction history</h2>
+          <NetworkBadge />
+        </div>
         <span className="tiny muted">
           {entries.length} of {TX_HISTORY_LIMIT} entries kept in this browser
         </span>

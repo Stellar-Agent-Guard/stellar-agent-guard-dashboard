@@ -39,6 +39,82 @@ export const NETWORK = {
   passphrase: process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE ?? TESTNET.passphrase,
 } as const;
 
+// ── Network context for every network-touching display ──────────────────────
+//
+// An address or a transaction hash is not self-describing: the same 56-character
+// string is meaningless on another network, and a Testnet address pasted into a
+// Mainnet tool fails in a way that looks like the contract vanished rather than
+// like the operator crossed networks. So every display that renders a network
+// value must say *which* network it belongs to, and every explorer link must be
+// composed from the build's own network rather than a hardcoded `testnet` path.
+//
+// These helpers are pure functions of a network name so they are testable with a
+// fixed config: the default argument is the build's network, and the tests pass
+// `"testnet"` / `"mainnet"` explicitly rather than mutating the environment.
+
+/** The public explorer whose paths are keyed by network. */
+export const EXPLORER_BASE_URL = "https://stellar.expert/explorer";
+
+/**
+ * The one word a display shows for a network.
+ *
+ * Freighter and Stellar speak of `public`, an operator reads "Mainnet", and the
+ * build may be configured with either; this maps every spelling onto the word
+ * the chip prints. An unknown network is named as itself rather than guessed at.
+ */
+export function networkDisplayLabel(network: string = NETWORK.name): string {
+  switch (network.trim().toLowerCase()) {
+    case "public":
+    case "mainnet":
+      return "mainnet";
+    case "testnet":
+    case "testing":
+      return "testnet";
+    case "futurenet":
+      return "futurenet";
+    case "standalone":
+    case "local":
+      return "standalone";
+    default:
+      return network.trim().toLowerCase() || "unknown";
+  }
+}
+
+/**
+ * The explorer path segment for a network.
+ *
+ * `stellar.expert` calls public Mainnet `public`, Testnet `testnet`, and
+ * Futurenet `futurenet`; a build configured with the word `mainnet` must still
+ * land on the `public` path or the link 404s. A local standalone network has no
+ * public explorer, so it falls back to the Testnet UI rather than inventing one.
+ */
+export function explorerNetworkSlug(network: string = NETWORK.name): string {
+  switch (network.trim().toLowerCase()) {
+    case "public":
+    case "mainnet":
+      return "public";
+    case "futurenet":
+      return "futurenet";
+    default:
+      return "testnet";
+  }
+}
+
+/** True when the given (or configured) network is Stellar's public Mainnet. */
+export function isMainnet(network: string = NETWORK.name): boolean {
+  return explorerNetworkSlug(network) === "public";
+}
+
+/** A transaction hash's explorer URL on the given (or configured) network. */
+export function explorerTxUrl(hash: string, network: string = NETWORK.name): string {
+  return `${EXPLORER_BASE_URL}/${explorerNetworkSlug(network)}/tx/${hash}`;
+}
+
+/** A contract id's explorer URL on the given (or configured) network. */
+export function explorerContractUrl(contractId: string, network: string = NETWORK.name): string {
+  return `${EXPLORER_BASE_URL}/${explorerNetworkSlug(network)}/contract/${contractId}`;
+}
+
 /**
  * Phase 1's instance on public testnet: where the pinned artifact is published,
  * and therefore where those bytes are read from when nothing overrides it.
