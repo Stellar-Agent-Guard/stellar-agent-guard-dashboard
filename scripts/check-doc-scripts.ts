@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const repoRoot = resolve(new URL("..", import.meta.url).pathname);
+const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const packageJson = JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8")) as {
   scripts?: Record<string, string>;
 };
@@ -27,7 +28,13 @@ for (const file of docFiles) {
 }
 
 const uniqueMissing = missing.filter(
-  (item, index, all) => all.findIndex((candidate) => candidate.name === item.name && candidate.file === item.file && candidate.line === item.line) === index,
+  (item, index, all) =>
+    all.findIndex(
+      (candidate) =>
+        candidate.name === item.name &&
+        candidate.file === item.file &&
+        candidate.line === item.line,
+    ) === index,
 );
 
 if (uniqueMissing.length > 0) {
@@ -42,7 +49,9 @@ if (uniqueMissing.length > 0) {
     if (scripts.includes(command)) documented.add(command);
   }
   const undocumented = scripts.filter((name) => !documented.has(name));
-  console.log(`Validated ${documented.size} documented npm scripts in README.md and CONTRIBUTING.md.`);
+  console.log(
+    `Validated ${documented.size} documented npm scripts in README.md and CONTRIBUTING.md.`,
+  );
   if (undocumented.length > 0) {
     console.log("Informational: package scripts not referenced in docs:");
     for (const name of undocumented) {

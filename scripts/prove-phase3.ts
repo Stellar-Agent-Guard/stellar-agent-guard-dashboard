@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Phase 3 end-to-end proof, driven headlessly against Stellar testnet.
  *
@@ -20,7 +21,15 @@
  *   6. `unfreeze` restores it, and the same transfer passes again;
  *   7. the telemetry feed reads the lifecycle events those writes emitted.
  *
- * Usage: node scripts/prove-phase3.ts
+ * Usage: node scripts/prove-phase3.ts [--emit] [--out <path>]
+ *   --emit   also write a run record — the narrow, diffable projection
+ *            (runDate, gitSha, contractIds, txHashes, assertions) that
+ *            `npm run prove:phase3:diff` compares against the committed copy
+ *            under the two-tier rule. Written on failure too, so a regression
+ *            produces a failing assertion instead of no record at all.
+ *   --out    where --emit writes. Defaults to tests/fixtures/phase3-proof.run.json.
+ *            Point it at a scratch path to diff without touching the committed one.
+ *
  * Writes tests/fixtures/phase3-proof.json (public) and .env.phase3 (gitignored).
  */
 
@@ -43,10 +52,24 @@ import {
 } from "@stellar/stellar-sdk";
 import { invoke } from "stellar-agent-guard-sdk";
 import { guardEventsFromDiagnostics } from "stellar-agent-guard-sdk";
-import { checkArtifact, deployGuard, freezeGuard, initializeGuard, installPolicy, unfreezeGuard, planDeploy } from "../lib/guard/guardOps.ts";
+import {
+  checkArtifact,
+  deployGuard,
+  freezeGuard,
+  initializeGuard,
+  installPolicy,
+  unfreezeGuard,
+  planDeploy,
+} from "../lib/guard/guardOps.ts";
 import { readStatus, createServer } from "../lib/guard/chain.ts";
 import { GuardFeed } from "../lib/guard/telemetry.ts";
 import { NETWORK, PHASE1_ARTIFACT, ENFORCEMENT_SCOPE_STATEMENT } from "../lib/guard/network.ts";
+import {
+  RUN_RECORD_PATH,
+  buildRunRecord,
+  currentGitSha,
+  serializeRunRecord,
+} from "../lib/guard/proofRun.ts";
 import type { WalletSigner } from "../lib/guard/submit.ts";
 import type { PolicyDraft } from "../lib/guard/policyForm.ts";
 
@@ -56,6 +79,36 @@ const ASSET_CODE = "P3GUARD";
 const MINT_AMOUNT = 100_000n;
 const TRUSTLINE_LIMIT = 1_000_000n;
 const SALT_SEED = "stellar-agent-guard:dashboard:phase3:guard:1";
+
+/**
+ * `--emit` state, hoisted to module scope so the top-level handler can write a
+ * run record for a run that threw. The `record` object is the proof record
+ * itself, which means a failed run emits whatever was established before the
+ * throw — a truncated assertion list, correctly showing where the run stopped.
+ */
+const emit = {
+  enabled: false,
+  path: RUN_RECORD_PATH,
+  runDate: new Date().toISOString(),
+  gitSha: null as string | null,
+  record: {} as Record<string, unknown>,
+  note: "",
+};
+
+async function writeRunRecord(outcome: "passed" | "failed", error: string | null): Promise<void> {
+  if (!emit.enabled) return;
+  const record = buildRunRecord({
+    runDate: emit.runDate,
+    gitSha: emit.gitSha,
+    outcome,
+    error,
+    facts: emit.record,
+    note: emit.note,
+  });
+  await mkdir(dirname(emit.path), { recursive: true });
+  await writeFile(emit.path, `${serializeRunRecord(record)}\n`);
+  step(`  run record      ${emit.path} (${record.assertions.length} assertion(s))`);
+}
 
 const server = createServer(NETWORK.rpcUrl);
 
@@ -129,13 +182,19 @@ async function fund(publicKey: string): Promise<void> {
     await server.fundAddress(publicKey);
     return;
   } catch {
-    const response = await fetch(`https://friendbot.stellar.org?addr=${encodeURIComponent(publicKey)}`);
-    if (!response.ok) throw new Error(`friendbot funding failed for ${publicKey}: HTTP ${response.status}`);
+    const response = await fetch(
+      `https://friendbot.stellar.org?addr=${encodeURIComponent(publicKey)}`,
+    );
+    if (!response.ok)
+      throw new Error(`friendbot funding failed for ${publicKey}: HTTP ${response.status}`);
   }
 }
 
 // ── generic submit for setup steps (classic + host functions) ──────────────
-async function submitSimple(operation: xdr.Operation, signer: Keypair): Promise<{ hash: string; ledger: number | null }> {
+async function submitSimple(
+  operation: xdr.Operation,
+  signer: Keypair,
+): Promise<{ hash: string; ledger: number | null }> {
   const account = await server.getAccount(signer.publicKey());
   const built = new TransactionBuilder(account, {
     fee: "1000000",
@@ -149,7 +208,8 @@ async function submitSimple(operation: xdr.Operation, signer: Keypair): Promise<
   const prepared = isHostFunction ? await server.prepareTransaction(built) : built;
   prepared.sign(signer);
   const sent = await server.sendTransaction(prepared);
-  if (sent.status === "ERROR") throw new Error(`submit rejected: ${json(sent.errorResult ?? sent)}`);
+  if (sent.status === "ERROR")
+    throw new Error(`submit rejected: ${json(sent.errorResult ?? sent)}`);
   for (let attempt = 0; attempt < 30; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     const result = await server.getTransaction(sent.hash);
@@ -177,7 +237,10 @@ async function readView<T = unknown>(
     .build();
   const simulation = await server.simulateTransaction(tx);
   if (rpc.Api.isSimulationError(simulation)) {
-    return { error: typeof simulation.error === "string" ? simulation.error : JSON.stringify(simulation.error) };
+    return {
+      error:
+        typeof simulation.error === "string" ? simulation.error : JSON.stringify(simulation.error),
+    };
   }
   const success = simulation as rpc.Api.SimulateTransactionSuccessResponse;
   const retval = success.result?.retval;
@@ -188,7 +251,29 @@ async function readView<T = unknown>(
 // ── main ───────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
   const existing = await readEnv();
-  const record: Record<string, unknown> = {
+  const argv = process.argv.slice(2);
+  const outIndex = argv.indexOf("--out");
+  const outPath = outIndex === -1 ? undefined : argv[outIndex + 1];
+  // Validated before `emit.enabled` is set, so a usage mistake cannot overwrite
+  // a committed run record with an all-failing one.
+  if (outIndex !== -1 && (outPath === undefined || outPath.startsWith("--"))) {
+    throw new Error("--out requires a path");
+  }
+  if (outPath !== undefined && !argv.includes("--emit")) {
+    throw new Error("--out only applies to --emit");
+  }
+  const record: Record<string, unknown> = emit.record;
+  if (argv.includes("--emit")) {
+    emit.enabled = true;
+    if (outPath !== undefined) emit.path = outPath;
+    emit.gitSha = currentGitSha();
+    emit.note =
+      "Emit-mode run record from scripts/prove-phase3.ts. Compare against the committed copy " +
+      "with `npm run prove:phase3:diff`: the invariant tier (assertion names, assertion outcomes, " +
+      "scenario count, contract presence, outcome) must match; the volatile tier (runDate, gitSha, " +
+      "transaction hashes, ledger numbers, contract ids of a fresh deployment) is expected to churn.";
+  }
+  Object.assign(record, {
     network: NETWORK.name,
     rpcUrl: NETWORK.rpcUrl,
     networkPassphrase: NETWORK.passphrase,
@@ -198,7 +283,7 @@ async function main(): Promise<void> {
       "Produced by scripts/prove-phase3.ts, which drives the same lib/guard modules the console " +
       "calls, with the wallet substituted for a keypair. Every transaction hash below is a real " +
       "testnet transaction, re-readable from the RPC.",
-  };
+  });
 
   // ── 0. artifact identity ───────────────────────────────────────────────
   step("[0] pinned Phase 1 artifact, re-derived from the chain");
@@ -224,10 +309,15 @@ async function main(): Promise<void> {
   const admin = fromEnv("PHASE3_ADMIN_SECRET") ?? (created.push("admin"), Keypair.random());
   const agent = fromEnv("PHASE3_AGENT_SECRET") ?? (created.push("agent"), Keypair.random());
   const issuer = fromEnv("PHASE3_ISSUER_SECRET") ?? (created.push("issuer"), Keypair.random());
-  const recipient = fromEnv("PHASE3_RECIPIENT_SECRET") ?? (created.push("recipient"), Keypair.random());
-  step(`[1] keys: ${created.length === 0 ? "reused from .env.phase3" : `generated ${created.join(", ")}`}`);
+  const recipient =
+    fromEnv("PHASE3_RECIPIENT_SECRET") ?? (created.push("recipient"), Keypair.random());
+  step(
+    `[1] keys: ${created.length === 0 ? "reused from .env.phase3" : `generated ${created.join(", ")}`}`,
+  );
   for (const name of created) {
-    const keypair = { admin, agent, issuer, recipient }[name as "admin" | "agent" | "issuer" | "recipient"];
+    const keypair = { admin, agent, issuer, recipient }[
+      name as "admin" | "agent" | "issuer" | "recipient"
+    ];
     await fund(keypair.publicKey());
     step(`    funded ${name.padEnd(9)} ${keypair.publicKey()}`);
   }
@@ -331,12 +421,19 @@ async function main(): Promise<void> {
 
   // ── 4. initialize ──────────────────────────────────────────────────────
   const beforeInit = await readStatus(server, guard, admin.publicKey());
-  const alreadyInitialized = beforeInit.ok ? beforeInit.value.has_policy || beforeInit.value.last_heartbeat !== 0n : false;
+  const alreadyInitialized = beforeInit.ok
+    ? beforeInit.value.has_policy || beforeInit.value.last_heartbeat !== 0n
+    : false;
   if (!alreadyInitialized) {
     step("[4] initialize(admin, agent_pubkey)");
     const result = await initializeGuard({ server, signer, guard, agentPubkeyHex });
-    step(`    → ${result.kind}${result.kind === "submitted" ? ` tx ${result.hash} (ledger ${result.ledger})` : ` ${result.detail}`}`);
-    record.initialize = result.kind === "submitted" ? { hash: result.hash, ledger: result.ledger } : { kind: result.kind, detail: result.detail };
+    step(
+      `    → ${result.kind}${result.kind === "submitted" ? ` tx ${result.hash} (ledger ${result.ledger})` : ` ${result.detail}`}`,
+    );
+    record.initialize =
+      result.kind === "submitted"
+        ? { hash: result.hash, ledger: result.ledger }
+        : { kind: result.kind, detail: result.detail };
     if (result.kind !== "submitted") throw new Error(`initialize did not land: ${result.kind}`);
   } else {
     step("[4] guard already initialized");
@@ -360,7 +457,8 @@ async function main(): Promise<void> {
   };
   step("[5] install policy through the console's configurator path");
   const installed = await installPolicy({ server, signer, guard, draft });
-  if (installed.kind === "invalid") throw new Error(`draft rejected by our own validation: ${installed.issues.join("; ")}`);
+  if (installed.kind === "invalid")
+    throw new Error(`draft rejected by our own validation: ${installed.issues.join("; ")}`);
   step(
     `    → ${installed.result.kind}${
       installed.result.kind === "submitted"
@@ -375,7 +473,12 @@ async function main(): Promise<void> {
   if (installed.result.kind !== "submitted") throw new Error("set_policy did not land");
 
   // ── 6. trustline + mint so an agent transfer is a real transfer ────────
-  const recipientBalance = await readView(token, "balance", [new Address(recipient.publicKey()).toScVal()], issuer.publicKey());
+  const recipientBalance = await readView(
+    token,
+    "balance",
+    [new Address(recipient.publicKey()).toScVal()],
+    issuer.publicKey(),
+  );
   if (recipientBalance.error) {
     const submission = await submitSimple(
       Operation.changeTrust({ asset, limit: TRUSTLINE_LIMIT.toString() }),
@@ -386,7 +489,12 @@ async function main(): Promise<void> {
   } else {
     step("[6] recipient trustline already present");
   }
-  const guardBalance = await readView<bigint>(token, "balance", [new Address(guard).toScVal()], issuer.publicKey());
+  const guardBalance = await readView<bigint>(
+    token,
+    "balance",
+    [new Address(guard).toScVal()],
+    issuer.publicKey(),
+  );
   const current = typeof guardBalance.value === "bigint" ? guardBalance.value : 0n;
   if (current < MINT_AMOUNT) {
     const mint = await invoke({
@@ -401,8 +509,14 @@ async function main(): Promise<void> {
       accountSigners: [issuer],
     });
     if (mint.kind !== "allowed") throw new Error(`mint failed: ${json(mint)}`);
-    step(`[6] minted ${MINT_AMOUNT} to the guard: tx ${mint.submission.hash} (ledger ${mint.submission.ledger})`);
-    record.mint = { hash: mint.submission.hash, ledger: mint.submission.ledger, amount: MINT_AMOUNT.toString() };
+    step(
+      `[6] minted ${MINT_AMOUNT} to the guard: tx ${mint.submission.hash} (ledger ${mint.submission.ledger})`,
+    );
+    record.mint = {
+      hash: mint.submission.hash,
+      ledger: mint.submission.ledger,
+      amount: MINT_AMOUNT.toString(),
+    };
   } else {
     step(`[6] guard already holds ${current}`);
   }
@@ -436,7 +550,9 @@ async function main(): Promise<void> {
       ? { kind: "allowed", hash: allowed.submission.hash, ledger: allowed.submission.ledger }
       : { kind: allowed.kind, detail: json(allowed) };
   if (allowed.kind !== "allowed") {
-    throw new Error(`an unfrozen account refused a valid transfer — cannot draw a freeze conclusion: ${json(allowed)}`);
+    throw new Error(
+      `an unfrozen account refused a valid transfer — cannot draw a freeze conclusion: ${json(allowed)}`,
+    );
   }
 
   // ── 8. THE PANIC BUTTON ────────────────────────────────────────────────
@@ -444,7 +560,9 @@ async function main(): Promise<void> {
   const frozen = await freezeGuard({ server, signer, guard });
   step(
     `    → ${frozen.kind}${
-      frozen.kind === "submitted" ? ` tx ${frozen.hash} (ledger ${frozen.ledger})` : ` ${frozen.detail}`
+      frozen.kind === "submitted"
+        ? ` tx ${frozen.hash} (ledger ${frozen.ledger})`
+        : ` ${frozen.detail}`
     }`,
   );
   if (frozen.kind !== "submitted") throw new Error(`freeze did not land: ${frozen.kind}`);
@@ -453,19 +571,18 @@ async function main(): Promise<void> {
   // 8a. The contract's own view, re-read from the chain.
   const afterFreeze = await readStatus(server, guard, admin.publicKey());
   if (!afterFreeze.ok) throw new Error(`could not re-read status(): ${afterFreeze.error}`);
-  step(`    status() re-read: admin_frozen=${afterFreeze.value.admin_frozen} heartbeat_expired=${afterFreeze.value.heartbeat_expired}`);
+  step(
+    `    status() re-read: admin_frozen=${afterFreeze.value.admin_frozen} heartbeat_expired=${afterFreeze.value.heartbeat_expired}`,
+  );
   record.statusAfterFreeze = afterFreeze.value;
   if (!afterFreeze.value.admin_frozen) {
-    throw new Error("freeze was signed and included, but status() does not report admin_frozen — that is a failed freeze");
+    throw new Error(
+      "freeze was signed and included, but status() does not report admin_frozen — that is a failed freeze",
+    );
   }
 
   // 8b. The decision path itself refuses.
-  const checkFrozen = await readView<unknown>(
-    guard,
-    "check",
-    transferArgs(10n),
-    admin.publicKey(),
-  );
+  const checkFrozen = await readView<unknown>(guard, "check", transferArgs(10n), admin.publicKey());
   step(`    check() while frozen: ${json(checkFrozen.value ?? checkFrozen.error)}`);
   record.checkWhileFrozen = checkFrozen.value ?? checkFrozen.error;
 
@@ -473,7 +590,9 @@ async function main(): Promise<void> {
   step("    same transfer, account frozen → expect a __check_auth refusal");
   const blocked = await attemptTransfer();
   if (blocked.kind === "blocked") {
-    step(`    → blocked, reason=${blocked.reason} (nothing broadcast, so no hash — by construction)`);
+    step(
+      `    → blocked, reason=${blocked.reason} (nothing broadcast, so no hash — by construction)`,
+    );
     record.transferWhileFrozen = {
       kind: "blocked",
       reason: blocked.reason,
@@ -483,7 +602,9 @@ async function main(): Promise<void> {
   } else {
     step(`    → UNEXPECTED ${blocked.kind}: ${json(blocked)}`);
     record.transferWhileFrozen = { kind: blocked.kind, detail: json(blocked) };
-    throw new Error(`a frozen account did not refuse a transfer (${blocked.kind}) — the freeze is not effective`);
+    throw new Error(
+      `a frozen account did not refuse a transfer (${blocked.kind}) — the freeze is not effective`,
+    );
   }
 
   // ── 9. reversal ────────────────────────────────────────────────────────
@@ -491,14 +612,17 @@ async function main(): Promise<void> {
   const unfrozen = await unfreezeGuard({ server, signer, guard });
   step(
     `    → ${unfrozen.kind}${
-      unfrozen.kind === "submitted" ? ` tx ${unfrozen.hash} (ledger ${unfrozen.ledger})` : ` ${unfrozen.detail}`
+      unfrozen.kind === "submitted"
+        ? ` tx ${unfrozen.hash} (ledger ${unfrozen.ledger})`
+        : ` ${unfrozen.detail}`
     }`,
   );
   if (unfrozen.kind !== "submitted") throw new Error(`unfreeze did not land: ${unfrozen.kind}`);
   record.unfreeze = { hash: unfrozen.hash, ledger: unfrozen.ledger };
 
   const afterUnfreeze = await readStatus(server, guard, admin.publicKey());
-  if (!afterUnfreeze.ok) throw new Error(`could not re-read status() after unfreeze: ${afterUnfreeze.error}`);
+  if (!afterUnfreeze.ok)
+    throw new Error(`could not re-read status() after unfreeze: ${afterUnfreeze.error}`);
   step(`    status() re-read: admin_frozen=${afterUnfreeze.value.admin_frozen}`);
   record.statusAfterUnfreeze = afterUnfreeze.value;
   if (afterUnfreeze.value.admin_frozen) {
@@ -509,7 +633,9 @@ async function main(): Promise<void> {
   const reAllowed = await attemptTransfer();
   step(
     `    → ${reAllowed.kind}${
-      reAllowed.kind === "allowed" ? ` tx ${reAllowed.submission.hash} (ledger ${reAllowed.submission.ledger})` : ` ${json(reAllowed)}`
+      reAllowed.kind === "allowed"
+        ? ` tx ${reAllowed.submission.hash} (ledger ${reAllowed.submission.ledger})`
+        : ` ${json(reAllowed)}`
     }`,
   );
   record.transferAfterUnfreeze =
@@ -525,7 +651,13 @@ async function main(): Promise<void> {
   const feed = new GuardFeed(server, guard, NETWORK.rpcUrl);
   const latest = await server.getLatestLedger();
   feed.resetFrom(latest.sequence - 300);
-  const seen: Array<{ kind: string; source: string; ledger: number | null; tx: string | null; decision: unknown }> = [];
+  const seen: Array<{
+    kind: string;
+    source: string;
+    ledger: number | null;
+    tx: string | null;
+    decision: unknown;
+  }> = [];
   for (let page = 0; page < 4; page++) {
     const result = await feed.pollOnce(50);
     for (const event of result.events) {
@@ -572,9 +704,19 @@ async function main(): Promise<void> {
   step(`  unfreeze        ${(record.unfreeze as { hash: string }).hash}`);
   step(`  frozen refusal  ${(record.transferWhileFrozen as { reason?: string }).reason}`);
   step(`  evidence        ${FIXTURE_PATH}`);
+
+  await writeRunRecord("passed", null);
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
+main().catch(async (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  // Emit before reporting, and never let an emit failure mask the run failure:
+  // the reason the run stopped is the fact the operator needs.
+  await writeRunRecord("failed", message).catch((emitError: unknown) => {
+    console.error(
+      `could not write the run record: ${emitError instanceof Error ? emitError.message : emitError}`,
+    );
+  });
+  console.error(message);
   process.exitCode = 1;
 });

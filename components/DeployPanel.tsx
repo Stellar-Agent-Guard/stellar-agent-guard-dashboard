@@ -12,12 +12,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { checkArtifact, deployGuard, initializeGuard, planDeploy } from "../lib/guard/guardOps.ts";
+import { rememberDeployment } from "../lib/guard/setupChecklist.ts";
 import type { ArtifactCheck, DeployOutcome, DeployPlan } from "../lib/guard/guardOps.ts";
+import { deployCostBreakdown } from "../lib/guard/deployCostCalculator.ts";
 import type { InvokeResult } from "../lib/guard/submit.ts";
 import { NETWORK, PHASE1_ARTIFACT } from "../lib/guard/network.ts";
 import { fetchContractWasm, verifyWasmIdentity } from "../lib/guard/chain.ts";
-import { bytesToHex } from "../lib/guard/scval.ts";
+import { toHex } from "../lib/guard/scval.ts";
 import { validateInitParameters, type InitValidation } from "../lib/guard/initValidator.ts";
+import { sanitizeAddressInput } from "../lib/guard/inputSanitizer.ts";
 import {
   contractAlreadyDeployed,
   createSaltAddressPredictor,
@@ -47,6 +50,7 @@ import {
   type IntegrityReport,
 } from "../lib/guard/wasmInspector.ts";
 import { useGuard } from "./GuardProvider.tsx";
+import { CopyButton } from "./CopyButton.tsx";
 import { writeControlState } from "../lib/guard/observerMode.ts";
 import { MigrationWizard } from "./MigrationWizard.tsx";
 import { ErrorBlock, OutcomeList, starLink } from "./bits.tsx";
@@ -54,6 +58,10 @@ import { ErrorBlock, OutcomeList, starLink } from "./bits.tsx";
 /** Either the chain's answer about the artifact, or why there is not one. */
 type ArtifactFetch = { artifact: ArtifactCheck } | { error: string };
 
+// parked-until-upstream: #13
+// The multi-artifact version picker is blocked until the upstream stellar-agent-guard-contracts
+// repository lands its release-workflow and publishes its first versioned artifact, and the SDK
+// exports GUARD_WASM_HASH for the recommended build.
 export function DeployPanel() {
   const { server, signer, wallet, refresh, addInstance, guard } = useGuard();
   const [artifact, setArtifact] = useState<ArtifactCheck | null>(null);
@@ -87,7 +95,9 @@ export function DeployPanel() {
   const [vanityPattern, setVanityPattern] = useState("");
   const [vanityPosition, setVanityPosition] = useState<"prefix" | "suffix">("prefix");
   const [vanityProgress, setVanityProgress] = useState<VanityProgress | null>(null);
-  const [vanityFound, setVanityFound] = useState<{ address: string; attempts: number } | null>(null);
+  const [vanityFound, setVanityFound] = useState<{ address: string; attempts: number } | null>(
+    null,
+  );
   const [vanityError, setVanityError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
   // A plain object the loop reads between candidates: an `AbortController`'s
@@ -95,7 +105,9 @@ export function DeployPanel() {
   // re-renders without becoming state.
   const cancelSearch = useRef({ aborted: false });
 
-  const [collision, setCollision] = useState<{ exists: boolean; detail: string | null } | null>(null);
+  const [collision, setCollision] = useState<{ exists: boolean; detail: string | null } | null>(
+    null,
+  );
 
   const [balances, setBalances] = useState<BalanceReading[] | null>(null);
   const [checkingBalance, setCheckingBalance] = useState(false);
@@ -120,6 +132,26 @@ export function DeployPanel() {
     perTxCap,
     windowCap,
   });
+
+  const [balance, setBalance] = useState<string | null>(null);
+  useEffect(() => {
+    if (!wallet) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const account = (await server.getAccount(wallet.address)) as unknown as {
+          balances?: Array<{ asset_type?: string; balance?: string }>;
+        };
+        const native = account.balances?.find((entry) => entry.asset_type === "native");
+        if (!cancelled) setBalance(native?.balance ?? "0");
+      } catch {
+        if (!cancelled) setBalance("0");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [server, wallet]);
 
   // Fetching and applying are separate: `fetchArtifact` touches no state, so the
   // effect below has nothing synchronous to write, and the panel is never blanked
@@ -154,8 +186,17 @@ export function DeployPanel() {
     };
   }, [fetchArtifact, applyArtifact]);
 
-  const planKey = wallet ? `${wallet.address}:${bytesToHex(salt)}` : "";
+  const planKey = wallet ? `${wallet.address}:${toHex(salt)}` : "";
   const plan = planFor?.key === planKey ? planFor.plan : null;
+  const deployCost =
+    wallet && balance !== null
+      ? deployCostBreakdown({
+          uploadWasm: plan ? !plan.codePresent : false,
+          wasmBytes: PHASE1_ARTIFACT.wasmBytes,
+          contractInstanceBytes: 64,
+          accountBalanceXlm: balance,
+        })
+      : null;
 
   useEffect(() => {
     if (!wallet) return;
@@ -283,7 +324,9 @@ export function DeployPanel() {
     setFundingAccount(true);
     setFundMessage(null);
     const results = await fundWithFriendbot(targets, fundTarget, fetchJson);
-    setFundMessage(results.map((result) => `${result.address.slice(0, 5)}…: ${result.message}`).join(" · "));
+    setFundMessage(
+      results.map((result) => `${result.address.slice(0, 5)}…: ${result.message}`).join(" · "),
+    );
     // Re-read rather than assume: a funded account shows its new balance, and a
     // faucet that accepted the request but failed upstream is caught here.
     setBalances(await probeBalances(targets, fundTarget, fetchJson));
@@ -326,7 +369,12 @@ export function DeployPanel() {
         onStep: (step) => setLiveSteps((current) => [...current, step.label]),
       });
       setOutcome(result);
-      if (result.verified) addInstance(result.guard, "Deployed from this console");
+      if (result.verified) {
+        addInstance(result.guard, "Deployed from this console");
+        // Record the predicted address as the wizard's deploy marker — the one
+        // post-deploy fact the chain cannot re-derive for this browser.
+        rememberDeployment(result.guard);
+      }
       await refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -353,7 +401,7 @@ export function DeployPanel() {
   }
 
   return (
-    <div className="panel">
+    <div className="panel" id="deploy">
       <h2>Deploy a guard</h2>
 
       <p className="tiny muted">
@@ -392,9 +440,7 @@ export function DeployPanel() {
               >
                 {artifact.ok ? "matches" : "MISMATCH"}
               </div>
-              <div className="n">
-                {artifact.ok ? "deploy is permitted" : "deploy is refused"}
-              </div>
+              <div className="n">{artifact.ok ? "deploy is permitted" : "deploy is refused"}</div>
             </div>
           </>
         )}
@@ -414,8 +460,13 @@ export function DeployPanel() {
         <div className="grid">
           <div className="stat">
             <div className="k">Predicted guard address</div>
-            <div className="v small mono">{plan.predicted}</div>
-            <div className="n">computed before signing, then confirmed by reading the instance back</div>
+            <div className="v small mono" title={plan.predicted}>
+              {plan.predicted}
+            </div>
+            <div className="n">
+              computed before signing, then confirmed by reading the instance back{" "}
+              <CopyButton value={plan.predicted} label="predicted guard address" />
+            </div>
           </div>
           <div className="stat">
             <div className="k">Pinned bytecode already on chain</div>
@@ -443,8 +494,8 @@ export function DeployPanel() {
 
       <h3>Choose the salt</h3>
       <p className="tiny muted">
-        The guard&apos;s address comes from the deployer and this salt, so the salt decides where the
-        deployment lands. It can be rolled randomly, typed, or searched for.
+        The guard&apos;s address comes from the deployer and this salt, so the salt decides where
+        the deployment lands. It can be rolled randomly, typed, or searched for.
       </p>
 
       <div className="row">
@@ -484,7 +535,11 @@ export function DeployPanel() {
       </div>
 
       <div className="row">
-        <button className="secondary" onClick={applyTypedSalt} disabled={deploying || typedSalt?.ok !== true}>
+        <button
+          className="secondary"
+          onClick={applyTypedSalt}
+          disabled={deploying || typedSalt?.ok !== true}
+        >
           Use this salt
         </button>
         <button
@@ -560,13 +615,69 @@ export function DeployPanel() {
         <div className="notice info">
           <strong>Found in {vanityFound.attempts.toLocaleString()} tries</strong>
           <span className="tiny mono">{vanityFound.address}</span>
-          <span className="tiny">That salt is now loaded above; the plan is recomputed for it.</span>
+          <span className="tiny">
+            That salt is now loaded above; the plan is recomputed for it.
+          </span>
         </div>
       )}
       {vanityError && (
         <p className="tiny" style={{ color: "var(--danger)" }} role="status">
           {vanityError}
         </p>
+      )}
+
+      {wallet && plan && deployCost && (
+        <div className={deployCost.warning ? "error" : "notice info"} style={{ marginTop: 12 }}>
+          <strong>Deployment reserve check</strong>
+          <div
+            className="tiny"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: 10,
+              marginTop: 8,
+            }}
+          >
+            <div>
+              <div className="tiny muted">Base tx fee</div>
+              <div className="mono">{deployCost.baseFeeXlm} XLM</div>
+            </div>
+            <div>
+              <div className="tiny muted">WASM upload</div>
+              <div className="mono">{deployCost.wasmUploadFeeXlm} XLM</div>
+            </div>
+            <div>
+              <div className="tiny muted">Contract instance</div>
+              <div className="mono">{deployCost.contractInstanceFeeXlm} XLM</div>
+            </div>
+            <div>
+              <div className="tiny muted">Initial rent</div>
+              <div className="mono">{deployCost.initialRentDepositXlm} XLM</div>
+            </div>
+            <div>
+              <div className="tiny muted">Required total</div>
+              <div className="mono">{deployCost.totalRequiredXlm} XLM</div>
+            </div>
+            <div>
+              <div className="tiny muted">Wallet balance</div>
+              <div className="mono">{deployCost.balanceXlm} XLM</div>
+            </div>
+          </div>
+          <div className="tiny muted" style={{ marginTop: 8 }}>
+            Remaining after required spend:{" "}
+            <span className="mono">{deployCost.balanceAfterRequiredXlm} XLM</span>
+          </div>
+          {deployCost.warning && (
+            <div className="tiny" style={{ marginTop: 8 }}>
+              Balance is below the reserve safety threshold ({deployCost.safetyBufferXlm} XLM
+              cushion): fund at least{" "}
+              {(Number(deployCost.totalRequiredXlm) + Number(deployCost.safetyBufferXlm)).toFixed(
+                7,
+              )}{" "}
+              XLM before signing.
+            </div>
+          )}
+        </div>
       )}
 
       <div className="row" style={{ marginTop: 14 }}>
@@ -608,12 +719,14 @@ export function DeployPanel() {
               ? "Deployed and verified against the pinned artifact"
               : "A contract was created, but it is NOT the pinned artifact"}
           </strong>
-          <span className="tiny mono">{outcome.guard}</span>
+          <span className="tiny mono">{outcome.guard}</span>{" "}
+          <CopyButton value={outcome.guard} label="deployed guard address" />
           <OutcomeList steps={outcome.steps} />
           {outcome.identity && (
             <p className="tiny muted">
-              Instance runs {outcome.identity.fetchedSha256.slice(0, 20)}... ({outcome.identity.bytes}{" "}
-              bytes), ledger reports {outcome.identity.reportedWasmHash?.slice(0, 20) ?? "none"}...
+              Instance runs {outcome.identity.fetchedSha256.slice(0, 20)}... (
+              {outcome.identity.bytes} bytes), ledger reports{" "}
+              {outcome.identity.reportedWasmHash?.slice(0, 20) ?? "none"}...
             </p>
           )}
         </div>
@@ -632,7 +745,11 @@ export function DeployPanel() {
             keep a guard alive. This reads the balances the chain actually holds.
           </p>
           <div className="row">
-            <button className="secondary" onClick={() => void checkBalances()} disabled={checkingBalance || !wallet}>
+            <button
+              className="secondary"
+              onClick={() => void checkBalances()}
+              disabled={checkingBalance || !wallet}
+            >
               {checkingBalance ? "Checking..." : "Check balances"}
             </button>
             <button
@@ -644,7 +761,9 @@ export function DeployPanel() {
           </div>
           {balances && (
             <div className={needsFunding(balances) ? "error" : "notice info"} role="status">
-              <span className="t">{needsFunding(balances) ? "Unfunded account warning" : "Balances look funded"}</span>
+              <span className="t">
+                {needsFunding(balances) ? "Unfunded account warning" : "Balances look funded"}
+              </span>
               <span className="tiny mono">{describeBalances(balances)}</span>
             </div>
           )}
@@ -659,18 +778,24 @@ export function DeployPanel() {
       <details className="stack" style={{ marginTop: 14 }}>
         <summary>Bytecode inspector</summary>
         <p className="tiny muted">
-          Fetches the contract&apos;s stored WASM, hashes it here with Web Crypto, and compares it to
-          the pinned artifact — a second opinion on what the ledger says it is running.
+          Fetches the contract&apos;s stored WASM, hashes it here with Web Crypto, and compares it
+          to the pinned artifact — a second opinion on what the ledger says it is running.
         </p>
         <div className="row">
-          <button className="secondary" onClick={() => void inspectBytecode()} disabled={inspecting}>
+          <button
+            className="secondary"
+            onClick={() => void inspectBytecode()}
+            disabled={inspecting}
+          >
             {inspecting ? "Reading bytecode..." : "Inspect this contract"}
           </button>
           <span className="tiny muted">
             Inspecting {(outcome?.guard ?? guard) || "no instance yet"}
           </span>
         </div>
-        {inspectError && <ErrorBlock title="The bytecode could not be read" detail={inspectError} />}
+        {inspectError && (
+          <ErrorBlock title="The bytecode could not be read" detail={inspectError} />
+        )}
         {integrity && (
           <div className={integrity.verdict === "verified" ? "notice info" : "error"} role="status">
             <strong>{integrity.headline}</strong>
@@ -678,7 +803,9 @@ export function DeployPanel() {
             <div className="grid">
               <div className="stat">
                 <div className="k">SHA-256</div>
-                <div className="v small mono">{integrity.sha256 ? `${integrity.sha256.slice(0, 16)}...` : "unreadable"}</div>
+                <div className="v small mono">
+                  {integrity.sha256 ? `${integrity.sha256.slice(0, 16)}...` : "unreadable"}
+                </div>
                 <div className="n">{integrity.bytes} bytes</div>
               </div>
               <div className="stat">
@@ -689,14 +816,18 @@ export function DeployPanel() {
               <div className="stat">
                 <div className="k">Ledger declares</div>
                 <div className="v small mono">
-                  {integrity.reportedWasmHash ? `${integrity.reportedWasmHash.slice(0, 16)}...` : "not reported"}
+                  {integrity.reportedWasmHash
+                    ? `${integrity.reportedWasmHash.slice(0, 16)}...`
+                    : "not reported"}
                 </div>
                 <div className="n">the hash stored with the contract instance</div>
               </div>
             </div>
             <p className="tiny">
               <strong>Entrypoints:</strong>{" "}
-              <span className="mono">{sortEntrypoints(integrity.entrypoints).join(", ") || "none exported"}</span>
+              <span className="mono">
+                {sortEntrypoints(integrity.entrypoints).join(", ") || "none exported"}
+              </span>
             </p>
             <p className="tiny muted">
               <strong>Build metadata:</strong> {describeBuild(integrity.metadata)}
@@ -712,19 +843,19 @@ export function DeployPanel() {
 
       <h3>Initialize a guard</h3>
       <p className="tiny muted">
-        Registers the connected wallet as admin and the agent&apos;s raw Ed25519 public key. One-time:
-        the account is default-deny until a policy is installed on the Configure step.
+        Registers the connected wallet as admin and the agent&apos;s raw Ed25519 public key.
+        One-time: the account is default-deny until a policy is installed on the Configure step.
       </p>
       <label className="field">
         <span className="lbl">Agent public key (32 raw Ed25519 bytes, hex)</span>
         <input
           value={agentPubkey}
-          onChange={(event) => setAgentPubkey(event.target.value)}
+          onChange={(event) => setAgentPubkey(sanitizeAddressInput(event.target.value))}
           placeholder="53b093e0281a2d8f4276b77fd21e3380b3329f09097ace3d9e60cf0f2f9039e2"
         />
         <span className="hint">
-          This is the raw 32-byte key the agent signs with, not its G... strkey form. The SDK derives
-          it from the agent keypair.
+          This is the raw 32-byte key the agent signs with, not its G... strkey form. The SDK
+          derives it from the agent keypair.
         </span>
       </label>
 
@@ -738,7 +869,7 @@ export function DeployPanel() {
         <span className="lbl">Agent account address (G…)</span>
         <input
           value={agentAddress}
-          onChange={(event) => setAgentAddress(event.target.value)}
+          onChange={(event) => setAgentAddress(sanitizeAddressInput(event.target.value))}
           placeholder="GBUQ… (must differ from the connected admin)"
           aria-label="Agent account address"
         />
@@ -746,7 +877,12 @@ export function DeployPanel() {
 
       <div className="grid">
         <label className="field">
-          <span className="lbl">Dead-man grace (seconds)</span>
+          <span
+            className="lbl"
+            title="Seconds the agent may miss its heartbeat before the dead-man's switch freezes the account (docs/glossary.md — Dead-Man's Switch)"
+          >
+            Dead-man grace (seconds)
+          </span>
           <input
             value={dmsDurationSecs}
             onChange={(event) => setDmsDurationSecs(event.target.value)}
@@ -778,18 +914,12 @@ export function DeployPanel() {
 
       <div className="row">
         <button
-          disabled={
-            !wallet ||
-            agentPubkey.trim().length === 0 ||
-            !initValidation.canDeploy
-          }
+          disabled={!wallet || agentPubkey.trim().length === 0 || !initValidation.canDeploy}
           onClick={() => void initialize(outcome?.guard ?? "")}
         >
           Sign and initialize
         </button>
-        {!wallet && (
-          <span className="tiny muted">Connect the admin wallet to initialize.</span>
-        )}
+        {!wallet && <span className="tiny muted">Connect the admin wallet to initialize.</span>}
         {wallet && !initValidation.canDeploy && (
           <span className="tiny" style={{ color: "var(--danger)" }}>
             Resolve {initValidation.blockers.length} blocker
@@ -812,7 +942,9 @@ export function DeployPanel() {
               {starLink(initResult.hash)} - ledger {initResult.ledger ?? "-"}
             </span>
           ) : (
-            <span className="tiny mono">{initResult.kind === "exported" ? "Exported" : initResult.detail}</span>
+            <span className="tiny mono">
+              {initResult.kind === "exported" ? "Exported" : initResult.detail}
+            </span>
           )}
         </div>
       )}
@@ -832,7 +964,12 @@ export function DeployPanel() {
  */
 function InitChecklist({ validation }: { validation: InitValidation }) {
   return (
-    <div className="stack" style={{ marginTop: 12 }} role="group" aria-label="Initialization pre-flight checks">
+    <div
+      className="stack"
+      style={{ marginTop: 12 }}
+      role="group"
+      aria-label="Initialization pre-flight checks"
+    >
       {validation.checks.map((item) =>
         item.passed ? (
           <div key={item.id} className="checkline">

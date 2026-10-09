@@ -21,9 +21,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       setThemeState(saved);
       document.documentElement.setAttribute("data-theme", saved);
     } else {
-      const prefersLight = window.matchMedia("(prefers-color-scheme: light)").matches;
+      const prefersLight =
+        typeof window !== "undefined" && typeof window.matchMedia === "function"
+          ? window.matchMedia("(prefers-color-scheme: light)").matches
+          : false;
       const initial = prefersLight ? "light" : "dark";
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setThemeState(initial);
       document.documentElement.setAttribute("data-theme", initial);
     }
@@ -36,6 +38,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
     const mediaQuery = window.matchMedia("(prefers-color-scheme: light)");
     const listener = (e: MediaQueryListEvent) => {
       if (!localStorage.getItem("theme")) {
@@ -48,11 +51,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     return () => mediaQuery.removeEventListener("change", listener);
   }, []);
 
-  return (
-    <ThemeContext.Provider value={{ theme, setTheme }}>
-      {children}
-    </ThemeContext.Provider>
-  );
+  return <ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider>;
 }
 
 export function useTheme() {
