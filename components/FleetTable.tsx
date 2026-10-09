@@ -19,7 +19,7 @@ import { announce } from "../lib/guard/useAnnounce.ts";
 import { NETWORK } from "../lib/guard/network.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { fleetTableState, fleetEmptyCopy } from "../lib/guard/fleetTableState.ts";
-import { Skeleton, starLink } from "./bits.tsx";
+import { Skeleton, contractLink } from "./bits.tsx";
 import { useRouter } from "next/navigation";
 import { freighterSigner } from "../lib/guard/wallet.ts";
 
@@ -253,7 +253,11 @@ export function FleetTable() {
                     <div>
                       <strong>{row.contact.label}</strong>
                     </div>
-                    <div className="mono tiny">{starLink(row.contact.address)}</div>
+                    {/* The contract route, not the transaction route: this is a
+                        `C…` contract id, so a `/tx/` link could never resolve. The
+                        link carries its own network chip, and the row's Network
+                        column states it in words beside it. */}
+                    <div className="mono tiny">{contractLink(row.contact.address)}</div>
                   </td>
                   <td className="tiny">{row.network}</td>
                   <td>{renderStatus(row.derivedStatus)}</td>

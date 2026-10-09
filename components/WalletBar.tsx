@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useGuard } from "./GuardProvider.tsx";
 import { AddressText, ErrorBlock, short, useAddressLabel } from "./bits.tsx";
+import { NetworkChip } from "./NetworkChip.tsx";
 import { AddressBookModal } from "./AddressBookModal.tsx";
 import {
   isKnownInstance,
@@ -85,15 +86,15 @@ export function WalletBar() {
       <div className="split">
         <div>
           <label className="field">
-            <span className="lbl">Guarded account (the smart account being operated)</span>
-            {/* Native select on purpose: keyboard navigation, type-ahead and
-                screen-reader semantics come for free, where a custom listbox
-                would have to re-earn all three. */}
-            <select
-              value={guard}
-              onChange={(event) => selectGuard(event.target.value)}
-              aria-label="Active guard"
-            >
+            <span className="lbl">
+              Guarded account (the smart account being operated) <NetworkChip />
+            </span>
+            {/* The chip rides the field label, not the options: a native
+                <select> renders plain text, so an <option> cannot carry one.
+                Every instance this lists is an instance on the one network this
+                console reads, and the mismatch banner above is what catches one
+                that was registered from a link off another. */}
+            <select value={guard} onChange={(event) => selectGuard(event.target.value)}>
               {instances.map((instance) => (
                 <option key={instance.guard} value={instance.guard}>
                   {instance.label} — {short(instance.guard, 8, 6)} · {instance.network}
@@ -174,6 +175,7 @@ export function WalletBar() {
                 <span className="pill ok">connected</span>
                 {provider && <span className="pill">{provider.name}</span>}
                 <AddressText address={wallet.address} />
+                <NetworkChip />
                 <button
                   className="secondary"
                   onClick={() => setPickerOpen(true)}

@@ -307,6 +307,43 @@ label.field .hint {
   background: #2a1010;
 }
 
+/*
+ * Network chip — the shared primitive for naming the network next to a value
+ * that only exists on one (components/NetworkChip.tsx).
+ *
+ * Appended here, beside `.pill`, rather than forked per component: the chip is
+ * the answer to "which ledger is this address from?", and an answer that looks
+ * different on the deploy result than it does on the status block is not an
+ * answer an operator can rely on while scrolling fast.
+ *
+ * Deliberately NOT one of the `.pill` tone modifiers. `.pill.ok/warn/danger`
+ * carry the severity tier ("safe but not what you assumed" / "refusing work"),
+ * and the network is not a severity: the same `testnet` chip is equally correct
+ * beside a healthy balance and beside a frozen account. Borrowing the tier
+ * colours would put a severity signal on a neutral fact, and an operator who has
+ * learned to read `warn` as "something needs your attention" would be trained to
+ * ignore the one chip that is always on screen.
+ *
+ * It reads in the accent token for the same reason the focus ring does: it is
+ * chrome that identifies the value, not a state of it. The muted text keeps it
+ * quieter than the address it labels, which is the point — the label is
+ * context, and the address is the content.
+ */
+.network-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+
 .error {
   border-left: 3px solid var(--danger);
   background: #1c1113;
@@ -1202,6 +1239,16 @@ code {
   .pill.danger {
     background: transparent !important;
     border: 1px solid black !important;
+  }
+  /* The network chip prints too. An auditor reading a paper compliance report
+   * must be able to tell which ledger every printed id came from without
+   * turning to the `Network:` field further up the page — and the chip is the
+   * form that survives the `* { color: black }` rule above, since it is
+   * already a muted-on-transparent outline with no filled surface to invert. */
+  .network-chip {
+    background: transparent !important;
+    border: 1px solid black !important;
+    color: black !important;
   }
   /* The warning tier prints too — an operator who prints the compliance report
    * must still read the default-deny banner, so the tier's dark surface has to

@@ -4,6 +4,8 @@ import React, { useEffect, useState, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useGuard } from "./GuardProvider.tsx";
 import { fuzzyMatch, type CommandAction } from "../lib/guard/commands.ts";
+import { NETWORK } from "../lib/guard/network.ts";
+import { NetworkChip } from "./NetworkChip.tsx";
 
 export function CommandPaletteInner({
   router,
@@ -85,6 +87,7 @@ export function CommandPaletteInner({
         id: `guard-${inst.guard}`,
         name: `Switch to ${inst.label} (${inst.guard.slice(0, 6)}...)`,
         category: "Guard",
+        networkName: NETWORK.name,
         action: () => selectGuard(inst.guard),
       });
     });
@@ -193,7 +196,9 @@ export function CommandPaletteInner({
               >
                 {cmd.category}
               </div>
-              <div style={{ fontSize: "14px" }}>{cmd.name}</div>
+              <div style={{ fontSize: "14px" }}>
+                {cmd.name} {cmd.networkName ? <NetworkChip network={NETWORK} /> : null}
+              </div>
             </li>
           ))}
           {commands.length === 0 && (

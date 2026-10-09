@@ -23,6 +23,7 @@ import {
 } from "../lib/guard/migration.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, starLink } from "./bits.tsx";
+import { NetworkChip } from "./NetworkChip.tsx";
 
 /** Either the chain's policy, or why there is not one. */
 type SourceRead =
@@ -93,12 +94,19 @@ export function MigrationWizard({ target }: { target: string }) {
       <h3>Move a policy from another guard</h3>
       <p className="tiny muted">
         Reads the live policy off a source instance and prepares the same rules for{" "}
-        <span className="mono">{target || "the selected guard"}</span>. Nothing is written until you
-        sign it, and a field the source does not carry is reported as missing rather than defaulted.
+        <span className="mono">{target || "the selected guard"}</span>
+        {target ? <NetworkChip /> : null}. Nothing is written until you sign it, and a field the
+        source does not carry is reported as missing rather than defaulted.
       </p>
 
       <label className="field">
-        <span className="lbl">Source guard</span>
+        <span className="lbl">
+          Source guard <NetworkChip />
+        </span>
+        {/* The chip is on the field label rather than on the options because a
+              native <select> renders plain text: an <option> cannot carry a
+              chip, so the id each entry names has to be labelled by the control
+              that lists them. */}
         <select value={source} onChange={(event) => setSource(event.target.value)}>
           <option value="">Choose an instance…</option>
           {candidates.map((instance) => (
@@ -148,14 +156,22 @@ export function MigrationWizard({ target }: { target: string }) {
       {plan && (
         <div className="stack">
           <div className="grid">
+            {/* Two contract ids side by side, with one about to be overwritten
+                by the other: this is where an id copied off the wrong network
+                would do real damage, so each states its own network rather
+                than relying on the chip at the top of the panel. */}
             <div className="stat">
               <div className="k">From</div>
-              <div className="v small mono">{source}</div>
+              <div className="v small mono">
+                {source} <NetworkChip />
+              </div>
               <div className="n">read from the chain just now</div>
             </div>
             <div className="stat">
               <div className="k">To</div>
-              <div className="v small mono">{target}</div>
+              <div className="v small mono">
+                {target} <NetworkChip />
+              </div>
               <div className="n">the target instance&apos;s policy will be replaced</div>
             </div>
           </div>

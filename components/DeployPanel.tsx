@@ -51,9 +51,11 @@ import {
 } from "../lib/guard/wasmInspector.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { CopyButton } from "./CopyButton.tsx";
+import { NetworkChip } from "./NetworkChip.tsx";
 import { writeControlState } from "../lib/guard/observerMode.ts";
+import { SECURITY_POLICY_URL, UNAUDITED_DISCLOSURE } from "../lib/guard/auditDisclosure.ts";
 import { MigrationWizard } from "./MigrationWizard.tsx";
-import { ErrorBlock, OutcomeList, starLink } from "./bits.tsx";
+import { ErrorBlock, OutcomeList, starLink, WarningBanner } from "./bits.tsx";
 
 /** Either the chain's answer about the artifact, or why there is not one. */
 type ArtifactFetch = { artifact: ArtifactCheck } | { error: string };
@@ -401,14 +403,29 @@ export function DeployPanel() {
   }
 
   return (
-    <div className="panel" id="deploy">
-      <h2>Deploy a guard</h2>
+    <div className="panel">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h2 style={{ margin: 0 }}>Deploy a guard</h2>
+        <NetworkChip />
+      </div>
 
       <p className="tiny muted">
         Deploys the artifact Phase 1 proved. The bytecode is fetched from the chain and hashed here
         before anything is signed, so this cannot ship a different binary than the one that was
         verified.
       </p>
+
+      {/* Disclosure, not a control: the deploy surface is where an operator
+          decides to put unaudited bytecode in front of real funds, and the
+          README's own sentence belongs at that decision rather than only in a
+          document they may not have read. It blocks nothing — the write gate
+          is the wallet/network guard plus the artifact check below. */}
+      <WarningBanner tier="warn" title="Unaudited tooling">
+        <span className="tiny">{UNAUDITED_DISCLOSURE}</span>{" "}
+        <a className="tiny" href={SECURITY_POLICY_URL} target="_blank" rel="noreferrer">
+          Security policy
+        </a>
+      </WarningBanner>
 
       <div className="grid" style={{ marginTop: 12 }}>
         <div className="stat">
@@ -461,7 +478,7 @@ export function DeployPanel() {
           <div className="stat">
             <div className="k">Predicted guard address</div>
             <div className="v small mono" title={plan.predicted}>
-              {plan.predicted}
+              {plan.predicted} <NetworkChip />
             </div>
             <div className="n">
               computed before signing, then confirmed by reading the instance back{" "}
@@ -486,8 +503,9 @@ export function DeployPanel() {
         <div className="error" role="alert" style={{ marginTop: 8 }}>
           <span className="t">Address already taken</span>
           <span className="tiny">
-            A contract already lives at {predicted}. Generate a new salt or choose another before
-            signing — the deploy would fail on collision rather than overwrite anything.
+            A contract already lives at {predicted} <NetworkChip />. Generate a new salt or choose
+            another before signing — the deploy would fail on collision rather than overwrite
+            anything.
           </span>
         </div>
       )}
@@ -614,7 +632,9 @@ export function DeployPanel() {
       {vanityFound && (
         <div className="notice info">
           <strong>Found in {vanityFound.attempts.toLocaleString()} tries</strong>
-          <span className="tiny mono">{vanityFound.address}</span>
+          <span className="tiny mono">
+            {vanityFound.address} <NetworkChip />
+          </span>
           <span className="tiny">
             That salt is now loaded above; the plan is recomputed for it.
           </span>
@@ -719,7 +739,9 @@ export function DeployPanel() {
               ? "Deployed and verified against the pinned artifact"
               : "A contract was created, but it is NOT the pinned artifact"}
           </strong>
-          <span className="tiny mono">{outcome.guard}</span>{" "}
+          <span className="tiny mono">
+            {outcome.guard} <NetworkChip />
+          </span>{" "}
           <CopyButton value={outcome.guard} label="deployed guard address" />
           <OutcomeList steps={outcome.steps} />
           {outcome.identity && (

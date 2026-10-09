@@ -17,9 +17,7 @@ import {
 } from "./bits.tsx";
 import { INITIAL_GRID_LABELS, skeletonSpecFor } from "../lib/guard/statusReadState.ts";
 import { CopyButton } from "./CopyButton.tsx";
-import { StorageExplorerButton } from "./StorageExplorer.tsx";
-import { WebhookAlertBridge } from "./WebhookAlertBridge.tsx";
-import { WebhookSettingsButton } from "./WebhookSettings.tsx";
+import { NetworkChip } from "./NetworkChip.tsx";
 import { PHASE1_ARTIFACT, NETWORK } from "../lib/guard/network.ts";
 import { configureHref } from "../lib/guard/deeplink.ts";
 import { NO_POLICY_CONSEQUENCE, policyStateFrom } from "../lib/guard/policyState.ts";
@@ -164,7 +162,8 @@ export function StatusPanel() {
         </div>
 
         <p className="tiny muted" style={{ marginTop: 10 }}>
-          <span className="mono">{guard}</span> <CopyButton value={guard} label="guard address" />
+          <span className="mono">{guard}</span> <NetworkChip />{" "}
+          <CopyButton value={guard} label="guard address" />
         </p>
 
         <RehearsalModeToggle />

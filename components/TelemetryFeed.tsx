@@ -8,6 +8,7 @@ import { useGuard, useGuardEvents } from "./GuardProvider.tsx";
 import { TelemetryAlerts } from "./TelemetryAlerts.tsx";
 import { TelemetryChart } from "./TelemetryChart.tsx";
 import { ErrorBlock, Skeleton, TimeAgo, short, starLink, TxHashCell } from "./bits.tsx";
+import { NetworkChip } from "./NetworkChip.tsx";
 import { DateRangePicker } from "./DateRangePicker.tsx";
 import type { RangePreset, TimeRange } from "../lib/guard/ledgerTime.ts";
 import { density, initDensityStore } from "../lib/guard/densityStore.ts";
@@ -614,12 +615,8 @@ export function TelemetryFeed() {
 
       <p className="tiny muted" style={{ marginTop: 8 }}>
         Feed holds the most recent {events.length} event(s) from{" "}
-        {feed.guards.length > 1 ? (
-          `${feed.guards.length} tailed guards`
-        ) : (
-          <span className="mono">{short(guard, 8, 6)}</span>
-        )}
-        .{filterActive && <> Showing {rows.length} matching the current filter.</>} The audit log
+        <span className="mono">{short(guard, 8, 6)}</span> <NetworkChip />.
+        {filterActive && <> Showing {rows.length} matching the current filter.</>} The audit log
         keeps 64-bit values (ledgers, stroop amounts, timestamps) as strings so no precision is
         lost.
       </p>
