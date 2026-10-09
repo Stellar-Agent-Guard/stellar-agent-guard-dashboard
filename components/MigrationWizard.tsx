@@ -22,7 +22,7 @@ import {
   type CompatibilityReport,
 } from "../lib/guard/migration.ts";
 import { useGuard } from "./GuardProvider.tsx";
-import { ErrorBlock, starLink } from "./bits.tsx";
+import { ErrorBlock, NetworkChip, starLink } from "./bits.tsx";
 
 /** Either the chain's policy, or why there is not one. */
 type SourceRead =
@@ -93,8 +93,15 @@ export function MigrationWizard({ target }: { target: string }) {
       <h3>Move a policy from another guard</h3>
       <p className="tiny muted">
         Reads the live policy off a source instance and prepares the same rules for{" "}
-        <span className="mono">{target || "the selected guard"}</span>. Nothing is written until you
-        sign it, and a field the source does not carry is reported as missing rather than defaulted.
+        <span className="mono">{target || "the selected guard"}</span>
+        {target !== "" && (
+          <>
+            {" "}
+            <NetworkChip />
+          </>
+        )}
+        . Nothing is written until you sign it, and a field the source does not carry is reported as
+        missing rather than defaulted.
       </p>
 
       <label className="field">
@@ -238,7 +245,8 @@ export function MigrationWizard({ target }: { target: string }) {
           </strong>
           {applied.result.kind === "submitted" ? (
             <span className="tiny">
-              {starLink(applied.result.hash)} - ledger {applied.result.ledger ?? "-"}
+              {starLink(applied.result.hash)} - ledger {applied.result.ledger ?? "-"}{" "}
+              <NetworkChip />
             </span>
           ) : (
             <span className="tiny mono">

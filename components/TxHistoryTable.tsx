@@ -20,7 +20,7 @@ import {
   type TxHistoryEntry,
 } from "../lib/guard/txHistory.ts";
 import { useAnnounce } from "../lib/guard/useAnnounce.ts";
-import { starLink, TxHashCell } from "./bits.tsx";
+import { TxHashCell } from "./bits.tsx";
 
 const PAGE_SIZE = 10;
 

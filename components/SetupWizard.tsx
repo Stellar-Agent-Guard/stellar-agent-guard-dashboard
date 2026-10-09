@@ -23,7 +23,7 @@ import { isInitialized, readPolicy, readStatus, type ReadResult } from "../lib/g
 import { deriveSetupSteps, readSetupState, writeSetupState } from "../lib/guard/setupChecklist.ts";
 import { isDemoMode } from "../lib/guard/demoFixtures.ts";
 import { useGuard } from "./GuardProvider.tsx";
-import { ErrorBlock, short } from "./bits.tsx";
+import { ErrorBlock, NetworkChip, short } from "./bits.tsx";
 
 const MARKER: Record<string, string> = { done: "✓", pending: "○", error: "!" };
 const STATE_TEXT: Record<string, string> = { done: "Done", pending: "Pending", error: "Error" };
@@ -214,8 +214,8 @@ export function SetupWizard() {
           agent documentation
         </a>{" "}
         for wiring the SDK and running the agent against this guard. Wizard state for this guard (
-        <span className="mono">{short(guard, 8, 6)}</span>) is stored with exactly two fields:
-        dismissed + deploy marker.
+        <span className="mono">{short(guard, 8, 6)}</span> <NetworkChip />) is stored with exactly
+        two fields: dismissed + deploy marker.
       </p>
     </div>
   );

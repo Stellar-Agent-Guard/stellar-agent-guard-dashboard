@@ -7,7 +7,15 @@ import { STREAM_BUFFER_LIMIT, type TelemetryEvent } from "../lib/guard/telemetry
 import { useGuard, useGuardEvents } from "./GuardProvider.tsx";
 import { TelemetryAlerts } from "./TelemetryAlerts.tsx";
 import { TelemetryChart } from "./TelemetryChart.tsx";
-import { ErrorBlock, Skeleton, TimeAgo, short, starLink, TxHashCell } from "./bits.tsx";
+import {
+  ErrorBlock,
+  NetworkChip,
+  Skeleton,
+  TimeAgo,
+  short,
+  starLink,
+  TxHashCell,
+} from "./bits.tsx";
 import { DateRangePicker } from "./DateRangePicker.tsx";
 import type { RangePreset, TimeRange } from "../lib/guard/ledgerTime.ts";
 import { density, initDensityStore } from "../lib/guard/densityStore.ts";
@@ -678,8 +686,12 @@ const TelemetryRow = memo(function TelemetryRow({
       </td>
       <td>
         {guardLabel !== null ? (
+          // The chip is not decoration here: the feed is the one table that can
+          // mix events from every guard an operator follows, and a feed read
+          // across a network switch is exactly how a "why did my guard let that
+          // through" question gets pointed at the wrong chain.
           <span className="pill" title={event.contractId ?? "unknown contract"}>
-            {guardLabel}
+            {guardLabel} <NetworkChip />
           </span>
         ) : (
           <span className="tiny muted">—</span>

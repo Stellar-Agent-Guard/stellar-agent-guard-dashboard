@@ -307,6 +307,46 @@ label.field .hint {
   background: #2a1010;
 }
 
+/*
+ * Network chip — the per-value half of "which network is this?".
+ *
+ * The WalletBar states the build's network once, globally, and stays that way.
+ * What it cannot do is follow the operator down the page: the deploy result sits
+ * far below the fold, and scroll position is exactly what puts the bar out of
+ * sight at the moment an address gets copied out of it. A chip beside every
+ * address, contract id and transaction hash repeats the answer locally, so no
+ * value can be read without the network it came from — the cross-network
+ * confusion the deploy and status surfaces are most exposed to.
+ *
+ * Deliberately the *quiet* half of the badge vocabulary: it uses `.pill`'s own
+ * neutral surface and `--muted` text with no severity tint, because it is not a
+ * verdict. `.pill.ok` / `.warn` / `.danger` mean "this is going well" / "read
+ * this" / "act now"; a network chip only ever means "this is where it is". An
+ * operator who learned to read the tinted pills as alarms should not have to
+ * re-read an untinted one to know it is not one.
+ */
+.net-chip {
+  display: inline-block;
+  padding: 1.5px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  white-space: nowrap;
+  vertical-align: baseline;
+  border: 1px dashed var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+/* Where a chip follows a value inline, the value keeps its own margin and the
+ * chip does not borrow any — the gap belongs to the gap between them, not to
+ * either one, so tightening a chip cannot pull text against text. */
+.net-chip + .net-chip {
+  margin-left: 4px;
+}
+
 .error {
   border-left: 3px solid var(--danger);
   background: #1c1113;
@@ -1200,6 +1240,14 @@ code {
   .pill.ok,
   .pill.warn,
   .pill.danger {
+    background: transparent !important;
+    border: 1px solid black !important;
+  }
+  /* The network chip prints too, and for the same reason the pill tiers do: a
+   * printed record that lists an address without naming its network is the one
+   * artefact an operator cannot re-check later. Its dashed border is dropped
+   * because a hairline dash is worth nothing on paper; the word is the claim. */
+  .net-chip {
     background: transparent !important;
     border: 1px solid black !important;
   }

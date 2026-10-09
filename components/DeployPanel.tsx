@@ -53,7 +53,7 @@ import { useGuard } from "./GuardProvider.tsx";
 import { CopyButton } from "./CopyButton.tsx";
 import { writeControlState } from "../lib/guard/observerMode.ts";
 import { MigrationWizard } from "./MigrationWizard.tsx";
-import { ErrorBlock, OutcomeList, starLink } from "./bits.tsx";
+import { ErrorBlock, NetworkChip, OutcomeList, starLink } from "./bits.tsx";
 
 /** Either the chain's answer about the artifact, or why there is not one. */
 type ArtifactFetch = { artifact: ArtifactCheck } | { error: string };
@@ -461,7 +461,7 @@ export function DeployPanel() {
           <div className="stat">
             <div className="k">Predicted guard address</div>
             <div className="v small mono" title={plan.predicted}>
-              {plan.predicted}
+              {plan.predicted} <NetworkChip />
             </div>
             <div className="n">
               computed before signing, then confirmed by reading the instance back{" "}
@@ -486,8 +486,9 @@ export function DeployPanel() {
         <div className="error" role="alert" style={{ marginTop: 8 }}>
           <span className="t">Address already taken</span>
           <span className="tiny">
-            A contract already lives at {predicted}. Generate a new salt or choose another before
-            signing — the deploy would fail on collision rather than overwrite anything.
+            A contract already lives at {predicted} <NetworkChip />. Generate a new salt or choose
+            another before signing — the deploy would fail on collision rather than overwrite
+            anything.
           </span>
         </div>
       )}
@@ -614,7 +615,9 @@ export function DeployPanel() {
       {vanityFound && (
         <div className="notice info">
           <strong>Found in {vanityFound.attempts.toLocaleString()} tries</strong>
-          <span className="tiny mono">{vanityFound.address}</span>
+          <span className="tiny mono">
+            {vanityFound.address} <NetworkChip />
+          </span>
           <span className="tiny">
             That salt is now loaded above; the plan is recomputed for it.
           </span>
@@ -719,7 +722,9 @@ export function DeployPanel() {
               ? "Deployed and verified against the pinned artifact"
               : "A contract was created, but it is NOT the pinned artifact"}
           </strong>
-          <span className="tiny mono">{outcome.guard}</span>{" "}
+          <span className="tiny mono">
+            {outcome.guard} <NetworkChip />
+          </span>{" "}
           <CopyButton value={outcome.guard} label="deployed guard address" />
           <OutcomeList steps={outcome.steps} />
           {outcome.identity && (
@@ -790,7 +795,8 @@ export function DeployPanel() {
             {inspecting ? "Reading bytecode..." : "Inspect this contract"}
           </button>
           <span className="tiny muted">
-            Inspecting {(outcome?.guard ?? guard) || "no instance yet"}
+            Inspecting {(outcome?.guard ?? guard) || "no instance yet"}{" "}
+            {(outcome?.guard ?? guard) !== "" && <NetworkChip />}
           </span>
         </div>
         {inspectError && (
@@ -939,7 +945,7 @@ export function DeployPanel() {
           </strong>
           {initResult.kind === "submitted" ? (
             <span className="tiny">
-              {starLink(initResult.hash)} - ledger {initResult.ledger ?? "-"}
+              {starLink(initResult.hash)} - ledger {initResult.ledger ?? "-"} <NetworkChip />
             </span>
           ) : (
             <span className="tiny mono">

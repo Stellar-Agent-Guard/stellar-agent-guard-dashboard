@@ -35,7 +35,7 @@ import {
   unmatchedSignatures,
 } from "../lib/guard/multisigRead.ts";
 import { useGuard } from "./GuardProvider.tsx";
-import { ErrorBlock } from "./bits.tsx";
+import { ErrorBlock, NetworkChip } from "./bits.tsx";
 import { announce } from "../lib/guard/useAnnounce.ts";
 
 interface TrackerReport {
@@ -214,6 +214,11 @@ export function MultisigTracker() {
               <span className="mono tiny" title={report.hash}>
                 hash {report.hash.slice(0, 12)}…{report.hash.slice(-6)}
               </span>
+              {/* The envelope is what the co-signers will verify against their own
+                  view of the chain, so the network travels with it here: an envelope
+                  hash signed for one network is not valid on another, and a co-signer
+                  who has not noticed that signs a transaction that can never land. */}
+              <NetworkChip />
               <button className="secondary" onClick={() => void doCopy("hash")}>
                 {copied === "hash" ? "Copied" : "Copy hash"}
               </button>

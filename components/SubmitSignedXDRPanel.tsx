@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useGuard } from "./GuardProvider.tsx";
-import { ErrorBlock, OutcomeList, starLink } from "./bits.tsx";
+import { ErrorBlock, NetworkChip, OutcomeList, starLink } from "./bits.tsx";
 import { TransactionBuilder } from "@stellar/stellar-sdk";
 import { NETWORK } from "../lib/guard/network.ts";
 import { announce } from "../lib/guard/useAnnounce.ts";
@@ -56,7 +56,9 @@ export function SubmitSignedXDRPanel() {
       {error && <ErrorBlock title="Submission failed" detail={error} />}
       {successHash && (
         <div className="notice info" style={{ marginTop: "16px" }}>
-          <strong>Transaction submitted — {starLink(successHash)}</strong>
+          <strong>
+            Transaction submitted — {starLink(successHash)} <NetworkChip />
+          </strong>
         </div>
       )}
     </div>

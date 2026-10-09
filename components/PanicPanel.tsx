@@ -22,7 +22,7 @@ import { formatStroops, formatStroopsWithUnit } from "../lib/guard/formatters.ts
 import { refusedEventsFromDiagnostics } from "../lib/guard/telemetry.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { WRITE_DISABLED_HINT, writeControlState } from "../lib/guard/observerMode.ts";
-import { ErrorBlock, starLink } from "./bits.tsx";
+import { ErrorBlock, NetworkChip, starLink } from "./bits.tsx";
 import {
   freezeConfirmed,
   freezeFailed,
@@ -724,7 +724,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
           {report.result.kind === "submitted" && (
             <p className="tiny" style={{ marginTop: 6 }}>
               transaction {starLink(report.result.hash)} · included in ledger{" "}
-              {report.result.ledger ?? "—"}{" "}
+              {report.result.ledger ?? "—"} <NetworkChip />{" "}
               <CopyButton value={report.result.hash} label="freeze transaction hash" />
             </p>
           )}
@@ -737,7 +737,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
           {report.result.kind === "failed" && (
             <p className="tiny" style={{ marginTop: 6 }}>
               Transaction {starLink(report.result.hash)} was included and rejected:{" "}
-              <span className="mono">{report.result.detail}</span>
+              <span className="mono">{report.result.detail}</span> <NetworkChip />
             </p>
           )}
 

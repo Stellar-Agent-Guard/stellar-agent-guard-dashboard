@@ -377,17 +377,19 @@ All styling adheres to the CSS variables in [`app/globals.css`](../../app/global
 
 ### 3. Reusable Components in `components/bits.tsx`
 
-| Component           | Props                                                                     | Description                                                      |
-| :------------------ | :------------------------------------------------------------------------ | :--------------------------------------------------------------- |
-| `<Stat />`          | `label`, `value`, `note?`, `tone?` (`"ok"` \| `"warn"` \| `"danger"`)     | Standard metric card inside a `.grid`.                           |
-| `<Read />`          | `result: ReadResult<T>`, `label: string`, `render: (val: T) => ReactNode` | Strictly renders value or `<ErrorBlock>`.                        |
-| `<ErrorBlock />`    | `title: string`, `detail: string`                                         | Formatted error banner with red accent border.                   |
-| `<AmountDisplay />` | `stroops: bigint \| number \| string`, `symbol?`, `decimals?`             | Accessible toggle button between human-readable and raw stroops. |
-| `<ScopeNotice />`   | `compact?: boolean`                                                       | Standardized enforcement boundary notice.                        |
-| `<OutcomeList />`   | `steps: Array<{ label, result }>`                                         | Transaction progress and outcome log.                            |
-| `short()`           | `(val: string, head = 6, tail = 4)`                                       | Truncates addresses and hashes with ellipsis (`…`).              |
-| `relativeTime()`    | `(iso: string \| null)`                                                   | Converts ISO timestamps to relative `"Xs ago"` / `"Xm ago"`.     |
-| `starLink()`        | `(hash: string)`                                                          | Clickable link to StellarExpert Testnet explorer.                |
+| Component           | Props                                                                     | Description                                                                                                                   |
+| :------------------ | :------------------------------------------------------------------------ | :---------------------------------------------------------------------------------------------------------------------------- |
+| `<Stat />`          | `label`, `value`, `note?`, `tone?` (`"ok"` \| `"warn"` \| `"danger"`)     | Standard metric card inside a `.grid`.                                                                                        |
+| `<Read />`          | `result: ReadResult<T>`, `label: string`, `render: (val: T) => ReactNode` | Strictly renders value or `<ErrorBlock>`.                                                                                     |
+| `<ErrorBlock />`    | `title: string`, `detail: string`                                         | Formatted error banner with red accent border.                                                                                |
+| `<AmountDisplay />` | `stroops: bigint \| number \| string`, `symbol?`, `decimals?`             | Accessible toggle button between human-readable and raw stroops.                                                              |
+| `<ScopeNotice />`   | `compact?: boolean`                                                       | Standardized enforcement boundary notice.                                                                                     |
+| `<OutcomeList />`   | `steps: Array<{ label, result }>`                                         | Transaction progress and outcome log.                                                                                         |
+| `short()`           | `(val: string, head = 6, tail = 4)`                                       | Truncates addresses and hashes with ellipsis (`…`).                                                                           |
+| `relativeTime()`    | `(iso: string \| null)`                                                   | Converts ISO timestamps to relative `"Xs ago"` / `"Xm ago"`.                                                                  |
+| `NetworkChip`       | `network?: string`                                                        | Names the network a chain value belongs to. Defaults to the build's network; pass `network` for a row describing another one. |
+| `AccountLink`       | `{ address, network?, className?, title? }`                               | Truncated account address as an account-page link, with a `NetworkChip`. Never use it for a transaction.                      |
+| `starLink()`        | `(hash: string)`                                                          | Clickable link to the Stellar Expert page for this build's network.                                                           |
 
 ---
 

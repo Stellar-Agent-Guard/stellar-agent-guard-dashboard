@@ -40,7 +40,7 @@ import {
   type AssetCapChange,
 } from "../lib/guard/assetCapsCsv.ts";
 import { useGuard } from "./GuardProvider.tsx";
-import { ErrorBlock, ScopeNotice, WarningBanner, starLink } from "./bits.tsx";
+import { ErrorBlock, NetworkChip, ScopeNotice, WarningBanner, starLink } from "./bits.tsx";
 import { ProtocolFunctionSelector } from "./ProtocolFunctionSelector.tsx";
 import { CsvImportExport } from "./CsvImportExport.tsx";
 import { PolicySimulationView } from "./PolicySimulationView.tsx";
@@ -1016,7 +1016,7 @@ export function OutcomeBlock({
     return (
       <div className="notice info">
         <strong>
-          {verb} landed on chain — {starLink(result.hash)}
+          {verb} landed on chain — {starLink(result.hash)} <NetworkChip />
         </strong>
         <span className="tiny">
           Ledger {result.ledger ?? "—"}. The panel above re-reads the contract to show the policy
@@ -1038,7 +1038,9 @@ export function OutcomeBlock({
   }
   return (
     <div className="error">
-      <span className="t">Broadcast but rejected on chain — {starLink(result.hash)}</span>
+      <span className="t">
+        Broadcast but rejected on chain — {starLink(result.hash)} <NetworkChip />
+      </span>
       <span className="mono tiny">{result.detail}</span>
     </div>
   );

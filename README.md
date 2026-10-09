@@ -173,6 +173,46 @@ steps and for what it does and does not prove.
 - **`DashboardGrid`**: Operator-arranged, persisted panel layout.
 - **`TelemetryAlerts`**: Opt-in audio and browser-notification alerts for blocked calls and freezes.
 
+### Which network is this value on?
+
+Every guard address, contract id and transaction hash the console renders carries the network it
+belongs to, as a chip beside the value. A guard address, a contract id and a transaction hash are all
+opaque strings, and a Testnet one pasted into a Mainnet tool fails in a way that looks like the
+tool's problem rather than the operator's, so the label travels with the value instead of relying on
+the operator remembering which console they opened.
+
+The chip is deliberately per-value and not a second global indicator. `WalletBar` already states the
+build's network, but it states it once at the top of the page: the deploy result is far below that,
+and scroll position is what puts the bar off-screen at exactly the moment an address gets copied. The
+bar keeps answering "what is this console connected to"; the chip answers "which network is _this_
+value". Explorer links read the same configuration as the chip, so a link and the label beside it can
+never disagree.
+
+| Labelled                                                                                              | Where                                                                 |
+| ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Deploy plan, collision warning, vanity result, deployed address, inspector target, initialize receipt | `DeployPanel`                                                         |
+| On-chain status read and the printed compliance record                                                | `StatusPanel`                                                         |
+| Write receipts: policy install/revoke, freeze/unfreeze, migration, externally signed submission       | `PolicyForm`, `PanicPanel`, `MigrationWizard`, `SubmitSignedXDRPanel` |
+| Guard attribution and transaction rows                                                                | `TelemetryFeed`, `TxHistoryTable`, `FleetTable`, `MultisigTracker`    |
+| Ledger device confirmation, post-deploy checklist                                                     | `HardwareWalletGuide`, `SetupWizard`                                  |
+
+Deliberately not labelled:
+
+- **The address book's saved recipients.** The address book is cross-network by design and stores no
+  network identity, so a chip fixed to the current build's network would assert something about an
+  address that is not true. Labelling it correctly needs the network recorded per entry, which is a
+  data-model change rather than a display one.
+- **The multi-guard switcher.** Each option already names its own instance's network, and the panel
+  is a picker across several networks at once; a chip fixed to the build's network would contradict
+  the picker rather than clarify it.
+- **A live network where none exists.** A standalone/local node has no public explorer page, so its
+  links are built from a slug of the network name. That is a broken link rather than a wrong-network
+  link, and a wrong-network link is the failure mode worth preventing.
+
+`NetworkChip` and the shared explorer-link builders in `lib/guard/explorerLinks.ts` are the two
+extension points: a new component that renders a chain value should use them, and
+`tests/unit/networkLabels.test.ts` holds the inventory of labelled sites.
+
 ## Operator Runbooks
 
 Three step-by-step procedures cover the console's high-stakes operations. They are written to be followed under pressure, and each includes CLI fallback commands for when the browser UI is unavailable.

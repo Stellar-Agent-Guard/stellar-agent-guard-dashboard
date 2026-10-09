@@ -6,7 +6,9 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { ReadResult } from "../lib/guard/chain.ts";
 import { SKELETON_CLASS } from "../lib/guard/statusReadState.ts";
-import { ENFORCEMENT_SCOPE_STATEMENT } from "../lib/guard/network.ts";
+import { ENFORCEMENT_SCOPE_STATEMENT, NETWORK } from "../lib/guard/network.ts";
+import { explorerAccountUrl, explorerTxUrl } from "../lib/guard/explorerLinks.ts";
+import { networkDisplayName } from "../lib/guard/networkSwitch.ts";
 import { lookupLabel, subscribeAddressBook } from "../lib/guard/addressBook.ts";
 import { CopyButton } from "./CopyButton.tsx";
 import {
@@ -260,6 +262,47 @@ export function short(value: string, head = 6, tail = 4): string {
 }
 
 /**
+ * The network a value belongs to, stated on the value's own row.
+ *
+ * The WalletBar already states the build's network once, at the top of the page,
+ * and that is the right *global* answer — it is what the mismatch banner (#97)
+ * hangs off, and it stays exactly that. It is the wrong local one: the deploy
+ * result is hundreds of pixels down a long panel, so scroll position puts the bar
+ * off-screen at precisely the moment an operator is copying an address out of the
+ * result and pasting it into a mainnet tool. A network chip repeated at every site
+ * that shows an address, a contract id or a transaction hash closes that gap, and
+ * the two are complementary rather than duplicate — the bar answers "what is this
+ * console connected to", this answers "which network is *this* value from".
+ *
+ * `network` defaults to the build's own network, which is right for every value
+ * the console read itself. A surface that is showing values from somewhere else
+ * — a fleet row, a saved instance's own network — passes its own name instead,
+ * so the chip reports the value's network rather than the reader's.
+ *
+ * The wording comes from `networkDisplayName`, the same function the mismatch
+ * banner uses, so "Mainnet" here and "Mainnet" there cannot disagree.
+ */
+export function NetworkChip({
+  network,
+  className = "",
+}: {
+  /** Defaults to this build's configured network. */
+  network?: string;
+  className?: string;
+}): ReactNode {
+  const label = networkDisplayName({ passphrase: null, name: network ?? NETWORK.name });
+  return (
+    <span
+      className={`net-chip${className ? ` ${className}` : ""}`}
+      data-network={network ?? NETWORK.name}
+      title={`Network: ${label}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+/**
  * The operator's nickname for an address, or `null` when it is not in the book.
  *
  * Resolves to `null` during server render (there is no `localStorage` to read)
@@ -357,7 +400,8 @@ export function OutcomeList({
           {step.result.hash && (
             <div className="mono" style={{ marginLeft: 4 }}>
               tx {starLink(step.result.hash)} ledger {step.result.ledger ?? "-"}{" "}
-              <CopyButton value={step.result.hash} label={`${step.label} transaction hash`} />
+              <CopyButton value={step.result.hash} label={`${step.label} transaction hash`} />{" "}
+              <NetworkChip />
             </div>
           )}
           {step.result.detail && <div className="mono muted">{step.result.detail}</div>}
@@ -367,9 +411,58 @@ export function OutcomeList({
   );
 }
 
+/**
+ * A G... account as an explorer link, with the network beside it.
+ *
+ * An account and a transaction are different explorer pages, so this is a
+ * separate builder from `starLink` rather than a flag on it: the fleet table used
+ * to hand an account address to the transaction builder, which produced a
+ * perfectly well-formed URL under `/tx/` that could only ever resolve to "not
+ * found". `network` is passed through to both the link and the chip so a row
+ * describing a network other than the build's own cannot end up with a URL and a
+ * label that disagree.
+ */
+export function AccountLink({
+  address,
+  network,
+  className,
+}: {
+  address: string;
+  /** Defaults to this build's network. */
+  network?: string;
+  className?: string;
+}): ReactNode {
+  return (
+    <span className={className ?? "mono tiny"}>
+      <a
+        href={explorerAccountUrl(address, { name: network ?? NETWORK.name })}
+        target="_blank"
+        rel="noreferrer"
+      >
+        {short(address, 6, 4)}
+      </a>{" "}
+      <NetworkChip {...(network !== undefined ? { network } : {})} />
+    </span>
+  );
+}
+
+/**
+ * A transaction hash as a link to the explorer page for *this* network.
+ *
+ * The URL is composed by `explorerTxUrl`, which takes the network segment from
+ * the build's configuration instead of hardcoding `/testnet/`. That hardcoding
+ * was the bug: on any non-testnet build it opened a testnet page, and a testnet
+ * page for a transaction that landed on mainnet reads as "this never happened".
+ *
+ * The network chip is deliberately *not* part of this function. Eight call sites
+ * embed the link in a sentence ("transaction <link> included in ledger 42"), and
+ * a chip inside the link would land mid-sentence; the chip belongs to the row or
+ * block that shows the value, which is where it can be read without being read
+ * aloud between words.
+ */
 export function starLink(hash: string): ReactNode {
   return (
-    <a href={`https://stellar.expert/explorer/testnet/tx/${hash}`} target="_blank" rel="noreferrer">
+    <a href={explorerTxUrl(hash)} target="_blank" rel="noreferrer">
       <span className="mono">{short(hash, 10, 6)}</span>
     </a>
   );
@@ -381,12 +474,17 @@ export function starLink(hash: string): ReactNode {
  * The link is for looking the transaction up; the button is for taking the
  * exact hash somewhere else — support tickets, other explorers, runbook
  * records. Both, because each alone loses the other use.
+ *
+ * This is a whole *cell*, not a link inside a sentence, so unlike `starLink` it
+ * carries the network chip itself: the telemetry feed and the tx history table
+ * both render hashes with nothing else naming the network they came from.
  */
 export function TxHashCell({ hash }: { hash: string }): ReactNode {
   return (
     <span className="copyable">
       {starLink(hash)}
       <CopyButton value={hash} label="transaction hash" />
+      <NetworkChip />
     </span>
   );
 }

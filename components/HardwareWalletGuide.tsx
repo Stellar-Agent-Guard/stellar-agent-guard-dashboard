@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { formatHashForDevice, hardwareGuide } from "../lib/guard/hardwareGuide.ts";
-import { short } from "./bits.tsx";
+import { NetworkChip, short } from "./bits.tsx";
 
 /** The steps, wording tuned for a Stellar-app Soroban flow on a Nano/Flex/X. */
 const LEDGER_STEPS: readonly string[] = [
@@ -64,7 +64,7 @@ export function HardwareWalletGuide() {
           <div className="stat">
             <div className="k">Contract</div>
             <div className="v small mono" title={contractId}>
-              {short(contractId, 8, 6)}
+              {short(contractId, 8, 6)} <NetworkChip />
             </div>
           </div>
           <div className="stat">

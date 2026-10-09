@@ -36,6 +36,7 @@ import {
 import { evaluateDmsAlert, formatDmsDuration, type DmsAlert } from "../lib/guard/dmsAlert.ts";
 import { calculateVelocity } from "../lib/guard/velocity.ts";
 import { useStatusTransitionAnnouncer } from "../lib/guard/statusTransitions.ts";
+import { NetworkChip } from "./bits.tsx";
 
 /**
  * The proactive dead-man-switch deadline banner, shown above the on-chain
@@ -164,7 +165,8 @@ export function StatusPanel() {
         </div>
 
         <p className="tiny muted" style={{ marginTop: 10 }}>
-          <span className="mono">{guard}</span> <CopyButton value={guard} label="guard address" />
+          <span className="mono">{guard}</span> <CopyButton value={guard} label="guard address" />{" "}
+          <NetworkChip />
         </p>
 
         <RehearsalModeToggle />
@@ -460,7 +462,8 @@ export function StatusPanel() {
               <strong>Network:</strong> {printReport.network}
             </p>
             <p>
-              <strong>Contract ID:</strong> <span className="mono">{printReport.contractId}</span>
+              <strong>Contract ID:</strong> <span className="mono">{printReport.contractId}</span>{" "}
+              <NetworkChip />
             </p>
             <p>
               <strong>Bytecode Hash:</strong>{" "}
