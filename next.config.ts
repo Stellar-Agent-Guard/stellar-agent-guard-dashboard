@@ -70,7 +70,12 @@ const config: NextConfig = {
       "base-uri 'self'",
       "object-src 'none'",
       "frame-ancestors 'none'",
-      "script-src 'self'",
+      // These pages are statically prerendered, so Next cannot inject a per-request
+      // script nonce (nonces require dynamic rendering). Allowing the framework's
+      // own inline hydration bootstrap is therefore the narrowest `script-src` the
+      // static output can run under; the dashboard loads no third-party scripts and
+      // the policy still forbids string-eval.
+      "script-src 'self' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob:",
       "font-src 'self' data:",

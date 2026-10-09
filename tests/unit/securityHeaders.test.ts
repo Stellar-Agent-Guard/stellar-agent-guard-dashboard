@@ -15,6 +15,12 @@ test("next.config.ts enforces strict security headers and CSP rules", () => {
   assert.match(config, /connect-src\s+['"]self['"][\s\S]*http:\/\/localhost:3000/);
   assert.match(config, /connect-src\s+['"]self['"][\s\S]*http:\/\/localhost:3001/);
   assert.match(config, /X-Frame-Options\s*[,\s]*.*DENY|X-Frame-Options\s*:\s*DENY/);
-  assert.match(config, /X-Content-Type-Options\s*[,\s]*.*nosniff|X-Content-Type-Options\s*:\s*nosniff/);
-  assert.match(config, /Referrer-Policy\s*[,\s]*.*strict-origin-when-cross-origin|Referrer-Policy\s*:\s*strict-origin-when-cross-origin/);
+  assert.match(
+    config,
+    /X-Content-Type-Options\s*[,\s]*.*nosniff|X-Content-Type-Options\s*:\s*nosniff/,
+  );
+  assert.match(
+    config,
+    /Referrer-Policy\s*[,\s]*.*strict-origin-when-cross-origin|Referrer-Policy\s*:\s*strict-origin-when-cross-origin/,
+  );
 });
