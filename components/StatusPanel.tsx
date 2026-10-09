@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { deadManRemaining, describePolicy, isDeadManFrozen } from "stellar-agent-guard-sdk";
 import { useGuard } from "./GuardProvider.tsx";
@@ -17,6 +17,9 @@ import {
 } from "./bits.tsx";
 import { INITIAL_GRID_LABELS, skeletonSpecFor } from "../lib/guard/statusReadState.ts";
 import { CopyButton } from "./CopyButton.tsx";
+import { StorageExplorerButton } from "./StorageExplorer.tsx";
+import { WebhookAlertBridge } from "./WebhookAlertBridge.tsx";
+import { WebhookSettingsButton } from "./WebhookSettings.tsx";
 import { PHASE1_ARTIFACT, NETWORK } from "../lib/guard/network.ts";
 import { configureHref } from "../lib/guard/deeplink.ts";
 import { NO_POLICY_CONSEQUENCE, policyStateFrom } from "../lib/guard/policyState.ts";
@@ -32,6 +35,7 @@ import {
 } from "../lib/guard/dmsSimulator.ts";
 import { evaluateDmsAlert, formatDmsDuration, type DmsAlert } from "../lib/guard/dmsAlert.ts";
 import { calculateVelocity } from "../lib/guard/velocity.ts";
+import { useStatusTransitionAnnouncer } from "../lib/guard/statusTransitions.ts";
 
 /**
  * The proactive dead-man-switch deadline banner, shown above the on-chain
@@ -99,6 +103,8 @@ export function StatusPanel() {
   const { snapshot, snapshotError, refreshing, refresh, guard, wallet, retryRead, retryingField } =
     useGuard();
 
+  useStatusTransitionAnnouncer(snapshot);
+
   const printReport = snapshot
     ? compilePrintReport(snapshot, NETWORK.name, wallet?.address || "Disconnected")
     : null;
@@ -141,6 +147,9 @@ export function StatusPanel() {
                 read <TimeAgo iso={snapshot.fetchedAt} />
               </span>
             )}
+            <StorageExplorerButton />
+            <WebhookSettingsButton />
+            <WebhookAlertBridge />
             <button className="secondary no-print" onClick={() => window.print()}>
               Print Compliance Report
             </button>
