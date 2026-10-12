@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useGuard } from "./GuardProvider.tsx";
 import { AddressText, ErrorBlock, short, useAddressLabel } from "./bits.tsx";
 import { AddressBookModal } from "./AddressBookModal.tsx";
@@ -44,10 +44,16 @@ export function WalletBar() {
   const [bookOpen, setBookOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [switchOutcome, setSwitchOutcome] = useState<NetworkSwitchOutcome | null>(null);
+  // Suppress provider-derived text on the first (SSR) render to avoid a
+  // hydration mismatch: `providerId` is seeded from localStorage which is
+  // unavailable on the server. After mount the value is stable and safe to use.
+  const [mounted, setMounted] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { setMounted(true); }, []);
 
   const selected = instances.find((instance) => instance.guard === guard);
   const guardNickname = useAddressLabel(guard);
-  const provider = providerId ? walletProviderDescriptor(providerId) : null;
+  const provider = mounted && providerId ? walletProviderDescriptor(providerId) : null;
 
   return (
     <div className="panel">

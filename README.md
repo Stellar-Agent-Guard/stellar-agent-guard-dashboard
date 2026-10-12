@@ -222,6 +222,7 @@ Full proof artifact recorded in [`tests/fixtures/phase3-proof.json`](./tests/fix
 ## Honest limitations
 
 - **Freighter wallet dependency**: Operator write actions require an active Freighter browser extension connected to Stellar Testnet; no programmatic secret keys are held or supported.
+- **Wrong-network hard block**: Every write action (deploy, initialize, set_policy, freeze, unfreeze, rotate) calls `assertCorrectNetwork()` before any wallet popup is shown. If the wallet's active network passphrase does not match the dashboard's configured target (`NETWORK.passphrase` in `lib/guard/network.ts`), the write is refused with an explicit modal naming both networks — no transaction is constructed or signed. If the passphrase cannot be read (older wallet build, extension unavailable), writes are also blocked rather than proceeding on an unverifiable assumption. Read operations are unaffected: they hit the configured RPC endpoint directly and do not go through the wallet.
 - **Client-side static deployment**: Designed as a pure client-side application (compatible with Vercel or any static host); does not maintain a persistent server database.
 - **Enforcement boundary for arbitrary calls**: Full amount/recipient limits apply natively to SAC token transfers. Arbitrary Soroban contract calls are gated by protocol/function allowlists, active execution window, pause, and dead-man switches; fine-grained amount controls for non-SAC calls are tracked as v2.
 

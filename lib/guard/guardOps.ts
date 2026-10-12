@@ -31,6 +31,7 @@ import {
 import { addressToScVal, hexToBytes, sha256Hex } from "./scval.ts";
 import { announce } from "./useAnnounce.ts";
 import { recordTx } from "./txHistory.ts";
+import { assertCorrectNetwork, NetworkMismatchError } from "./networkGuard.ts";
 
 // ── Artifact identity ──────────────────────────────────────────────────────
 
@@ -118,6 +119,24 @@ export async function submitOperation(params: {
   const passphrase = params.passphrase ?? NETWORK.passphrase;
   const { server, signer } = params;
   const label = params.label ?? "host_function_operation";
+
+  // ── Network guard (issue #18) ─────────────────────────────────────────
+  // deployGuard and the wasm upload path both go through submitOperation.
+  // Guard before any wallet interaction.
+  try {
+    await assertCorrectNetwork(undefined, passphrase);
+  } catch (error) {
+    if (error instanceof NetworkMismatchError) {
+      announce('Transaction refused — nothing was broadcast');
+      return {
+        kind: "refused",
+        stage: "discovery",
+        detail: error.message,
+        diagnosticEvents: [],
+      };
+    }
+    throw error;
+  }
 
   let account: Account;
   try {
@@ -354,7 +373,9 @@ export async function deployGuard(params: {
       constructorArgs: [],
     }),
     label: "create_custom_contract",
-    passphrase: params.passphrase,
+    ...(params.passphrase !== undefined
+      ? { passphrase: params.passphrase }
+      : {}),
   });
   record(
     `create_custom_contract (wasm ${PHASE1_ARTIFACT.wasmHash.slice(0, 12)}…) → ${predicted}`,
@@ -400,7 +421,9 @@ export async function initializeGuard(params: {
     fn: "initialize",
     args: [addressToScVal(params.signer.address), xdr.ScVal.scvBytes(pubkey)],
     signer: params.signer,
-    passphrase: params.passphrase,
+    ...(params.passphrase !== undefined
+  ? { passphrase: params.passphrase }
+  : {}),
   });
 }
 
@@ -423,8 +446,14 @@ export async function installPolicy(params: {
     fn: "set_policy",
     args: [built.scval],
     signer: params.signer,
-    passphrase: params.passphrase,
-    exportOnly: params.exportOnly,
+        ...(params.passphrase !== undefined
+      ? { passphrase: params.passphrase }
+      : {}),
+    ...(params.exportOnly !== undefined
+      ? { exportOnly: params.exportOnly }
+      : {}),
+  : {}),
+
   });
   return { kind: "invoked", result };
 }
@@ -443,8 +472,12 @@ export function freezeGuard(params: {
     fn: "freeze",
     args: [],
     signer: params.signer,
-    passphrase: params.passphrase,
-    exportOnly: params.exportOnly,
+    ...(params.passphrase !== undefined
+  ? { passphrase: params.passphrase }
+  : {}),
+...(params.exportOnly !== undefined
+  ? { exportOnly: params.exportOnly }
+  : {}),
   });
 }
 
@@ -470,8 +503,12 @@ export function unfreezeGuard(params: {
     fn: "unfreeze",
     args: [],
     signer: params.signer,
-    passphrase: params.passphrase,
-    exportOnly: params.exportOnly,
+   ...(params.passphrase !== undefined
+  ? { passphrase: params.passphrase }
+  : {}),
+...(params.exportOnly !== undefined
+  ? { exportOnly: params.exportOnly }
+  : {}),
   });
 }
 
@@ -489,8 +526,12 @@ export function revokePolicy(params: {
     fn: "revoke_policy",
     args: [],
     signer: params.signer,
-    passphrase: params.passphrase,
-    exportOnly: params.exportOnly,
+    ...(params.passphrase !== undefined
+  ? { passphrase: params.passphrase }
+  : {}),
+...(params.exportOnly !== undefined
+  ? { exportOnly: params.exportOnly }
+  : {}),
   });
 }
 

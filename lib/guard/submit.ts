@@ -29,6 +29,7 @@ import { stringifyError } from "./chain.ts";
 import { announce } from "./useAnnounce.ts";
 import { recordTx } from "./txHistory.ts";
 import { hardwareGuide } from "./hardwareGuide.ts";
+import { assertCorrectNetwork, NetworkMismatchError } from "./networkGuard.ts";
 
 /** Inclusion fee floor, in stroops, for a single-operation transaction. */
 export const INCLUSION_FEE = "100";
@@ -376,6 +377,25 @@ async function pollForInclusion(
 async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   const passphrase = request.passphrase ?? NETWORK.passphrase;
   const { server, signer } = request;
+
+  // ── Network guard (issue #18) ───────────────────────────────────────────
+  // Check the wallet's active network before any signing prompt. The wallet
+  // popup must never appear when the operator is on the wrong network.
+  // Reads are safe and unblocked — they hit NETWORK.rpcUrl directly without
+  // the wallet.
+  try {
+    await assertCorrectNetwork(undefined, passphrase);
+  } catch (error) {
+    if (error instanceof NetworkMismatchError) {
+      return {
+        kind: "refused",
+        stage: "discovery",
+        detail: error.message,
+        diagnosticEvents: [],
+      };
+    }
+    throw error;
+  }
 
   let account: Account;
   try {
