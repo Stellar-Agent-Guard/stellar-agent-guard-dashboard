@@ -6,7 +6,13 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { ReadResult } from "../lib/guard/chain.ts";
 import { SKELETON_CLASS } from "../lib/guard/statusReadState.ts";
-import { ENFORCEMENT_SCOPE_STATEMENT } from "../lib/guard/network.ts";
+import {
+  ENFORCEMENT_SCOPE_STATEMENT,
+  NETWORK,
+  explorerContractUrl,
+  explorerTxUrl,
+  networkDisplayLabel,
+} from "../lib/guard/network.ts";
 import { lookupLabel, subscribeAddressBook } from "../lib/guard/addressBook.ts";
 import { CopyButton } from "./CopyButton.tsx";
 import {
@@ -287,6 +293,34 @@ export function useAddressLabel(address: string): string | null {
  * stays on `title` so nothing is lost — the nickname is a convenience over the
  * real key, never a replacement for it.
  */
+/**
+ * The network a value belongs to, as a chip that travels with the value.
+ *
+ * The top bar carries the *global* network (see `WalletBar`), but an operator
+ * reading a deploy result further down the page has almost certainly scrolled
+ * the bar off-screen, so each network-touching display repeats the label
+ * locally. `data-network` carries the machine-readable word alongside the
+ * visible text, so a test — or a future stylesheet — never has to parse prose.
+ */
+export function NetworkBadge({
+  network = NETWORK.name,
+  className = "",
+}: {
+  network?: string;
+  className?: string;
+}): ReactNode {
+  const label = networkDisplayLabel(network);
+  return (
+    <span
+      className={`pill network-chip${className ? ` ${className}` : ""}`}
+      data-network={label}
+      title={`This value lives on ${label}; the same address or hash does not exist on another network.`}
+    >
+      {label}
+    </span>
+  );
+}
+
 export function AddressText({
   address,
   className,
@@ -297,8 +331,11 @@ export function AddressText({
   const label = useAddressLabel(address);
   const truncated = label ? short(address, 4, 4) : short(address);
   return (
-    <span className={className ?? "mono"} title={address}>
-      {label ? `${label} (${truncated})` : truncated}
+    <span className="address-with-network">
+      <span className={className ?? "mono"} title={address}>
+        {label ? `${label} (${truncated})` : truncated}
+      </span>{" "}
+      <NetworkBadge />
     </span>
   );
 }
@@ -367,10 +404,27 @@ export function OutcomeList({
   );
 }
 
+/**
+ * A transaction hash as an explorer link.
+ *
+ * The network is composed from this build's configuration (`network.ts`), never
+ * hardcoded: a Mainnet transaction looked up on the Testnet explorer is exactly
+ * the cross-network confusion this display is meant to prevent. The link text
+ * stays the truncated hash; the destination carries the network.
+ */
 export function starLink(hash: string): ReactNode {
   return (
-    <a href={`https://stellar.expert/explorer/testnet/tx/${hash}`} target="_blank" rel="noreferrer">
+    <a href={explorerTxUrl(hash)} target="_blank" rel="noreferrer">
       <span className="mono">{short(hash, 10, 6)}</span>
+    </a>
+  );
+}
+
+/** The contract-explorer twin of `starLink`, for a `C…` contract id. */
+export function starContractLink(contractId: string): ReactNode {
+  return (
+    <a href={explorerContractUrl(contractId)} target="_blank" rel="noreferrer">
+      <span className="mono">{short(contractId, 10, 6)}</span>
     </a>
   );
 }
@@ -386,6 +440,7 @@ export function TxHashCell({ hash }: { hash: string }): ReactNode {
   return (
     <span className="copyable">
       {starLink(hash)}
+      <NetworkBadge />
       <CopyButton value={hash} label="transaction hash" />
     </span>
   );
