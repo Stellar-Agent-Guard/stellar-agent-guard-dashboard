@@ -36,6 +36,7 @@ import {
 } from "../lib/guard/multisigRead.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock } from "./bits.tsx";
+import { NetworkChip } from "./NetworkChip.tsx";
 import { announce } from "../lib/guard/useAnnounce.ts";
 
 interface TrackerReport {
@@ -211,9 +212,14 @@ export function MultisigTracker() {
 
           {report.hash && (
             <div className="row" style={{ marginTop: 10 }}>
+              {/* An envelope hash, not a submitted transaction: this one is
+                  waiting for signatures, so it is not in any explorer yet. That
+                  is why it stays plain text — but it is still an id from one
+                  ledger, so it says which. */}
               <span className="mono tiny" title={report.hash}>
                 hash {report.hash.slice(0, 12)}…{report.hash.slice(-6)}
-              </span>
+              </span>{" "}
+              <NetworkChip />
               <button className="secondary" onClick={() => void doCopy("hash")}>
                 {copied === "hash" ? "Copied" : "Copy hash"}
               </button>

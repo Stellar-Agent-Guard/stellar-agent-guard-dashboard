@@ -2,23 +2,105 @@
  * Network + artifact constants, and the one canonical wording for the
  * enforcement boundary.
  *
- * The dashboard holds no secrets and no configuration that changes *what* it
- * deploys: the artifact's hash and byte length, and the boundary statement it
- * displays, are fixed constants, so nothing the UI says about the guard can
- * silently diverge from what the guard actually does. The only values a build can
- * move are *where* it looks — which RPC endpoint, which passphrase, and which
- * instance to read the pinned bytes from — and those default to public testnet.
+ * The dashboard holds no secrets and no configuration that changes behaviour:
+ * the network, the artifact identity it will deploy, and the boundary statement
+ * it displays are all fixed constants, so nothing the UI says about the guard can
+ * silently diverge from what the guard actually does.
+ *
+ * That is also why the explorer URLs below are composed from the same constant
+ * as the RPC endpoint rather than written out at each call site. A link is a
+ * network-touching display like any other, and the way an address crosses
+ * networks is by being copied out of one and pasted into a tool aimed at
+ * another. Composing the segment means a link can only ever name the ledger the
+ * read came from; a literal `/testnet/` in a link builder is a link that will
+ * still say Testnet after this console is ever pointed anywhere else.
+ *
+ * The types below take the descriptor as a parameter precisely so the other
+ * branch is testable: `tests/unit/explorerLinks.test.ts` drives a fixed Mainnet
+ * config through the same builders and asserts the exact strings, which is the
+ * only way to prove the network segment is read from configuration and not
+ * hardcoded.
  */
 
 /**
- * The canonical public Stellar testnet: the defaults, and the network the pinned
- * artifact is published on.
+ * Everything the console needs to address one network.
+ *
+ * Kept as one object rather than a scatter of loose constants because the
+ * network is *one* fact with several consequences: the RPC it reads, the
+ * passphrase it signs under, and the explorer it links to all have to name the
+ * same network. Splitting them is how a link ends up aimed at Testnet while the
+ * reads came from somewhere else.
  */
-export const TESTNET = {
+export interface NetworkDescriptor {
+  /** The network's own name, as the console labels it on screen (`testnet`). */
+  readonly name: string;
+  readonly rpcUrl: string;
+  readonly passphrase: string;
+  /**
+   * The block explorer's root, without a network segment.
+   *
+   * Composed with {@link NetworkDescriptor.explorerNetwork} by the builders
+   * below, so an operator following a link lands on the same ledger the read
+   * came from.
+   */
+  readonly explorerBaseUrl: string;
+  /**
+   * The explorer's own path segment for this network — `testnet`, `mainnet`,
+   * `futurenet`.
+   *
+   * Deliberately separate from {@link NetworkDescriptor.name}: this project's
+   * name for the public network comes from the wallet vocabulary (`public`,
+   * see `normalizeWalletNetwork`) while the explorer calls it `mainnet`.
+   * Conflating the two is exactly how a link ends up on the wrong ledger.
+   */
+  readonly explorerNetwork: string;
+}
+
+export const NETWORK: NetworkDescriptor = {
   name: "testnet",
   rpcUrl: "https://soroban-testnet.stellar.org",
   passphrase: "Test SDF Network ; September 2015",
-} as const;
+  explorerBaseUrl: "https://stellar.expert/explorer",
+  explorerNetwork: "testnet",
+};
+
+/**
+ * The explorer's root for one network: base plus its path segment.
+ *
+ * Every explorer URL in the console is composed from this, and the network
+ * segment is *always* present — an explorer root without one cannot identify a
+ * ledger, and a link that silently defaults to whichever network the reader
+ * happens to be browsing is the cross-network mistake this whole module exists
+ * to prevent.
+ */
+export function explorerBaseUrl(network: NetworkDescriptor = NETWORK): string {
+  return `${network.explorerBaseUrl}/${network.explorerNetwork}`;
+}
+
+/** The explorer page for one transaction hash. */
+export function explorerTxUrl(hash: string, network: NetworkDescriptor = NETWORK): string {
+  return `${explorerBaseUrl(network)}/tx/${hash}`;
+}
+
+/**
+ * The explorer page for one contract.
+ *
+ * A contract id is not a transaction hash: the two are different strkey
+ * alphabets and lengths, and pointing a `C…` at a `/tx/` route produces a
+ * lookup that can never resolve. Callers holding a contract id use this, not
+ * {@link explorerTxUrl}.
+ */
+export function explorerContractUrl(
+  contractId: string,
+  network: NetworkDescriptor = NETWORK,
+): string {
+  return `${explorerBaseUrl(network)}/contract/${contractId}`;
+}
+
+/** The explorer page for one account (a `G…` address or a contract). */
+export function explorerAccountUrl(address: string, network: NetworkDescriptor = NETWORK): string {
+  return `${explorerBaseUrl(network)}/account/${address}`;
+}
 
 /**
  * The network this build talks to.

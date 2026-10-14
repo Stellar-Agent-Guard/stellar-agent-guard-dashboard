@@ -6,8 +6,15 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { ReadResult } from "../lib/guard/chain.ts";
 import { SKELETON_CLASS } from "../lib/guard/statusReadState.ts";
-import { ENFORCEMENT_SCOPE_STATEMENT } from "../lib/guard/network.ts";
+import {
+  ENFORCEMENT_SCOPE_STATEMENT,
+  NETWORK,
+  explorerContractUrl,
+  explorerTxUrl,
+  type NetworkDescriptor,
+} from "../lib/guard/network.ts";
 import { lookupLabel, subscribeAddressBook } from "../lib/guard/addressBook.ts";
+import { NetworkChip } from "./NetworkChip.tsx";
 import { CopyButton } from "./CopyButton.tsx";
 import {
   formatRawStroops,
@@ -335,11 +342,13 @@ export function TimeAgo({ iso, suffix = "" }: { iso: string | null; suffix?: str
  */
 export function OutcomeList({
   steps,
+  network = NETWORK,
 }: {
   steps: Array<{
     label: string;
     result: { kind: string; hash?: string; ledger?: number | null; detail?: string };
   }>;
+  network?: NetworkDescriptor;
 }) {
   return (
     <div style={{ marginTop: 8 }}>
@@ -356,7 +365,7 @@ export function OutcomeList({
           <span className="mono">{step.label}</span>
           {step.result.hash && (
             <div className="mono" style={{ marginLeft: 4 }}>
-              tx {starLink(step.result.hash)} ledger {step.result.ledger ?? "-"}{" "}
+              tx {starLink(step.result.hash, network)} ledger {step.result.ledger ?? "-"}{" "}
               <CopyButton value={step.result.hash} label={`${step.label} transaction hash`} />
             </div>
           )}
@@ -367,11 +376,43 @@ export function OutcomeList({
   );
 }
 
-export function starLink(hash: string): ReactNode {
+/**
+ * A transaction hash as an explorer link, labelled with the network it is on.
+ *
+ * The label is rendered *inside* this primitive rather than left to each call
+ * site on purpose: an explorer URL is the single most copyable thing on a
+ * network-touching display, and a call site that forgets the chip is exactly the
+ * footgun this exists to close. Making the link and its network inseparable means
+ * the "link without a network" state is unrepresentable instead of merely
+ * discouraged.
+ */
+export function starLink(hash: string, network: NetworkDescriptor = NETWORK): ReactNode {
   return (
-    <a href={`https://stellar.expert/explorer/testnet/tx/${hash}`} target="_blank" rel="noreferrer">
-      <span className="mono">{short(hash, 10, 6)}</span>
-    </a>
+    <span className="copyable">
+      <a href={explorerTxUrl(hash, network)} target="_blank" rel="noreferrer">
+        <span className="mono">{short(hash, 10, 6)}</span>
+      </a>{" "}
+      <NetworkChip network={network} />
+    </span>
+  );
+}
+
+/**
+ * A contract id as an explorer link, labelled with its network.
+ *
+ * The contract route, not the transaction route: a `C…` is a different strkey
+ * alphabet and length from a 64-hex hash, and a `/tx/` URL built from one
+ * resolves to nothing. Paired with `starLink` so both kinds of id on this
+ * console resolve somewhere real and both say which ledger they are from.
+ */
+export function contractLink(contractId: string, network: NetworkDescriptor = NETWORK): ReactNode {
+  return (
+    <span className="copyable">
+      <a href={explorerContractUrl(contractId, network)} target="_blank" rel="noreferrer">
+        <span className="mono">{short(contractId, 8, 6)}</span>
+      </a>{" "}
+      <NetworkChip network={network} />
+    </span>
   );
 }
 
@@ -380,12 +421,20 @@ export function starLink(hash: string): ReactNode {
  *
  * The link is for looking the transaction up; the button is for taking the
  * exact hash somewhere else — support tickets, other explorers, runbook
- * records. Both, because each alone loses the other use.
+ * records. Both, because each alone loses the other use. The network label rides
+ * on `starLink`, so the copied-to-elsewhere case is the one the label cannot
+ * follow: it is stated here for the same reason the copy button exists.
  */
-export function TxHashCell({ hash }: { hash: string }): ReactNode {
+export function TxHashCell({
+  hash,
+  network = NETWORK,
+}: {
+  hash: string;
+  network?: NetworkDescriptor;
+}): ReactNode {
   return (
     <span className="copyable">
-      {starLink(hash)}
+      {starLink(hash, network)}
       <CopyButton value={hash} label="transaction hash" />
     </span>
   );

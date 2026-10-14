@@ -33,6 +33,7 @@ import { useModalFocus } from "../lib/guard/useModalFocus.ts";
 import { noteVerifiedOutcome } from "../lib/guard/statusTransitions.ts";
 import { announce } from "../lib/guard/useAnnounce.ts";
 import { CopyButton } from "./CopyButton.tsx";
+import { NetworkChip } from "./NetworkChip.tsx";
 import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 
 /**
@@ -531,7 +532,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
               The agent will not be able to make any call that requires its authorization until the
               account is unfrozen. This will prompt your wallet to sign an <code>unfreeze</code>
               -able <code>freeze()</code> call on{" "}
-              <span className="mono">{guard.slice(0, 10)}…</span>.
+              <span className="mono">{guard.slice(0, 10)}…</span> <NetworkChip />
             </p>
             <div className="checkline">
               <input
@@ -572,7 +573,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
                   protection against anyone who can already see this page.
                 </p>
                 <p className="tiny mono" style={{ margin: "0 0 6px" }}>
-                  {guard}
+                  {guard} <NetworkChip />
                 </p>
                 <label className="tiny" htmlFor="freeze-challenge">
                   Last {FREEZE_CHALLENGE_SUFFIX_LENGTH} characters of the guard address

@@ -165,3 +165,33 @@ is a **historical record**, not a claim that those hashes are re-verified on eve
 README now says so in the section lead-in. The framing follows the evidence-freshness discipline: a
 recorded run is frozen evidence, while the enforcement-scope statement it embeds is the live,
 drift-guarded claim. Both are honest; conflating them is not.
+
+## 6. Per-display network labels and configured explorer links
+
+Sweep for the cross-network-address-confusion issue. `Last verified` for every row below is the date of
+this sweep; the mechanical half is `tests/unit/networkLabelInventory.test.ts` and
+`tests/unit/explorerLinks.test.ts`, which can be re-run to re-verify it.
+
+| #   | README claim (section)                                                                                           | Evidence                                                                                                                                                                                                                                                                                                                       | Status                      | Last verified |
+| --- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------- | ------------- |
+| 53  | "Wallet/network guard … network mismatch renders as an inline warning bar"                                       | `lib/guard/networkSwitch.ts`, `components/WalletBar.tsx`, `tests/unit/networkSwitch.test.ts` — the bar and the one-click switch request are unchanged by this issue                                                                                                                                                            | PASS (no change)            | 2026-10-04    |
+| 54  | Same bullet — did not mention that every address/hash carries its network, or that explorer links are configured | `components/NetworkChip.tsx`, `components/bits.tsx` (`starLink`/`contractLink`), `lib/guard/network.ts`, `tests/unit/networkChip.test.ts`                                                                                                                                                                                      | **FIXED** (bullet extended) | 2026-10-04    |
+| 55  | "`WalletBar`: Displays Freighter connection status, address, and network validation"                             | `components/WalletBar.tsx` — still exactly what the component renders; the added chip is one more network statement, not a new responsibility                                                                                                                                                                                  | PASS (no change)            | 2026-10-04    |
+| 56  | Screens list does not mention `NetworkChip` (a primitive, not a screen)                                          | Not a screen and not an operator action. Added to the inventory table in `tests/unit/networkLabelInventory.test.ts` instead of the README's screen list                                                                                                                                                                        | PASS (no change)            | 2026-10-04    |
+| 57  | On-chain bytecode verification "fetches the contract bytecode directly off the testnet ledger"                   | `lib/guard/wasmInspector.ts` still reads `NETWORK.rpcUrl`; `NETWORK.name`/`rpcUrl`/`passphrase` values unchanged, so "testnet" is still the accurate word                                                                                                                                                                      | PASS (no change)            | 2026-10-04    |
+| 58  | Quick Start: "switched to **Testnet**"                                                                           | `NETWORK.name` is still `"testnet"`; the chip renders that same string, so the setup instruction and the on-screen label agree                                                                                                                                                                                                 | PASS (no change)            | 2026-10-04    |
+| 59  | Every transaction hash in the testnet proof tables                                                               | `tests/fixtures/phase3-proof.json`, `tests/fixtures/README.md`, README §"Verified against live testnet" — these are **HISTORICAL** dated records of specific testnet transactions. They keep literal `…/explorer/testnet/tx/…` URLs on purpose: a frozen record must not be rewritten when the console's configuration changes | HISTORICAL (no change)      | 2026-10-04    |
+| 60  | Unaudited-tooling disclaimer ("⚠️ **Disclaimer:** This is unaudited security tooling…")                          | Now also shown on the deploy surface, from `lib/guard/auditDisclosure.ts`. `tests/unit/auditDisclosure.test.ts` asserts the README and the constant stay word for word identical, and that the disclosure is rendered unconditionally and disables no control                                                                  | PASS (strengthened)         | 2026-10-04    |
+
+### Deliberately out of scope
+
+- **`tests/fixtures/**` and the README proof tables are exempt from the "no hardcoded explorer network
+  segment" guard.** That guard scans `components/`, `lib/` and `app/` only
+  (`tests/unit/networkLabelInventory.test.ts`). A dated evidence record has to name the ledger it was
+  recorded on; rewriting it whenever the console's configured network changed would falsify the record.
+- **No React context was added for the network.** `lib/guard/network.ts` is a fixed constant set, and
+  the components take an optional `network` parameter that defaults to it. A context would be a second
+  source of truth for a fact the project deliberately holds as one literal, and would make the
+  configured-network tests harder to write rather than easier.
+- **`app/globals.css` gained `.network-chip` rather than a per-component style**, with a print rule so
+  the chip survives the compliance report's print stylesheet.

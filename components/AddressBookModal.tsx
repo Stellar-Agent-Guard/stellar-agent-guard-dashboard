@@ -25,6 +25,7 @@ import {
   upsertContact,
   type Contact,
 } from "../lib/guard/addressBook.ts";
+import { NetworkChip } from "./NetworkChip.tsx";
 
 export function AddressBookModal({ onClose }: { onClose: () => void }) {
   const [contacts, setContacts] = useState<Contact[]>(() => loadAddressBook());
@@ -189,9 +190,16 @@ export function AddressBookModal({ onClose }: { onClose: () => void }) {
               >
                 <span>
                   <strong style={{ fontSize: 13 }}>{contact.label}</strong>{" "}
+                  {/* The label beside the address is a name the operator typed,
+                      which can be anything and cannot be trusted to say which
+                      network the id belongs to — so the id carries its own. This
+                      list is the one place ids are saved rather than read, which
+                      makes it the likeliest home for one pasted from the wrong
+                      ledger. */}
                   <span className="mono tiny muted" title={contact.address}>
                     {contact.address.slice(0, 6)}…{contact.address.slice(-4)}
-                  </span>
+                  </span>{" "}
+                  <NetworkChip />
                 </span>
                 <span className="row" style={{ gap: 6 }}>
                   <button className="secondary" onClick={() => edit(contact)}>
