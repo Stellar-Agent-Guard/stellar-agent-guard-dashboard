@@ -14,7 +14,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { rpc } from "@stellar/stellar-sdk";
 import { handleRpcRequest, accountLedgerKey, contractCodeLedgerKey, contractInstanceLedgerKey, MOCK_LEDGER, WASM_BYTES, GUARD, OPERATOR_ADDRESS } from "../e2e/rpcFixtures.ts";
-import { bytesToHex } from "../../lib/guard/scval.ts";
+const bytesToHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 import { readGuardSnapshot } from "../../lib/guard/guardOps.ts";
 import { PHASE1_ARTIFACT } from "../../lib/guard/network.ts";
 

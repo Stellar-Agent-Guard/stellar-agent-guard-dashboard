@@ -1,38 +1,55 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * E2E configuration for the wallet network-mismatch suite.
+ * Playwright configuration for the browser suites.
  *
- * The suite serves the production build through `next start` and answers every
- * Soroban RPC call with a local fixture, so a test run never touches the real
- * testnet and never needs a wallet extension: the wallet is mocked in-page (see
- * `tests/e2e/walletMock.ts`).
+ * Two suites share this config and the dev server they drive:
  *
- * The webServer reuses an already-running instance on the port when present, so
- * the suite can be pointed at a manually started server with
- * `PLAYWRIGHT_TEST_BASE_URL=http://localhost:3000 npx playwright test`.
+ *   tests/e2e  Functional specs (guard lifecycle, telemetry filtering and
+ *              export) — run in CI via `npm run test:e2e`.
+ *   tests/perf The telemetry throughput benchmark (issue #114) — run locally
+ *              via `npm run test:perf`, deliberately not a CI gate because
+ *              frame-rate assertions depend on the runner's GPU/CPU.
+ *
+ * The server is `next dev` rather than a production build: specs assert UI
+ * behaviour, not bundle output (bundle sizes are the bundle-size workflow's
+ * job), and a dev server needs no build step — `npm run test:e2e` works on a
+ * fresh clone after `npm ci`.
+ *
+ * One worker, serially: the specs are stateful (a mocked chain per page,
+ * wallet authorization persisted in `localStorage`), and the perf benchmark
+ * needs an otherwise idle machine to measure frame rate honestly.
  */
-const PORT = Number(process.env.PLAYWRIGHT_TEST_PORT ?? 3_100);
-const baseURL = process.env.PLAYWRIGHT_TEST_BASE_URL ?? `http://127.0.0.1:${PORT}`;
-
 export default defineConfig({
-  testDir: "./tests/e2e",
-  fullyParallel: true,
-  forbidOnly: !process.env.CI,
+  testDir: "./tests",
+  testMatch: "**/*.spec.ts",
+  fullyParallel: false,
+  forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : "list",
-  timeout: 30_000,
+  workers: 1,
+  timeout: 120_000,
+  expect: {
+    // Writes take ≥2s (the tx-inclusion poll) plus a chain re-read; dev-server
+    // route compilation on first hit adds a little more on top.
+    timeout: 15_000,
+  },
+  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : [["list"]],
   use: {
-    baseURL,
+    baseURL: "http://localhost:3000",
+    // Traces only on failure: they are the first thing a maintainer needs when
+    // CI goes red, and are too heavy to keep for every run.
     trace: "retain-on-failure",
   },
-  webServer: process.env.PLAYWRIGHT_TEST_BASE_URL
-    ? undefined
-    : {
-        command: `npm run start -- -p ${PORT}`,
-        url: `http://127.0.0.1:${PORT}`,
-        reuseExistingServer: !process.env.CI,
-        timeout: 120_000,
-      },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+    },
+  ],
+  webServer: {
+    command: "npm run dev",
+    url: "http://localhost:3000",
+    reuseExistingServer: !process.env.CI,
+    timeout: 120_000,
+  },
 });

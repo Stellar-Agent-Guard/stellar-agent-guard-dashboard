@@ -22,7 +22,7 @@ import {
   installWalletMock,
   MAINNET_PASSPHRASE,
   switchWalletNetwork,
-} from "./walletMock.ts";
+} from "./networkMismatchWalletMock.ts";
 import { handleRpcRequest } from "./rpcFixtures.ts";
 
 const MISMATCH_BANNER = /Your wallet is on "Mainnet"/;
