@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { deadManRemaining, describePolicy, isDeadManFrozen } from "stellar-agent-guard-sdk";
 import { useGuard } from "./GuardProvider.tsx";
@@ -34,9 +34,9 @@ import {
   type SimulationState,
 } from "../lib/guard/dmsSimulator.ts";
 import { evaluateDmsAlert, formatDmsDuration, type DmsAlert } from "../lib/guard/dmsAlert.ts";
-import { formatRemaining } from "../lib/guard/time.ts";
 import { calculateVelocity } from "../lib/guard/velocity.ts";
 import { useStatusTransitionAnnouncer } from "../lib/guard/statusTransitions.ts";
+import { formatRemaining } from "../lib/guard/time.ts";
 
 /**
  * The proactive dead-man-switch deadline banner, shown above the on-chain
@@ -808,8 +808,9 @@ function RealDmsStats({
               const policy = snapshot.policy.ok ? snapshot.policy.value : null;
               const remaining = deadManRemaining(status, policy);
               if (remaining === null) return "switch disabled (grace 0)";
+              if (remaining < 0n) return "grace elapsed; account refuses calls";
               const formatted = formatRemaining(remaining);
-              if (formatted.expired) return "grace expired";
+              if (formatted === null) return "grace elapsed; account refuses calls";
               return `${formatted.text} of grace left`;
             }}
           />
