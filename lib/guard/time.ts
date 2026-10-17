@@ -1,109 +1,65 @@
-export function formatTimeAgo(
-  timestampSeconds: bigint | number,
-  nowSeconds: bigint | number,
-): string {
-  const ts =
-    typeof timestampSeconds === "bigint" ? timestampSeconds : BigInt(Math.floor(timestampSeconds));
-  const now = typeof nowSeconds === "bigint" ? nowSeconds : BigInt(Math.floor(nowSeconds));
-  let diff = now - ts;
-
-  if (diff < 0n) {
-    diff = 0n;
-  }
-
-  // MARK: i18n sweep target ("just now", "s", "m", "h", "d")
-  if (diff < 10n) {
-    return "just now";
-  }
-  if (diff < 60n) {
-    return `${diff}s`;
-  }
-
-  const minutes = diff / 60n;
-  if (minutes < 60n) {
-    return `${minutes}m`;
-  }
-
-  const hours = minutes / 60n;
-  if (hours < 24n) {
-    return `${hours}h`;
-  }
-
-  const days = hours / 24n;
-  return `${days}d`;
-}
-
-/**
- * Result of formatting a countdown.
- *
- * - `text`: the human-readable remaining string (e.g. "2d", "<m1", "now").
- *           When expired, this is the literal "expired" label. Consumers that
- *           want a different label can branch on the `expired` flag.
- * - `expired`: true when the input is negative (i.e. the deadline has passed).
- *           This is the explicit expiry signal so consumers can branch on it
- *           without parsing the text.
- */
 export interface FormattedRemaining {
   text: string;
   expired: boolean;
 }
 
 /**
- * Cap for the days tier. Anything at or above this is rendered as
- * "999d+" to avoid absurd values like "10475d" from a misconfigured
- * deadline or an accidental unit bug in a consumer.
+ * Format a remaining duration in seconds into a compact human string.
+ *
+ * This formatter is deliberately "dumb" -- it only produces text and an
+ * expired signal. Urgency tiering (i.e. critical < 10% of window) is a
+ * consumer-owned policy and must not live here.
+ *
+ * Semantics:
+ *  - remaining <= 0 -> { text: "expired", expired: true }
+ *  - 0 < remaining < 60 -> { text: "<m1", expired: false }
+ *  - 60 <= remaining < 3600 -> minutes (e.g. "3m")
+ *  - 3600 <= remaining < 86400 -> hours + minutes (e.g. "1h30m")
+ *  - >= 86400 -> days + hours (e.g. "1d2h"), capped at "999d+"
+ *
+ * Input may be bigint or number. BigInt input is converted to number only
+ * after clamping to the cap threshold, so we never lose precision for
+ * u64 values that exceed Number.safeInteger.
  */
-export const FORMAT_REMAINING_DAYS_CAP = 999n;
-
-/**
- * Format a remaining duration in seconds into a short human-readable string.
- *
- * This formatter is deliberately dumb: text only, no urgency tiering.
- * Urgency policy (e.g. "critical < 10% of window") requires context that
- * the formatter does not have, so it stays with consumers (dmsUrgency-style
- * helpers). This is the scope boundary for this utility.
- *
- * Precision ladder:
- *   - negative         -> expired: true, text = "expired"
- *   - 0                -> "now", expired: false
- *   - (0, 60)          -> "now" (sub-minute, non-zero)
- *   - [60, 3600)      -> "<n>m"
- *   - [3600, 86400)    -> "<n>h"
- *   - >= 86400         -> "<n>d" (capped at "999d+")
- *
- * Uses bigint arithmetic internally so u64 seconds values do not lose
- * precision through float conversion. Number inputs are floored to an
- * integer before being converted to bigint.
- */
-export function formatRemaining(msSeconds: bigint | number): FormattedRemaining {
+export function formatRemaining(
+  remainingSeconds: bigint | number,
+): FormattedRemaining {
   const seconds =
-    typeof msSeconds === "bigint" ? msSeconds : BigInt(Math.floor(msSeconds));
+    typeof remainingSeconds === "bigint"
+      ? remainingSeconds
+      : BigInt(Math.floor(remainingSeconds));
 
-  if (seconds < 0n) {
-    // Overdue: signal expiry via the flag and use a distinct label.
-    // Consumers that want the overdue duration can compute it themselves.
+  if (seconds <= 0n) {
     return { text: "expired", expired: true };
   }
 
-  if (seconds < 60n) {
-    // Sub-minute including zero: avoid flickering "59s" -> "58s" -> ... on a
-    // countdown that refreshes second-by-second; "now" is stable and clear.
-    return { text: "now", expired: false };
+  // Cap at 999d+ to avoid absurd large values like "10475d".
+  const CAP_SECONDS = BigInt(86400 * 999);
+  if (seconds >= CAP_SECONDS) {
+    return { text: "999d+", expired: false };
   }
 
-  const minutes = seconds / 60n;
-  if (minutes < 60n) {
+  // Safe to convert to number now -- value is below the cap.
+  const total = Number(seconds);
+
+  if (total < 60) {
+    return { text: "<m1", expired: false };
+  }
+
+  if (total < 3600) {
+    const minutes = Math.floor(total / 60);
     return { text: `${minutes}m`, expired: false };
   }
 
-  const hours = minutes / 60n;
-  if (hours < 24n) {
-    return { text: `${hours}h`, expired: false };
+  if (total < 86400) {
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const text = minutes > 0 ? `${hours}h${minutes}m` : `${hours}h`;
+    return { text, expired: false };
   }
 
-  const days = hours / 24n;
-  if (days >= FORMAT_REMAINING_DAYS_CAP) {
-    return { text: `${FORMAT_REMAINING_DAYS_CAP}+d`, expired: false };
-  }
-  return { text: `${days}d`, expired: false };
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const text = hours > 0 ? `${days}d${hours}h` : `${days}d`;
+  return { text, expired: false };
 }

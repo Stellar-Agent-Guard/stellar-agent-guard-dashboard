@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  formatRemaining,
   formatRawStroops,
   formatStroops,
   formatStroopsWithUnit,
@@ -18,7 +19,7 @@ describe("formatStroops", () => {
 
   it("handles multi-billion XLM magnitudes exactly", () => {
     // 2.5B XLM = 25_000_000_000_000_000 stroops — beyond float precision.
-    assert.equal(formatStroops(25_000_000_000_000_000n), "2,500,000,000.0000000");
+    assert.equal(formatStroops(25_000_000_000_000_000_000n), "2,500,000,000.0000000");
   });
 
   it("accepts number and string inputs", () => {
@@ -49,5 +50,53 @@ describe("formatStroopsWithUnit / formatRawStroops", () => {
       formatStroopsWithUnit(2_000_000n, { symbol: "USDC", decimals: 6 }),
       "2.000000 USDC",
     );
+  });
+});
+
+describe("formatRemaining", () => {
+  it("signals expired for zero and negative remaining", () => {
+    const zero = formatRemaining(0);
+    assert.equal(zero.expired, true);
+    assert.equal(zero.text, "expired");
+
+    const neg = formatRemaining(-120n);
+    assert.equal(neg.expired, true);
+    assert.equal(neg.text, "expired");
+  });
+
+  it("renders sub-minute remaining as <m1", () => {
+    const result = formatRemaining(30);
+    assert.equal(result.expired, false);
+    assert.equal(result.text, "<m1");
+  });
+
+  it("renders exact minutes without seconds noise", () => {
+    assert.equal(formatRemaining(60n).text, "1m");
+    assert.equal(formatRemaining(180).text, "3m");
+  });
+
+  it("renders hours and days with a rounded-down ladder", () => {
+    assert.equal(formatRemaining(3600).text, "1h");
+    assert.equal(formatRemaining(3600 + 1800).text, "1h30m");
+    assert.equal(formatRemaining(86400).text, "1d");
+    assert.equal(formatRemaining(86400 + 7200).text, "1d2h");
+  });
+
+  it("caps large values at 999d+", () => {
+    const huge = formatRemaining(86400 * 10_000);
+    assert.equal(huge.text, "999d+");
+    assert.equal(huge.expired, false);
+  });
+
+  it("preserves bigint precision without floats", () => {
+    // u64 seconds beyond Number.safeInteger — no float conversion.
+    const big = 9_000_000_000_000_000n;
+    const result = formatRemaining(big);
+    assert.equal(result.text, "999d+");
+    assert.equal(result.expired, false);
+  });
+
+  it("accepts number and bigint inputs identically", () => {
+    assert.equal(formatRemaining(7200).text, formatRemaining(7200n).text);
   });
 });
