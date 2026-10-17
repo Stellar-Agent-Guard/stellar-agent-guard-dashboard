@@ -13,7 +13,16 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { rpc } from "@stellar/stellar-sdk";
-import { handleRpcRequest, accountLedgerKey, contractCodeLedgerKey, contractInstanceLedgerKey, MOCK_LEDGER, WASM_BYTES, GUARD, OPERATOR_ADDRESS } from "../e2e/rpcFixtures.ts";
+import {
+  handleRpcRequest,
+  accountLedgerKey,
+  contractCodeLedgerKey,
+  contractInstanceLedgerKey,
+  MOCK_LEDGER,
+  WASM_BYTES,
+  GUARD,
+  OPERATOR_ADDRESS,
+} from "../e2e/rpcFixtures.ts";
 const bytesToHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 import { readGuardSnapshot } from "../../lib/guard/guardOps.ts";
 import { PHASE1_ARTIFACT } from "../../lib/guard/network.ts";
@@ -52,7 +61,9 @@ describe("e2e rpc fixtures", () => {
     const instance = (await server.getContractInstance(GUARD)) as unknown as {
       executable?: { wasmHash?: { value?: unknown } };
     };
-    const reportedHash = bytesToHex(new Uint8Array(instance.executable?.wasmHash?.value as ArrayBufferLike));
+    const reportedHash = bytesToHex(
+      new Uint8Array(instance.executable?.wasmHash?.value as ArrayBufferLike),
+    );
     assert.equal(reportedHash, PHASE1_ARTIFACT.wasmHash);
     // The committed wasm fixture must still be the pinned artifact, byte for
     // byte: the E2E identity panel is only honest if these bytes are real.

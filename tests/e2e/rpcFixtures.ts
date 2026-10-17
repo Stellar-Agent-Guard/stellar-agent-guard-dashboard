@@ -251,8 +251,7 @@ export function handleRpcRequest(requestBody: unknown): RpcResponse {
       // the `policy()` probe, which returns the contract's null: there is no
       // policy on this fixture guard.
       const invokedFn = functionNameOf(request.params?.transaction);
-      const retval =
-        invokedFn === "policy" ? xdr.ScVal.scvVoid() : guardStatusScVal();
+      const retval = invokedFn === "policy" ? xdr.ScVal.scvVoid() : guardStatusScVal();
       return result({
         id: "0".repeat(64),
         latestLedger: MOCK_LEDGER,
@@ -272,7 +271,11 @@ export function handleRpcRequest(requestBody: unknown): RpcResponse {
       return result({ status: "healthy", latestLedger: MOCK_LEDGER });
     }
     case "getNetwork": {
-      return result({ friendbotUrl: "", passphrase: "Test SDF Network ; September 2015", latestLedger: MOCK_LEDGER });
+      return result({
+        friendbotUrl: "",
+        passphrase: "Test SDF Network ; September 2015",
+        latestLedger: MOCK_LEDGER,
+      });
     }
     default:
       return error(-32601, `fixture has no handler for ${request.method ?? "(unknown)"}`);

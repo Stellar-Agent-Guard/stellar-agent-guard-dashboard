@@ -45,7 +45,15 @@ interface WalletMockOptions {
  */
 export async function installWalletMock(page: Page, options: WalletMockOptions): Promise<void> {
   await page.addInitScript(
-    ({ passphrase, network, address }: { passphrase: string; network: string; address: string }) => {
+    ({
+      passphrase,
+      network,
+      address,
+    }: {
+      passphrase: string;
+      network: string;
+      address: string;
+    }) => {
       interface FreighterRequest {
         type: string;
         /** The id the API puts on the request; echoed back as `messagedId`. */
