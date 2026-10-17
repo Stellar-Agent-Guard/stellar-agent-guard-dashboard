@@ -3,6 +3,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { deadManRemaining, describePolicy, isDeadManFrozen } from "stellar-agent-guard-sdk";
+import { formatRemaining } from "../lib/guard/time";
 import { useGuard } from "./GuardProvider.tsx";
 import {
   ErrorBlock,
@@ -33,10 +34,9 @@ import {
   type SimulationScenario,
   type SimulationState,
 } from "../lib/guard/dmsSimulator.ts";
-import { evaluateDmsAlert, formatDmsDuration, type DmsAlert } from "../lib/guard/dmsAlert.ts";
+import { evaluateDmsAlert, type DmsAlert } from "../lib/guard/dmsAlert.ts";
 import { calculateVelocity } from "../lib/guard/velocity.ts";
 import { useStatusTransitionAnnouncer } from "../lib/guard/statusTransitions.ts";
-import { formatRemaining } from "../lib/guard/time.ts";
 
 /**
  * The proactive dead-man-switch deadline banner, shown above the on-chain
@@ -47,6 +47,16 @@ import { formatRemaining } from "../lib/guard/time.ts";
  * remaining time, time since the last heartbeat, and the estimated calendar
  * moment of expiration. Every number comes from the snapshot's ledger clock,
  * never the browser's, because that is the clock the contract judges.
+ */
+function formatDmsDuration(secs: number): string {
+  const remaining = formatRemaining(BigInt(Math.trunc(secs)));
+  if (remaining === null) return "expired";
+  return remaining.text;
+}
+
+/**
+ * The proactive dead-man-switch deadline banner, shown above the on-chain
+ * state panel while the switch is counting down to its threshold.
  */
 function DmsAlertBanner({ alert }: { alert: DmsAlert }) {
   const details: string[] = [];
@@ -808,9 +818,8 @@ function RealDmsStats({
               const policy = snapshot.policy.ok ? snapshot.policy.value : null;
               const remaining = deadManRemaining(status, policy);
               if (remaining === null) return "switch disabled (grace 0)";
-              if (remaining < 0n) return "grace elapsed; account refuses calls";
               const formatted = formatRemaining(remaining);
-              if (formatted === null) return "grace elapsed; account refuses calls";
+              if (formatted === null) return "grace expired";
               return `${formatted.text} of grace left`;
             }}
           />
