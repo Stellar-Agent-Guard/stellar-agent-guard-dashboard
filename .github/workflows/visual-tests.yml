@@ -30,7 +30,7 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.63.0-noble
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The image already ships Node and the browsers under $PLAYWRIGHT_BROWSERS_PATH,
       # so nothing needs downloading beyond the package dependencies.
