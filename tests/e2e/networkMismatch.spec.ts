@@ -78,7 +78,7 @@ test("write controls stay disabled with an explanatory tooltip while the wallet 
   await expect(unfreeze).toHaveAttribute("title", TOOLTIP);
 
   // Configure page: the policy and deploy writes are gated the same way.
-  await page.getByRole("link", { name: "Configure" }).click();
+  await page.getByRole("link", { name: "Configure", exact: true }).click();
   const install = page.getByRole("button", { name: /Sign and install policy/ });
   const revoke = page.getByRole("button", { name: /Revoke policy/ });
   await expect(install).toBeDisabled();
@@ -111,7 +111,7 @@ test("switching the wallet to the dashboard's network re-enables the controls", 
   // the account as not frozen, so there is nothing to unfreeze.
   await expect(page.getByRole("button", { name: "Unfreeze", exact: true })).toBeDisabled();
 
-  await page.getByRole("link", { name: "Configure" }).click();
+  await page.getByRole("link", { name: "Configure", exact: true }).click();
   await expect(page.getByRole("button", { name: /Sign and install policy/ })).toBeEnabled();
   await expect(page.getByRole("button", { name: /Revoke policy/ })).toBeEnabled();
   // Deploy is wallet-enabled now; it stays disabled only by its artifact gate.
