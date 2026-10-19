@@ -25,8 +25,8 @@ import {
 } from "./networkMismatchWalletMock.ts";
 import { handleRpcRequest } from "./rpcFixtures.ts";
 
-const MISMATCH_BANNER = /Your wallet is on "Mainnet"/;
-const TOOLTIP = /different network is refused/;
+const MISMATCH_BANNER = /Wallet on Mainnet, dashboard on Testnet/;
+const TOOLTIP = /Connect admin wallet to perform this action/;
 
 /** Answer every Soroban RPC POST the console makes with the local fixtures. */
 async function mockSorobanRpc(page: Page): Promise<void> {
@@ -54,7 +54,7 @@ test("a mainnet wallet is refused with the network mismatch blocker", async ({ p
   // The blocker names both sides of the mismatch and the consequence, in the
   // console's own wording from GuardProvider.
   await expect(page.getByText(MISMATCH_BANNER)).toBeVisible();
-  await expect(page.getByText(/Switch the wallet's network and reconnect/)).toBeVisible();
+  await expect(page.getByText(/Switch the wallet's network/)).toBeVisible();
 
   // The refusal is state, not just prose: the wallet stays disconnected, so
   // nothing on the page claims a wallet is connected. `exact` matters — the page
@@ -130,7 +130,7 @@ test("a wallet already on the dashboard's network never shows the blocker", asyn
   await switchWalletNetwork(page, "testnet");
   await connectWalletFromUi(page);
 
-  await expect(page.getByText(/Your wallet is on/)).toHaveCount(0);
+  await expect(page.locator('[data-testid="network-mismatch"]')).toHaveCount(0);
   await expect(page.getByText("connected", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Freeze this account" })).toBeEnabled();
 });
@@ -151,6 +151,6 @@ test("reconnecting with a different wrong network updates the blocker", async ({
   }, "Local Network ; January 2020");
   await connectWalletFromUi(page);
 
-  await expect(page.getByText(/Your wallet is on "Local"/)).toBeVisible();
+  await expect(page.getByText(/Wallet on Local, dashboard on Testnet/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Freeze this account" })).toBeDisabled();
 });

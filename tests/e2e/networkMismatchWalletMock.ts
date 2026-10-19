@@ -15,7 +15,7 @@
  * based on the passphrase it reports, exactly like the real thing.
  */
 
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { NETWORK } from "../../lib/guard/network.ts";
 
 /** The dashboard's pinned network, for readable failures. */
@@ -106,7 +106,14 @@ export async function installWalletMock(page: Page, options: WalletMockOptions):
             respond(request, state.connected ? { publicKey: state.address } : { publicKey: "" });
             break;
           }
-          case "REQUEST_NETWORK":
+          case "REQUEST_NETWORK": {
+            respond(request, {
+              network: state.network,
+              networkPassphrase: state.passphrase,
+              networkDetails: networkDetails(),
+            });
+            break;
+          }
           case "REQUEST_NETWORK_DETAILS": {
             respond(request, { networkDetails: networkDetails() });
             break;
@@ -206,4 +213,7 @@ export async function switchWalletNetwork(page: Page, to: MockNetwork): Promise<
  */
 export async function connectWalletFromUi(page: Page): Promise<void> {
   await page.getByRole("button", { name: /connect admin wallet/i }).click();
+  const picker = page.getByRole("dialog", { name: "Choose a wallet provider" });
+  await expect(picker.getByText("detected", { exact: true })).toBeVisible();
+  await picker.getByRole("button", { name: "Connect", exact: true }).click();
 }

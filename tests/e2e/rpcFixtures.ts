@@ -277,6 +277,14 @@ export function handleRpcRequest(requestBody: unknown): RpcResponse {
         latestLedger: MOCK_LEDGER,
       });
     }
+    case "getLatestLedger": {
+      return result({
+        id: "0".repeat(64),
+        sequence: MOCK_LEDGER,
+        protocolVersion: 22,
+        closeTime: Math.floor(Date.now() / 1000),
+      });
+    }
     default:
       return error(-32601, `fixture has no handler for ${request.method ?? "(unknown)"}`);
   }

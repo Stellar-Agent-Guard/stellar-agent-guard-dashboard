@@ -27,7 +27,7 @@ jobs:
     # Baselines are generated in this exact image, so a diff here means the
     # interface changed — not that the runner happens to have different fonts.
     container:
-      image: mcr.microsoft.com/playwright:v1.63.0-noble
+      image: mcr.microsoft.com/playwright:v1.64.0-noble
 
     steps:
       - uses: actions/checkout@v7
