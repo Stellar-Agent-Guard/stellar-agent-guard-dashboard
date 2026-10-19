@@ -113,7 +113,11 @@ test("switching the wallet to the dashboard's network re-enables the controls", 
 
   await page.getByRole("link", { name: "Configure", exact: true }).click();
   await expect(page.getByRole("button", { name: /Sign and install policy/ })).toBeEnabled();
-  await expect(page.getByRole("button", { name: /Revoke policy/ })).toBeEnabled();
+  // Revoke stays disabled for a different, correct reason: the chain reports
+  // no policy installed (default-deny), so there is nothing to revoke.
+  const revoke = page.getByRole("button", { name: /Revoke policy/ });
+  await expect(revoke).toBeDisabled();
+  await expect(revoke).not.toHaveAttribute("title", TOOLTIP);
   // Deploy is wallet-enabled now; it stays disabled only by its artifact gate.
   // Deploy is gated by the wallet *and* by the on-chain artifact identity. The
   // fixtures serve the pinned bytecode, so the artifact gate passes and the only
