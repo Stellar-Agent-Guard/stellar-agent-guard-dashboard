@@ -26,8 +26,13 @@ jobs:
     # The official Playwright image pins the browser build *and* the font set.
     # Baselines are generated in this exact image, so a diff here means the
     # interface changed — not that the runner happens to have different fonts.
+    #
+    # The tag must match the installed `@playwright/test` version: the image
+    # ships the browser build that version expects (`chromium_headless_shell-*`),
+    # and a stale tag fails every project at launch, before any comparison.
+    # Dependabot's Playwright bumps therefore have to move this tag with them.
     container:
-      image: mcr.microsoft.com/playwright:v1.63.0-noble
+      image: mcr.microsoft.com/playwright:v1.64.0-noble
 
     steps:
       - uses: actions/checkout@v7
