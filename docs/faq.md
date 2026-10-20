@@ -11,3 +11,7 @@ The freeze transaction is signed and broadcast on-chain. Once included in a ledg
 ### How do I switch networks?
 
 The current deployment targets Stellar Testnet. Network settings can be inspected in `lib/guard/network.ts`.
+
+### How should I handle a wallet, RPC, or verification error?
+
+Follow the read-only checks in the [RPC and wallet troubleshooting runbook](runbooks/rpc-wallet-errors.md). A failed read does not mean the guard has no policy, and an uncertain submit must be checked by transaction hash before considering another write.

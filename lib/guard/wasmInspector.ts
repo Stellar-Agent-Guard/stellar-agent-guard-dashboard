@@ -3,7 +3,7 @@
  *
  * `verifyWasmIdentity` in `chain.ts` already proves the ledger's declared hash
  * matches the bytes it stores. This module answers the operator-facing question
- * on top of that: how big the artifact is, which functions it exports, what
+ * on top of that: how big the artifact is, which functions it exports, whatlib/guard/wasmInspector.ts
  * toolchain embedded its own name in it, and whether the whole thing is the
  * artifact this build pins. A contract built from different source can satisfy
  * every read in the dashboard and still not be the code that was audited, so
@@ -15,7 +15,10 @@
  */
 
 import { PHASE1_ARTIFACT } from "./network.ts";
+import { MAX_WASM_INPUT_BYTES } from "./wasmLimits.ts";
 import { sha256Hex } from "./scval.ts";
+import { computeWasmHash } from "../worker/wasmHash.ts";
+export { MAX_WASM_INPUT_BYTES } from "./wasmLimits.ts";
 
 const MAGIC = [0x00, 0x61, 0x73, 0x6d] as const;
 
@@ -71,6 +74,9 @@ export type WasmInspection =
  * next to a hash an operator is about to trust.
  */
 export function inspectWasm(bytes: Uint8Array): WasmInspection {
+  if (bytes.byteLength > MAX_WASM_INPUT_BYTES) {
+    return { ok: false, reason: `artifact exceeds the ${MAX_WASM_INPUT_BYTES}-byte inspection limit` };
+  }
   if (bytes.length < 8)
     return { ok: false, reason: `too short to be a WASM module (${bytes.length} bytes)` };
   for (const [index, expected] of MAGIC.entries()) {
@@ -273,14 +279,32 @@ export async function buildIntegrityReport(params: {
   reportedWasmHash?: string | null;
   pinned?: { wasmHash: string; wasmBytes: number };
   digest?: (bytes: Uint8Array) => Promise<string>;
+  signal?: AbortSignal;
 }): Promise<IntegrityReport> {
   const pinned = params.pinned ?? {
     wasmHash: PHASE1_ARTIFACT.wasmHash,
     wasmBytes: PHASE1_ARTIFACT.wasmBytes,
   };
-  const digest = params.digest ?? sha256Hex;
-  const inspection = inspectWasm(params.wasm);
+  const digest = params.digest ?? (typeof Worker !== "undefined"
+    ? (bytes: Uint8Array) => computeWasmHash(bytes, params.signal)
+    : sha256Hex);
   const bytes = params.wasm.length;
+  if (bytes > MAX_WASM_INPUT_BYTES) {
+    return {
+      verdict: "malformed",
+      headline: "UNRECOGNIZED BYTECODE",
+      detail: `The fetched artifact exceeds the ${MAX_WASM_INPUT_BYTES}-byte inspection limit.`,
+      sha256: null,
+      bytes,
+      pinnedHash: pinned.wasmHash,
+      pinnedBytes: pinned.wasmBytes,
+      reportedWasmHash: params.reportedWasmHash ?? null,
+      entrypoints: [],
+      sections: [],
+      metadata: null,
+    };
+  }
+  const inspection = inspectWasm(params.wasm);
 
   if (!inspection.ok) {
     return {

@@ -17,6 +17,8 @@ export interface AuditReport {
   dmsStatus: string;
   network: string;
   timestamp: string;
+  /** Read outcomes from this one guard snapshot; failed reads remain explicit. */
+  readOutcomes: Record<"status" | "policy" | "window" | "identity", { status: "read" | "error"; detail: string }>;
 }
 
 export function compilePrintReport(
@@ -25,29 +27,42 @@ export function compilePrintReport(
   adminKey: string,
 ): AuditReport {
   const policy = snapshot.policy.ok ? snapshot.policy.value : null;
-  const status = snapshot.status.ok ? snapshot.status.value : null;
+  const outcome = <T,>(result: ReadResult<T>) =>
+    result.ok
+      ? { status: "read" as const, detail: "Read successfully" }
+      : { status: "error" as const, detail: result.error };
 
   return {
     contractId: snapshot.guard,
-    bytecodeHash: snapshot.identity.ok ? (snapshot.identity.value.reportedWasmHash ?? "-") : "-",
-    policyRules: policy ? describePolicy(policy) : "No policy installed",
+    bytecodeHash: snapshot.identity.ok ? (snapshot.identity.value.reportedWasmHash ?? "-") : `Unavailable: ${snapshot.identity.error}`,
+    policyRules: snapshot.policy.ok
+      ? policy ? describePolicy(policy) : "No policy installed"
+      : `Unavailable: ${snapshot.policy.error}`,
     allowlists: {
-      assets: policy ? policy.assets : [],
-      recipients: policy ? (policy.allow_any_recipient ? ["* (Any)"] : policy.recipients) : [],
+      assets: policy ? policy.assets : snapshot.policy.ok ? [] : [`Unavailable: ${snapshot.policy.error}`],
+      recipients: policy
+        ? (policy.allow_any_recipient ? ["* (Any)"] : policy.recipients)
+        : snapshot.policy.ok ? [] : [`Unavailable: ${snapshot.policy.error}`],
       protocols: policy
         ? policy.protocols.map((p) => `${p.contract} ${p.fns ? `(${p.fns.join(", ")})` : "(Any)"}`)
-        : [],
+        : snapshot.policy.ok ? [] : [`Unavailable: ${snapshot.policy.error}`],
     },
     adminKey,
-    dmsStatus: status
-      ? isDeadManFrozen(status)
+    dmsStatus: snapshot.status.ok
+      ? isDeadManFrozen(snapshot.status.value)
         ? "FIRED"
-        : status.heartbeat_expired
+        : snapshot.status.value.heartbeat_expired
           ? "EXPIRED"
           : "OK"
-      : "UNKNOWN",
+      : `Unavailable: ${snapshot.status.error}`,
     network: networkName,
-    timestamp: new Date().toISOString(),
+    timestamp: snapshot.fetchedAt,
+    readOutcomes: {
+      status: outcome(snapshot.status),
+      policy: outcome(snapshot.policy),
+      window: outcome(snapshot.window),
+      identity: outcome(snapshot.identity),
+    },
   };
 }
 

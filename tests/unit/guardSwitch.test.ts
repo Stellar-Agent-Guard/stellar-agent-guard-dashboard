@@ -22,6 +22,7 @@ import { GuardProvider, useGuard } from "../../components/GuardProvider.tsx";
 import { KNOWN_INSTANCES, instanceStorageKey } from "../../lib/guard/instance.ts";
 import { scopedStorageKey } from "../../lib/guard/guardScoped.ts";
 import { guardStatusScVal } from "../mocks/sorobanFixtures.ts";
+import { compilePrintReport } from "../../lib/guard/printReport.ts";
 
 installDom();
 // Force the storage fallback transport so no real BroadcastChannel is left open
@@ -132,11 +133,19 @@ function Probe({ guards = [], remove }: { guards?: string[]; remove?: string }):
       ? "FROZEN"
       : "CLEAR"
     : "LOADING";
+  const printReport = snapshot ? compilePrintReport(snapshot, "Testnet", "Disconnected") : null;
   return react.createElement(
     "div",
     null,
     react.createElement("span", { "data-testid": "guard" }, guard),
     react.createElement("span", { "data-testid": "status" }, status),
+    react.createElement(
+      "span",
+      { "data-testid": "print-report" },
+      printReport
+        ? `${printReport.network}|${printReport.contractId}|${printReport.dmsStatus}|${Object.values(printReport.readOutcomes).map((item) => item.status).join(",")}`
+        : "unavailable",
+    ),
     react.createElement("span", { "data-testid": "count" }, String(instances.length)),
     react.createElement(
       "span",
@@ -240,6 +249,8 @@ test("a stale read from the previous guard never paints over the new guard", asy
     fake.resolveStatus(GUARD_B, false);
     await settle();
     assert.equal(text(rendered.container, "status"), "CLEAR", "B's read is painted");
+    const reportForB = text(rendered.container, "print-report");
+    assert.match(reportForB, new RegExp(`^Testnet\\|${GUARD_B}\\|OK\\|`));
 
     // Now the older read resolves. It belongs to A, so it must be dropped.
     assert.equal(fake.pending(GUARD_A), 1, "A is still pending");
@@ -247,6 +258,7 @@ test("a stale read from the previous guard never paints over the new guard", asy
     await settle();
     assert.equal(text(rendered.container, "guard"), GUARD_B, "still on B");
     assert.equal(text(rendered.container, "status"), "CLEAR", "A's FROZEN never lands");
+    assert.equal(text(rendered.container, "print-report"), reportForB, "the printable report stays bound to B's snapshot");
   } finally {
     await rendered.unmount();
   }

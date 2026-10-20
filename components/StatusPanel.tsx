@@ -472,6 +472,12 @@ export function StatusPanel() {
             <p>
               <strong>DMS Status:</strong> {printReport.dmsStatus}
             </p>
+            <p><strong>Live read outcomes (guard {printReport.contractId}):</strong></p>
+            <ul>
+              {Object.entries(printReport.readOutcomes).map(([field, outcome]) => (
+                <li key={field}>{field}: {outcome.status} — {outcome.detail}</li>
+              ))}
+            </ul>
             <p>
               <strong>Policy Rules:</strong> {printReport.policyRules}
             </p>

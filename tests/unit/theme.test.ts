@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test, before, afterEach } from "node:test";
 import { installDom, loadReact } from "./domHarness.ts";
 import { ThemeProvider, useTheme } from "../../components/ThemeProvider.tsx";
+import { readFileSync } from "node:fs";
 
 let dom: ReturnType<typeof installDom>;
 let React: Awaited<ReturnType<typeof loadReact>>["react"];
@@ -135,4 +136,40 @@ test("listens to media query changes if no localStorage set", async () => {
   });
 
   assert.equal(document.documentElement.getAttribute("data-theme"), "light");
+});
+
+test("status and severity tokens meet WCAG AA text contrast in every theme", () => {
+  const css = readFileSync(new URL("../../app/globals.css", import.meta.url), "utf8");
+  const hex = (value: string) => value.match(/#[\da-f]{6}/i)?.[0];
+  const luminance = (color: string) => {
+    const channels = color.slice(1).match(/../g)!.map((part) => parseInt(part, 16) / 255);
+    const linear = channels.map((c) => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!;
+  };
+  const ratio = (a: string, b: string) => {
+    const values = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (values[0]! + 0.05) / (values[1]! + 0.05);
+  };
+  const themes = [
+    [":root {", "--bg: #0a0d12", "--text: #e6ebf2"],
+    [":root[data-theme=\"light\"]", "--bg: #ffffff", "--text: #111827"],
+    [":root[data-theme=\"high-contrast\"]", "--bg: #000000", "--text: #ffffff"],
+  ] as const;
+  for (const [selector, bgToken, textToken] of themes) {
+    const start = css.indexOf(selector);
+    assert.notEqual(start, -1, `theme selector exists: ${selector}`);
+    const block = css.slice(start, css.indexOf("}", start));
+    const bg = hex(block.slice(block.indexOf(bgToken.split(": ")[0]!), block.indexOf(";", block.indexOf(bgToken.split(": ")[0]!))));
+    const foreground = hex(block.slice(block.indexOf(textToken.split(": ")[0]!), block.indexOf(";", block.indexOf(textToken.split(": ")[0]!))));
+    assert.ok(bg && foreground && ratio(bg, foreground) >= 4.5, `${selector} body text contrast >= 4.5:1`);
+    for (const token of ["ok", "warn", "danger"]) {
+      const colorLine = block.match(new RegExp(`--${token}:\\s*(#[\\da-f]{6})`, "i"));
+      assert.ok(colorLine, `${selector} defines --${token}`);
+      assert.ok(ratio(bg, colorLine[1]!) >= 4.5, `${selector} --${token} contrast >= 4.5:1`);
+    }
+    const color = (name: string) => block.match(new RegExp(`--${name}:\\s*(#[\\da-f]{6})`, "i"))?.[1];
+    assert.ok(ratio(color("accent")!, color("button-text")!) >= 4.5, `${selector} primary button contrast >= 4.5:1`);
+    assert.ok(ratio(color("danger")!, color("danger-button-text")!) >= 4.5, `${selector} danger button contrast >= 4.5:1`);
+    assert.ok(ratio(color("panel-2")!, color("muted")!) >= 4.5, `${selector} disabled control text contrast >= 4.5:1`);
+  }
 });

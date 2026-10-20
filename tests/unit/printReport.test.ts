@@ -57,6 +57,25 @@ test("compilePrintReport extracts correct fields from snapshot", () => {
   assert.equal(report.allowlists.assets[0], "A1");
 });
 
+test("print report pins failed read outcomes to the same guard instead of reassuring defaults", () => {
+  const snapshot = {
+    guard: "C-GUARD-B",
+    fetchedAt: "2026-10-20T10:00:00Z",
+    status: { ok: false, error: "RPC timeout" },
+    policy: { ok: false, error: "rate limited" },
+    window: { ok: false, error: "read unavailable" },
+    identity: { ok: false, error: "hash read failed" },
+  } as any;
+  const report = compilePrintReport(snapshot, "Testnet", "Disconnected");
+  assert.equal(report.contractId, "C-GUARD-B");
+  assert.equal(report.network, "Testnet");
+  assert.match(report.dmsStatus, /Unavailable: RPC timeout/);
+  assert.match(report.policyRules, /Unavailable: rate limited/);
+  assert.deepEqual(report.allowlists.assets, ["Unavailable: rate limited"]);
+  assert.match(report.bytecodeHash, /Unavailable: hash read failed/);
+  assert.deepEqual(Object.values(report.readOutcomes).map((entry) => entry.status), ["error", "error", "error", "error"]);
+});
+
 // ── Deployment verification receipt (#396, #397) ───────────────────────────
 
 /** A syntactically valid contract address, for the prediction check. */

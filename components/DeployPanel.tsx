@@ -72,6 +72,8 @@ type ArtifactFetch = { artifact: ArtifactCheck } | { error: string };
 // exports GUARD_WASM_HASH for the recommended build.
 export function DeployPanel() {
   const { server, signer, wallet, refresh, addInstance, guard } = useGuard();
+  const inspectionController = useRef<AbortController | null>(null);
+  useEffect(() => () => inspectionController.current?.abort(), []);
   const [artifact, setArtifact] = useState<ArtifactCheck | null>(null);
   const [artifactError, setArtifactError] = useState<string | null>(null);
   const [salt, setSalt] = useState<Uint8Array>(() => randomSalt());
@@ -355,18 +357,26 @@ export function DeployPanel() {
     }
     setInspecting(true);
     setInspectError(null);
+    inspectionController.current?.abort();
+    const controller = new AbortController();
+    inspectionController.current = controller;
     try {
       const [wasm, identity] = await Promise.all([
         fetchContractWasm(server, target),
         verifyWasmIdentity(server, target),
       ]);
-      setIntegrity(
-        await buildIntegrityReport({ wasm, reportedWasmHash: identity.reportedWasmHash }),
-      );
+      const report = await buildIntegrityReport({
+        wasm,
+        reportedWasmHash: identity.reportedWasmHash,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      setIntegrity(report);
     } catch (caught) {
+      if (controller.signal.aborted) return;
       setInspectError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setInspecting(false);
+      if (!controller.signal.aborted) setInspecting(false);
     }
   }
 

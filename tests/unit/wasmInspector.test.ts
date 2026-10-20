@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { runWasmWorker } from "../../lib/worker/wasmParse.ts";
 import { PHASE1_ARTIFACT } from "../../lib/guard/network.ts";
 import {
   buildIntegrityReport,
   describeBuild,
   inspectWasm,
+  MAX_WASM_INPUT_BYTES,
   sortEntrypoints,
   type WasmInspection,
 } from "../../lib/guard/wasmInspector.ts";
@@ -96,6 +98,55 @@ test("anything that is not a WASM module says so", () => {
   assert.equal(notWasm.ok, false);
   if (notWasm.ok) return;
   assert.match(notWasm.reason, /missing the \\0asm magic/);
+});
+
+test("oversized artifacts are rejected before hashing and can never be verified", async () => {
+  const bytes = new Uint8Array(MAX_WASM_INPUT_BYTES + 1);
+  assert.equal(inspectWasm(bytes).ok, false);
+  let hashed = false;
+  const report = await buildIntegrityReport({
+    wasm: bytes,
+    reportedWasmHash: PINNED.wasmHash,
+    pinned: PINNED,
+    digest: async () => { hashed = true; return PINNED.wasmHash; },
+  });
+  assert.equal(hashed, false);
+  assert.equal(report.verdict, "malformed");
+  assert.equal(report.sha256, null);
+  assert.match(report.detail, /inspection limit/);
+});
+
+test("WASM worker is terminated after success, error, and cancellation", async () => {
+  const originalWorker = globalThis.Worker;
+  const instances: Array<{ terminateCalls: number; onmessage: ((event: MessageEvent) => void) | null; onerror: ((event: ErrorEvent) => void) | null }> = [];
+  class FakeWorker {
+    onmessage: ((event: MessageEvent) => void) | null = null;
+    onerror: ((event: ErrorEvent) => void) | null = null;
+    terminateCalls = 0;
+    constructor() { instances.push(this); }
+    postMessage() {}
+    terminate() { this.terminateCalls += 1; }
+  }
+  globalThis.Worker = FakeWorker as unknown as typeof Worker;
+  try {
+    const success = runWasmWorker("", new Uint8Array([1]));
+    instances[0]!.onmessage!({ data: "ok" } as MessageEvent);
+    assert.equal(await success, "ok");
+    assert.equal(instances[0]!.terminateCalls, 1);
+
+    const failure = runWasmWorker("", new Uint8Array([1]));
+    instances[1]!.onerror!({ message: "worker failed" } as ErrorEvent);
+    await assert.rejects(failure, /worker failed/);
+    assert.equal(instances[1]!.terminateCalls, 1);
+
+    const controller = new AbortController();
+    const cancelled = runWasmWorker("", new Uint8Array([1]), controller.signal);
+    controller.abort();
+    await assert.rejects(cancelled, { name: "AbortError" });
+    assert.equal(instances[2]!.terminateCalls, 1);
+  } finally {
+    globalThis.Worker = originalWorker;
+  }
 });
 
 test("a header whose version field never terminates is truncated, not zero", () => {

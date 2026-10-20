@@ -9,9 +9,52 @@
   --ok: #37d67a;
   --warn: #ffb020;
   --danger: #ff5c5c;
+  --button-text: #05121f;
+  --danger-button-text: #000000;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   color-scheme: dark;
 }
+
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --panel: #f4f6f8;
+  --panel-2: #e9edf2;
+  --line: #657080;
+  --text: #111827;
+  --muted: #454f5e;
+  --accent: #0757a6;
+  --ok: #126b36;
+  --warn: #754500;
+  --danger: #a11212;
+  --button-text: #ffffff;
+  --danger-button-text: #ffffff;
+  color-scheme: light;
+}
+
+:root[data-theme="high-contrast"] {
+  --bg: #000000;
+  --panel: #000000;
+  --panel-2: #111111;
+  --line: #ffffff;
+  --text: #ffffff;
+  --muted: #eeeeee;
+  --accent: #74d7ff;
+  --ok: #72ff9b;
+  --warn: #ffe66d;
+  --danger: #ff8585;
+  --button-text: #000000;
+  --danger-button-text: #000000;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] .pill.ok { background: #e7f5eb; border-color: #126b36; }
+:root[data-theme="light"] .pill.warn { background: #fff4d6; border-color: #754500; }
+:root[data-theme="light"] .pill.danger { background: #fde8e8; border-color: #a11212; }
+:root[data-theme="light"] .error { background: #fde8e8; }
+:root[data-theme="high-contrast"] .pill.ok,
+:root[data-theme="high-contrast"] .pill.warn,
+:root[data-theme="high-contrast"] .pill.danger { background: #000000; border-color: currentColor; }
+:root[data-theme="high-contrast"] .error { background: #000000; border: 1px solid var(--danger); }
 
 * {
   box-sizing: border-box;
@@ -155,7 +198,7 @@ nav.tabs a[aria-current="page"] {
 
 button {
   background: var(--accent);
-  color: #05121f;
+  color: var(--button-text);
   border: 1px solid transparent;
   border-radius: 8px;
   padding: 8px 14px;
@@ -172,11 +215,14 @@ button.secondary {
 
 button.danger {
   background: var(--danger);
-  color: #2a0505;
+  color: var(--danger-button-text);
 }
 
 button:disabled {
-  opacity: 0.45;
+  opacity: 1;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px dashed var(--line);
   cursor: not-allowed;
 }
 

@@ -7,3 +7,8 @@ To guarantee that deployed custom accounts execute the exact audited Phase 1 sec
 3. If the hash does not match, deployment is refused.
 4. The custom account address is predicted mathematically before the operator signs the transaction.
 5. After deployment, `status()` is queried from Soroban RPC to confirm initialization.
+# Browser resource limit
+
+The dashboard refuses to parse or hash WASM artifacts larger than 2 MiB. The
+limit is checked before section parsing and digest work; an oversized response is
+reported as **UNRECOGNIZED BYTECODE** and cannot receive a verified result.

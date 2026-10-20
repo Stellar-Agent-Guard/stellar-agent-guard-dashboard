@@ -14,6 +14,7 @@
   - [Panic Button & Freeze](screens/panic-freeze.md)
   - [Telemetry Feed](screens/telemetry-feed.md)
 - [Operator Runbooks](runbooks/)
+  - [RPC and Wallet Troubleshooting](runbooks/rpc-wallet-errors.md)
   - [Emergency Freeze & Incident Response](runbooks/emergency-freeze.md)
   - [Routine Policy Updates & Audit](runbooks/policy-updates.md)
 - [Guides](guides/)
