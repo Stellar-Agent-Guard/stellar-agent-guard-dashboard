@@ -894,6 +894,49 @@ code {
 }
 
 /*
+ * Service-worker update notice (components/PwaRegistrar.tsx, #398).
+ *
+ * Deliberately a bottom-left strip rather than a modal: an update is never a
+ * reason to block a panic button, a wallet approval or an edit in progress. It
+ * sits opposite the toast viewport so the two cannot cover each other, and it
+ * is hidden from print because an interface update has no place in a
+ * compliance record.
+ */
+.pwa-update {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 100;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  max-width: min(440px, calc(100vw - 32px));
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+.pwa-update-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.pwa-update .row {
+  margin: 0;
+  gap: 8px;
+}
+@media print {
+  .pwa-update {
+    display: none !important;
+  }
+}
+
+/*
  * Incident Simulation Mode (rehearsal).
  *
  * The whole panel carries a striped watermark so a trainee cannot mistake a
