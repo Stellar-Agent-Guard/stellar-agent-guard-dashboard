@@ -6,6 +6,7 @@ import { deadManRemaining, describePolicy, isDeadManFrozen } from "stellar-agent
 import { useGuard } from "./GuardProvider.tsx";
 import {
   ErrorBlock,
+  NetworkBadge,
   Read,
   ReadSkeleton,
   ReadWithRetry,
@@ -164,7 +165,8 @@ export function StatusPanel() {
         </div>
 
         <p className="tiny muted" style={{ marginTop: 10 }}>
-          <span className="mono">{guard}</span> <CopyButton value={guard} label="guard address" />
+          <NetworkBadge /> <span className="mono">{guard}</span>{" "}
+          <CopyButton value={guard} label="guard address" />
         </p>
 
         <RehearsalModeToggle />

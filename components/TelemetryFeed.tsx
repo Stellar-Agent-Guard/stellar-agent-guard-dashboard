@@ -7,7 +7,14 @@ import { STREAM_BUFFER_LIMIT, type TelemetryEvent } from "../lib/guard/telemetry
 import { useGuard, useGuardEvents } from "./GuardProvider.tsx";
 import { TelemetryAlerts } from "./TelemetryAlerts.tsx";
 import { TelemetryChart } from "./TelemetryChart.tsx";
-import { ErrorBlock, Skeleton, TimeAgo, short, starLink, TxHashCell } from "./bits.tsx";
+import {
+  ErrorBlock,
+  NetworkBadge,
+  Skeleton,
+  TimeAgo,
+  short,
+  TxHashCell,
+} from "./bits.tsx";
 import { DateRangePicker } from "./DateRangePicker.tsx";
 import type { RangePreset, TimeRange } from "../lib/guard/ledgerTime.ts";
 import { density, initDensityStore } from "../lib/guard/densityStore.ts";
@@ -280,7 +287,10 @@ export function TelemetryFeed() {
   return (
     <div className="panel">
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <h2 style={{ margin: 0 }}>Telemetry</h2>
+        <div className="row" style={{ gap: 8 }}>
+          <h2 style={{ margin: 0 }}>Telemetry</h2>
+          <NetworkBadge />
+        </div>
         <div className="row">
           {feed.watching && <span className="pill ok">polling</span>}
           {stream.paused && <span className="pill warn">paused</span>}

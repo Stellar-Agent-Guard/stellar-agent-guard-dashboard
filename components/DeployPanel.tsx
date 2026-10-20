@@ -16,7 +16,7 @@ import { rememberDeployment } from "../lib/guard/setupChecklist.ts";
 import type { ArtifactCheck, DeployOutcome, DeployPlan } from "../lib/guard/guardOps.ts";
 import { deployCostBreakdown } from "../lib/guard/deployCostCalculator.ts";
 import type { InvokeResult } from "../lib/guard/submit.ts";
-import { NETWORK, PHASE1_ARTIFACT } from "../lib/guard/network.ts";
+import { NETWORK, PHASE1_ARTIFACT, isMainnet } from "../lib/guard/network.ts";
 import { fetchContractWasm, verifyWasmIdentity } from "../lib/guard/chain.ts";
 import { toHex } from "../lib/guard/scval.ts";
 import { validateInitParameters, type InitValidation } from "../lib/guard/initValidator.ts";
@@ -53,7 +53,7 @@ import { useGuard } from "./GuardProvider.tsx";
 import { CopyButton } from "./CopyButton.tsx";
 import { writeControlState } from "../lib/guard/observerMode.ts";
 import { MigrationWizard } from "./MigrationWizard.tsx";
-import { ErrorBlock, OutcomeList, starLink } from "./bits.tsx";
+import { ErrorBlock, NetworkBadge, OutcomeList, starLink } from "./bits.tsx";
 
 /** Either the chain's answer about the artifact, or why there is not one. */
 type ArtifactFetch = { artifact: ArtifactCheck } | { error: string };
@@ -410,6 +410,19 @@ export function DeployPanel() {
         verified.
       </p>
 
+      {isMainnet() && (
+        <div className="notice danger" role="status" data-testid="mainnet-unaudited-warning">
+          <strong>Mainnet target — the contracts are unaudited</strong>
+          <span className="tiny">
+            This build is pointed at Stellar Mainnet. The guard contracts are unaudited security
+            tooling that gates real fund access, and the contracts repo&apos;s SECURITY.md advises
+            against deploying to Mainnet without an independent audit. This banner is
+            display-side context only: it does not block the deploy flow — the write-blocking
+            guard is owned by the network-guard work, not here.
+          </span>
+        </div>
+      )}
+
       <div className="grid" style={{ marginTop: 12 }}>
         <div className="stat">
           <div className="k">Pinned artifact</div>
@@ -464,8 +477,8 @@ export function DeployPanel() {
               {plan.predicted}
             </div>
             <div className="n">
-              computed before signing, then confirmed by reading the instance back{" "}
-              <CopyButton value={plan.predicted} label="predicted guard address" />
+              <NetworkBadge /> computed before signing, then confirmed by reading the instance
+              back <CopyButton value={plan.predicted} label="predicted guard address" />
             </div>
           </div>
           <div className="stat">
@@ -719,7 +732,7 @@ export function DeployPanel() {
               ? "Deployed and verified against the pinned artifact"
               : "A contract was created, but it is NOT the pinned artifact"}
           </strong>
-          <span className="tiny mono">{outcome.guard}</span>{" "}
+          <span className="tiny mono">{outcome.guard}</span> <NetworkBadge />{" "}
           <CopyButton value={outcome.guard} label="deployed guard address" />
           <OutcomeList steps={outcome.steps} />
           {outcome.identity && (
