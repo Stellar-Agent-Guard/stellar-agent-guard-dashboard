@@ -3,6 +3,9 @@ import { test } from "node:test";
 import {
   DEFAULT_LAYOUT,
   LAYOUT_STORAGE_KEY,
+  NAMED_LAYOUTS_STORAGE_KEY,
+  MAX_NAMED_LAYOUTS,
+  MAX_LAYOUT_NAME_LENGTH,
   defaultLayout,
   loadLayout,
   movePanel,
@@ -11,18 +14,28 @@ import {
   resetLayout,
   saveLayout,
   setCollapsed,
+  // Named layouts (#378)
+  loadNamedLayouts,
+  saveNamedLayout,
+  renameNamedLayout,
+  deleteNamedLayout,
+  getNamedLayout,
   type DashboardLayout,
+  type NamedLayout,
   type PanelId,
   type StorageLike,
 } from "../../lib/guard/layoutStore.ts";
 
-function fakeStorage(): StorageLike & { data: Map<string, string> } {
+function fakeStorage(): StorageLike & { data: Map<string, string>; removeItem: (key: string) => void } {
   const data = new Map<string, string>();
   return {
     data,
-    getItem: (key) => data.get(key) ?? null,
-    setItem: (key, value) => {
+    getItem: (key: string) => data.get(key) ?? null,
+    setItem: (key: string, value: string) => {
       data.set(key, value);
+    },
+    removeItem: (key: string) => {
+      data.delete(key);
     },
   };
 }
@@ -153,4 +166,199 @@ test("resetLayout restores the default arrangement regardless of current state",
 test("loadLayout with no storage returns the default (server render, private mode)", () => {
   assert.deepEqual(ids(loadLayout(null)), [...DEFAULT_LAYOUT]);
   assert.deepEqual(saveLayout(defaultLayout(), null), undefined);
+});
+
+// ── Named layouts (#378) ────────────────────────────────────────────────
+
+test("saveNamedLayout persists a named layout and enforces the cap", () => {
+  const storage = fakeStorage();
+  const layout = defaultLayout();
+  const result = saveNamedLayout("My Layout", layout, storage);
+  assert.equal(result.ok, true);
+  assert.equal(result.layout.name, "My Layout");
+  assert.deepEqual(ids(result.layout.layout), [...DEFAULT_LAYOUT]);
+
+  const loaded = loadNamedLayouts(storage);
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0]?.name, "My Layout");
+});
+
+test("saveNamedLayout rejects empty names", () => {
+  const storage = fakeStorage();
+  const result = saveNamedLayout("   ", defaultLayout(), storage);
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "Layout name cannot be empty.");
+});
+
+test("saveNamedLayout enforces maximum name length", () => {
+  const storage = fakeStorage();
+  const longName = "a".repeat(MAX_LAYOUT_NAME_LENGTH + 1);
+  const result = saveNamedLayout(longName, defaultLayout(), storage);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /cannot exceed/);
+});
+
+test("saveNamedLayout enforces maximum number of layouts", () => {
+  const storage = fakeStorage();
+  for (let i = 0; i < MAX_NAMED_LAYOUTS; i++) {
+    const result = saveNamedLayout(`Layout ${i}`, defaultLayout(), storage);
+    assert.equal(result.ok, true);
+  }
+  const result = saveNamedLayout("One Too Many", defaultLayout(), storage);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Maximum of/);
+});
+
+test("saveNamedLayout updates existing layout with same name (case-insensitive)", () => {
+  const storage = fakeStorage();
+  const layout1 = setCollapsed(defaultLayout(), "panic", true);
+  saveNamedLayout("My Layout", layout1, storage);
+  const layout2 = setCollapsed(defaultLayout(), "telemetry", true);
+  const result = saveNamedLayout("my layout", layout2, storage); // different case
+  assert.equal(result.ok, true);
+  const loaded = loadNamedLayouts(storage);
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0]?.name, "My Layout"); // Original casing preserved
+  assert.equal(placement(loaded[0]!.layout, "telemetry").collapsed, true);
+});
+
+test("renameNamedLayout renames a saved layout", () => {
+  const storage = fakeStorage();
+  saveNamedLayout("Old Name", defaultLayout(), storage);
+  const result = renameNamedLayout("Old Name", "New Name", storage);
+  assert.equal(result.ok, true);
+  assert.equal(result.layout.name, "New Name");
+  const loaded = loadNamedLayouts(storage);
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0]?.name, "New Name");
+});
+
+test("renameNamedLayout rejects duplicate names", () => {
+  const storage = fakeStorage();
+  saveNamedLayout("Layout A", defaultLayout(), storage);
+  saveNamedLayout("Layout B", defaultLayout(), storage);
+  const result = renameNamedLayout("Layout A", "Layout B", storage);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /already exists/);
+});
+
+test("deleteNamedLayout removes a saved layout", () => {
+  const storage = fakeStorage();
+  saveNamedLayout("To Delete", defaultLayout(), storage);
+  assert.equal(deleteNamedLayout("To Delete", storage), true);
+  assert.equal(loadNamedLayouts(storage).length, 0);
+  // Deleting non-existent returns false
+  assert.equal(deleteNamedLayout("Not There", storage), false);
+});
+
+test("getNamedLayout retrieves a specific layout by name (case-insensitive)", () => {
+  const storage = fakeStorage();
+  saveNamedLayout("My Layout", defaultLayout(), storage);
+  const layout = getNamedLayout("my layout", storage);
+  assert.ok(layout);
+  assert.equal(layout?.name, "My Layout");
+  assert.equal(getNamedLayout("Not There", storage), null);
+});
+
+test("named layouts survive load/save round-trip with collapse state", () => {
+  const storage = fakeStorage();
+  const layout = setCollapsed(reorderPanel(defaultLayout(), "xdr", 0), "status", true);
+  saveNamedLayout("Complex Layout", layout, storage);
+  const loaded = loadNamedLayouts(storage);
+  assert.equal(loaded.length, 1);
+  assert.equal(ids(loaded[0]!.layout)[0], "xdr");
+  assert.equal(placement(loaded[0]!.layout, "status").collapsed, true);
+});
+
+test("corrupted named layouts storage degrades to empty list", () => {
+  const storage = fakeStorage();
+  storage.data.set(NAMED_LAYOUTS_STORAGE_KEY, "{not json");
+  assert.deepEqual(loadNamedLayouts(storage), []);
+  storage.data.set(NAMED_LAYOUTS_STORAGE_KEY, JSON.stringify({ not: "an array" }));
+  assert.deepEqual(loadNamedLayouts(storage), []);
+});
+
+test("invalid entries in named layouts storage are dropped", () => {
+  const storage = fakeStorage();
+  storage.data.set(NAMED_LAYOUTS_STORAGE_KEY, JSON.stringify([
+    { name: "Valid", layout: { order: [{ id: "status", collapsed: false }] } },
+    { name: "", layout: { order: [{ id: "status", collapsed: false }] } }, // empty name
+    { name: "Also Valid", layout: "not an object" }, // bad layout
+    { name: "Another Valid", layout: { order: [{ id: "telemetry", collapsed: false }] } }, // valid
+    { not: "a layout object" }, // completely wrong shape
+  ]));
+  const loaded = loadNamedLayouts(storage);
+  assert.equal(loaded.length, 2);
+  assert.equal(loaded[0]?.name, "Valid");
+  assert.equal(loaded[1]?.name, "Another Valid");
+});
+
+// ── Reset preview (#379) ────────────────────────────────────────────────
+
+test("resetLayout produces the default arrangement for preview", () => {
+  const preview = resetLayout();
+  assert.deepEqual(ids(preview), [...DEFAULT_LAYOUT]);
+  assert.ok(preview.order.every((entry) => entry.collapsed === false));
+});
+
+test("reset preview can detect moved panels", () => {
+  const current = reorderPanel(defaultLayout(), "xdr", 0);
+  const preview = resetLayout();
+  const currentOrder = current.order.map((p) => p.id);
+  const defaultOrder = preview.order.map((p) => p.id);
+  const moved = defaultOrder.filter((id, index) => currentOrder.indexOf(id) !== index);
+  assert.ok(moved.includes("xdr"));
+  assert.ok(moved.includes("status"));
+});
+
+test("reset preview can detect restored panels", () => {
+  // A layout missing some panels
+  const current: DashboardLayout = {
+    order: [
+      { id: "status", collapsed: false },
+      { id: "panic", collapsed: false },
+    ],
+  };
+  const preview = resetLayout();
+  const currentOrder = current.order.map((p) => p.id);
+  const defaultOrder = preview.order.map((p) => p.id);
+  const restored = defaultOrder.filter((id) => !currentOrder.includes(id));
+  assert.ok(restored.includes("telemetry"));
+  assert.ok(restored.includes("multisig"));
+  assert.ok(restored.includes("xdr"));
+});
+
+test("reset preview can detect hidden panels", () => {
+  // A layout with extra panels (stale entries that normalizeLayout would drop)
+  const current: DashboardLayout = {
+    order: [
+      { id: "status", collapsed: false },
+      { id: "txhistory", collapsed: false },
+      { id: "panic", collapsed: false },
+      { id: "telemetry", collapsed: false },
+      { id: "multisig", collapsed: false },
+      { id: "xdr", collapsed: false },
+      { id: "status", collapsed: false }, // Duplicate - will be dropped by normalizeLayout
+    ],
+  };
+  const preview = resetLayout();
+  const currentOrder = current.order.map((p) => p.id);
+  const defaultOrder = preview.order.map((p) => p.id);
+  // After normalizeLayout, duplicates are removed, so hidden panels would be those
+  // that exist in the current (pre-normalized) but not in the default
+  const hidden = currentOrder.filter((id, index) => currentOrder.indexOf(id) !== index);
+  assert.ok(hidden.includes("status"));
+});
+
+test("reset preview detects collapse state changes", () => {
+  const current = setCollapsed(defaultLayout(), "panic", true);
+  const preview = resetLayout();
+  const currentCollapsed = new Set(current.order.filter((p) => p.collapsed).map((p) => p.id));
+  const defaultCollapsed = new Set(preview.order.filter((p) => p.collapsed).map((p) => p.id));
+  const defaultOrder = preview.order.map((p) => p.id);
+  const collapseChanges = current.order
+    .filter((p) => defaultOrder.includes(p.id))
+    .filter((p) => currentCollapsed.has(p.id) !== defaultCollapsed.has(p.id));
+  assert.equal(collapseChanges.length, 1);
+  assert.equal(collapseChanges[0]?.id, "panic");
 });

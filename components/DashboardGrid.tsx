@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The dashboard's widget grid (#149).
+ * The dashboard's widget grid (#149, #378, #379).
  *
  * Wraps the console's panels in a layout the operator controls: drag a panel
  * by its handle to reorder it, use the Move up/Move down buttons for the same
@@ -13,6 +13,14 @@
  * helper the buttons use, so the two input paths share one state transition —
  * the drag handle is a real button carrying `aria-grabbed` semantics, and no
  * reordering is reachable *only* by pointer.
+ *
+ * Named layouts (#378): operators can save a small number of named panel
+ * arrangements and switch between them. Layouts are local presentation
+ * preferences only; they never affect guard or chain state.
+ *
+ * Reset preview (#379): shows which panels will move or be restored before
+ * resetting a customized dashboard layout, with a cancel path that leaves the
+ * current arrangement intact.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -26,8 +34,18 @@ import {
   setCollapsed,
   type DashboardLayout,
   type PanelId,
+  // Named layouts (#378)
+  loadNamedLayouts,
+  saveNamedLayout,
+  renameNamedLayout,
+  deleteNamedLayout,
+  getNamedLayout,
+  MAX_NAMED_LAYOUTS,
+  MAX_LAYOUT_NAME_LENGTH,
+  type NamedLayout,
 } from "../lib/guard/layoutStore.ts";
 import { useAnnounce } from "../lib/guard/useAnnounce.ts";
+import { createPortal } from "react-dom";
 
 export interface GridPanel {
   id: PanelId;
@@ -41,6 +59,16 @@ const PANEL_TITLE_ID = (id: PanelId): string => `panel-title-${id}`;
 export function DashboardGrid({ panels }: { panels: GridPanel[] }) {
   const [layout, setLayout] = useState<DashboardLayout | null>(null);
   const [dragging, setDragging] = useState<PanelId | null>(null);
+  // Named layouts state (#378)
+  const [namedLayouts, setNamedLayouts] = useState<NamedLayout[]>(() => loadNamedLayouts());
+  const [activeLayoutName, setActiveLayoutName] = useState<string | null>(null);
+  const [showSaveLayoutDialog, setShowSaveLayoutDialog] = useState(false);
+  const [newLayoutName, setNewLayoutName] = useState("");
+  const [renameLayoutName, setRenameLayoutName] = useState("");
+  const [layoutToRename, setLayoutToRename] = useState<NamedLayout | null>(null);
+  // Reset preview state (#379)
+  const [showResetPreview, setShowResetPreview] = useState(false);
+  const [resetPreviewLayout, setResetPreviewLayout] = useState<DashboardLayout | null>(null);
   const announce = useAnnounce();
 
   // Load the persisted layout after mount (never during render), so server and
@@ -58,6 +86,20 @@ export function DashboardGrid({ panels }: { panels: GridPanel[] }) {
     };
     // `requestAnimationFrame` defers past the effect body; jsdom's
     // `pretendToBeVisual` provides it in tests too.
+    const frame = requestAnimationFrame(read);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, []);
+
+  // Load named layouts on mount
+  useEffect(() => {
+    let cancelled = false;
+    const read = () => {
+      if (cancelled) return;
+      setNamedLayouts(loadNamedLayouts());
+    };
     const frame = requestAnimationFrame(read);
     return () => {
       cancelled = true;
@@ -103,6 +145,120 @@ export function DashboardGrid({ panels }: { panels: GridPanel[] }) {
     persist(reorderPanel(layout, dragging, toIndex));
     announce(`${dragging} moved to position ${toIndex + 1}`);
     setDragging(null);
+  };
+
+  // Named layout actions (#378)
+  const handleSaveLayout = () => {
+    const name = newLayoutName.trim();
+    if (!name) return;
+    const result = saveNamedLayout(name, layout);
+    if (result.ok) {
+      setNamedLayouts(loadNamedLayouts());
+      setActiveLayoutName(result.layout.name);
+      setShowSaveLayoutDialog(false);
+      setNewLayoutName("");
+      announce(`Layout "${result.layout.name}" saved`);
+    } else {
+      announce(`Failed to save layout: ${result.error}`);
+    }
+  };
+
+  const handleLoadNamedLayout = (namedLayout: NamedLayout) => {
+    persist(namedLayout.layout);
+    setActiveLayoutName(namedLayout.name);
+    announce(`Layout "${namedLayout.name}" loaded`);
+  };
+
+  const handleRenameLayout = () => {
+    if (!layoutToRename || !renameLayoutName.trim()) return;
+    const result = renameNamedLayout(layoutToRename.name, renameLayoutName.trim());
+    if (result.ok) {
+      setNamedLayouts(loadNamedLayouts());
+      if (activeLayoutName === layoutToRename.name) {
+        setActiveLayoutName(result.layout.name);
+      }
+      setLayoutToRename(null);
+      setRenameLayoutName("");
+      announce(`Layout renamed to "${result.layout.name}"`);
+    } else {
+      announce(`Failed to rename layout: ${result.error}`);
+    }
+  };
+
+  const handleDeleteLayout = (name: string) => {
+    if (deleteNamedLayout(name)) {
+      setNamedLayouts(loadNamedLayouts());
+      if (activeLayoutName === name) {
+        setActiveLayoutName(null);
+      }
+      announce(`Layout "${name}" deleted`);
+    }
+  };
+
+  // Reset preview (#379)
+  const handleResetPreview = () => {
+    const defaultLayoutResult = resetLayout();
+    setResetPreviewLayout(defaultLayoutResult);
+    setShowResetPreview(true);
+  };
+
+  const handleConfirmReset = () => {
+    if (resetPreviewLayout) {
+      persist(resetPreviewLayout);
+      setActiveLayoutName(null);
+      announce("Layout reset to default");
+    }
+    setShowResetPreview(false);
+    setResetPreviewLayout(null);
+  };
+
+  const handleCancelReset = () => {
+    setShowResetPreview(false);
+    setResetPreviewLayout(null);
+  };
+
+  const getResetPreviewChanges = () => {
+    if (!resetPreviewLayout) return { moved: [] as string[], restored: [] as string[], hidden: [] as string[] };
+    const currentOrder = layout.order.map((p) => p.id);
+    const defaultOrder = resetPreviewLayout.order.map((p) => p.id);
+    const currentCollapsed = new Set(layout.order.filter((p) => p.collapsed).map((p) => p.id));
+    const defaultCollapsed = new Set(resetPreviewLayout.order.filter((p) => p.collapsed).map((p) => p.id));
+
+    const moved: string[] = [];
+    const restored: string[] = [];
+    const hidden: string[] = [];
+
+    defaultOrder.forEach((id, index) => {
+      const currentIndex = currentOrder.indexOf(id);
+      if (currentIndex === -1) {
+        restored.push(id);
+      } else if (currentIndex !== index) {
+        moved.push(id);
+      }
+    });
+
+    currentOrder.forEach((id) => {
+      if (!defaultOrder.includes(id)) {
+        hidden.push(id);
+      }
+    });
+
+    // Check collapsed state changes
+    currentOrder.forEach((id) => {
+      if (defaultOrder.includes(id)) {
+        const wasCollapsed = currentCollapsed.has(id);
+        const willBeCollapsed = defaultCollapsed.has(id);
+        if (wasCollapsed !== willBeCollapsed) {
+          if (willBeCollapsed) {
+            moved.push(`${id} (will collapse)`);
+          } else {
+            moved.push(`${id} (will expand)`);
+          }
+        }
+      }
+    });
+
+    return { moved, restored, hidden };
   };
 
   return (
@@ -183,17 +339,366 @@ export function DashboardGrid({ panels }: { panels: GridPanel[] }) {
           </section>
         );
       })}
-      <LayoutToolbar onReset={() => persist(resetLayout())} />
+      <LayoutToolbar
+        onResetPreview={handleResetPreview}
+        namedLayouts={namedLayouts}
+        activeLayoutName={activeLayoutName}
+        onLoadNamedLayout={handleLoadNamedLayout}
+        onSaveLayout={() => setShowSaveLayoutDialog(true)}
+        onRenameLayout={(l) => {
+          setLayoutToRename(l);
+          setRenameLayoutName(l.name);
+        }}
+        onDeleteLayout={handleDeleteLayout}
+        showSaveLayoutDialog={showSaveLayoutDialog}
+        setShowSaveLayoutDialog={setShowSaveLayoutDialog}
+        newLayoutName={newLayoutName}
+        setNewLayoutName={setNewLayoutName}
+        onConfirmSaveLayout={handleSaveLayout}
+        showResetPreview={showResetPreview}
+        resetPreviewChanges={getResetPreviewChanges()}
+        onConfirmReset={handleConfirmReset}
+        onCancelReset={handleCancelReset}
+        layoutToRename={layoutToRename}
+        renameLayoutName={renameLayoutName}
+        setRenameLayoutName={setRenameLayoutName}
+        onConfirmRename={handleRenameLayout}
+        MAX_NAMED_LAYOUTS={MAX_NAMED_LAYOUTS}
+        MAX_LAYOUT_NAME_LENGTH={MAX_LAYOUT_NAME_LENGTH}
+      />
+      {showSaveLayoutDialog && createPortal(
+        <SaveLayoutDialog
+          isOpen={showSaveLayoutDialog}
+          onClose={() => { setShowSaveLayoutDialog(false); setNewLayoutName(""); }}
+          newLayoutName={newLayoutName}
+          setNewLayoutName={setNewLayoutName}
+          onSave={handleSaveLayout}
+          MAX_LAYOUT_NAME_LENGTH={MAX_LAYOUT_NAME_LENGTH}
+        />,
+        document.body
+      )}
+      {layoutToRename && createPortal(
+        <RenameLayoutDialog
+          isOpen={!!layoutToRename}
+          onClose={() => { setLayoutToRename(null); setRenameLayoutName(""); }}
+          layoutName={layoutToRename.name}
+          renameLayoutName={renameLayoutName}
+          setRenameLayoutName={setRenameLayoutName}
+          onRename={handleRenameLayout}
+          MAX_LAYOUT_NAME_LENGTH={MAX_LAYOUT_NAME_LENGTH}
+        />,
+        document.body
+      )}
+      {showResetPreview && resetPreviewLayout && createPortal(
+        <ResetPreviewDialog
+          isOpen={showResetPreview}
+          onClose={handleCancelReset}
+          changes={getResetPreviewChanges()}
+          onConfirm={handleConfirmReset}
+        />,
+        document.body
+      )}
     </div>
   );
 }
 
-function LayoutToolbar({ onReset }: { onReset: () => void }) {
+function LayoutToolbar({
+  onResetPreview,
+  namedLayouts,
+  activeLayoutName,
+  onLoadNamedLayout,
+  onSaveLayout,
+  onRenameLayout,
+  onDeleteLayout,
+  showSaveLayoutDialog,
+  setShowSaveLayoutDialog,
+  newLayoutName,
+  setNewLayoutName,
+  onConfirmSaveLayout,
+  showResetPreview,
+  resetPreviewChanges,
+  onConfirmReset,
+  onCancelReset,
+  layoutToRename,
+  renameLayoutName,
+  setRenameLayoutName,
+  onConfirmRename,
+  MAX_NAMED_LAYOUTS,
+  MAX_LAYOUT_NAME_LENGTH,
+}: {
+  onResetPreview: () => void;
+  namedLayouts: NamedLayout[];
+  activeLayoutName: string | null;
+  onLoadNamedLayout: (layout: NamedLayout) => void;
+  onSaveLayout: () => void;
+  onRenameLayout: (layout: NamedLayout) => void;
+  onDeleteLayout: (name: string) => void;
+  showSaveLayoutDialog: boolean;
+  setShowSaveLayoutDialog: (show: boolean) => void;
+  newLayoutName: string;
+  setNewLayoutName: (name: string) => void;
+  onConfirmSaveLayout: () => void;
+  showResetPreview: boolean;
+  resetPreviewChanges: { moved: string[]; restored: string[]; hidden: string[] };
+  onConfirmReset: () => void;
+  onCancelReset: () => void;
+  layoutToRename: NamedLayout | null;
+  renameLayoutName: string;
+  setRenameLayoutName: (name: string) => void;
+  onConfirmRename: () => void;
+  MAX_NAMED_LAYOUTS: number;
+  MAX_LAYOUT_NAME_LENGTH: number;
+}) {
+  const canSave = namedLayouts.length < MAX_NAMED_LAYOUTS || activeLayoutName !== null;
+
   return (
-    <div className="row" style={{ justifyContent: "flex-end" }}>
-      <button type="button" className="secondary" onClick={onReset}>
+    <div className="row" style={{ justifyContent: "flex-end", gap: 8, flexWrap: "wrap", marginTop: 16 }}>
+      {/* Named layouts dropdown */}
+      {namedLayouts.length > 0 && (
+        <div className="row" style={{ gap: 6, alignItems: "center" }}>
+          <label style={{ fontSize: 12, color: "var(--muted)" }}>Layout:</label>
+          <select
+            value={activeLayoutName ?? ""}
+            onChange={(e) => {
+              const name = e.target.value;
+              if (name) {
+                const layout = namedLayouts.find((l) => l.name === name);
+                if (layout) onLoadNamedLayout(layout);
+              } else {
+                onResetPreview(); // Treat empty selection as reset preview
+              }
+            }}
+            style={{ minWidth: 180, padding: "4px 8px" }}
+          >
+            <option value="">— Default —</option>
+            {namedLayouts.map((l) => (
+              <option key={l.name} value={l.name}>
+                {l.name} {l.name === activeLayoutName ? "(active)" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* Save layout button */}
+      {canSave && (
+        <button type="button" className="secondary" onClick={onSaveLayout} disabled={!canSave}>
+          {activeLayoutName ? "Update Layout" : "Save Layout"}
+        </button>
+      )}
+
+      {/* Reset layout button (shows preview) */}
+      <button type="button" className="secondary" onClick={onResetPreview}>
         Reset Layout
       </button>
+    </div>
+  );
+}
+
+function SaveLayoutDialog({
+  isOpen,
+  onClose,
+  newLayoutName,
+  setNewLayoutName,
+  onSave,
+  MAX_LAYOUT_NAME_LENGTH,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  newLayoutName: string;
+  setNewLayoutName: (name: string) => void;
+  onSave: () => void;
+  MAX_LAYOUT_NAME_LENGTH: number;
+}) {
+  if (!isOpen) return null;
+
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "Escape") {
+      onClose();
+    } else if (event.key === "Enter" && newLayoutName.trim()) {
+      onSave();
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="save-layout-title"
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={handleKeyDown}
+      >
+        <strong id="save-layout-title">Save Layout</strong>
+        <p className="tiny muted">
+          Enter a name for this panel arrangement. Maximum {MAX_LAYOUT_NAME_LENGTH} characters.
+        </p>
+        <label className="field" style={{ marginTop: 12 }}>
+          <input
+            value={newLayoutName}
+            onChange={(e) => setNewLayoutName(e.target.value)}
+            placeholder="My Layout"
+            maxLength={MAX_LAYOUT_NAME_LENGTH}
+            aria-label="Layout name"
+            autoFocus
+          />
+        </label>
+        <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+          <button className="secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button onClick={onSave} disabled={!newLayoutName.trim()}>
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RenameLayoutDialog({
+  isOpen,
+  onClose,
+  layoutName,
+  renameLayoutName,
+  setRenameLayoutName,
+  onRename,
+  MAX_LAYOUT_NAME_LENGTH,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  layoutName: string;
+  renameLayoutName: string;
+  setRenameLayoutName: (name: string) => void;
+  onRename: () => void;
+  MAX_LAYOUT_NAME_LENGTH: number;
+}) {
+  if (!isOpen) return null;
+
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "Escape") {
+      onClose();
+    } else if (event.key === "Enter" && renameLayoutName.trim()) {
+      onRename();
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="rename-layout-title"
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={handleKeyDown}
+      >
+        <strong id="rename-layout-title">Rename Layout</strong>
+        <p className="tiny muted">
+          Enter a new name for &ldquo;{layoutName}&rdquo;. Maximum {MAX_LAYOUT_NAME_LENGTH} characters.
+        </p>
+        <label className="field" style={{ marginTop: 12 }}>
+          <input
+            value={renameLayoutName}
+            onChange={(e) => setRenameLayoutName(e.target.value)}
+            placeholder="New name"
+            maxLength={MAX_LAYOUT_NAME_LENGTH}
+            aria-label="New layout name"
+            autoFocus
+          />
+        </label>
+        <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+          <button className="secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button onClick={onRename} disabled={!renameLayoutName.trim()}>
+            Rename
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResetPreviewDialog({
+  isOpen,
+  onClose,
+  changes,
+  onConfirm,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  changes: { moved: string[]; restored: string[]; hidden: string[] };
+  onConfirm: () => void;
+}) {
+  if (!isOpen) return null;
+
+  const hasChanges = changes.moved.length > 0 || changes.restored.length > 0 || changes.hidden.length > 0;
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="reset-preview-title"
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <strong id="reset-preview-title">Reset Layout Preview</strong>
+        <p className="tiny muted">
+          This will restore the default panel arrangement. The following changes will occur:
+        </p>
+        {hasChanges ? (
+          <>
+            {changes.restored.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <strong className="tiny">Panels restored:</strong>
+                <ul className="tiny" style={{ margin: "4px 0 0 18px" }}>
+                  {changes.restored.map((id) => (
+                    <li key={id}>{id}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {changes.moved.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <strong className="tiny">Panels moved:</strong>
+                <ul className="tiny" style={{ margin: "4px 0 0 18px" }}>
+                  {changes.moved.map((id, index) => (
+                    <li key={index}>{id}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {changes.hidden.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <strong className="tiny">Panels hidden (not in default layout):</strong>
+                <ul className="tiny" style={{ margin: "4px 0 0 18px" }}>
+                  {changes.hidden.map((id) => (
+                    <li key={id}>{id}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="tiny muted" style={{ marginTop: 8 }}>
+            The layout is already at the default arrangement.
+          </p>
+        )}
+        <div className="row" style={{ justifyContent: "flex-end", marginTop: 16 }}>
+          <button className="secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="danger" onClick={onConfirm} disabled={!hasChanges}>
+            Confirm Reset
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
