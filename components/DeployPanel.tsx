@@ -384,7 +384,12 @@ export function DeployPanel() {
         predictedAddress: plan?.predicted ?? outcome.guard,
         deployedAddress: outcome.guard,
         pinned: { hash: PHASE1_ARTIFACT.wasmHash, bytes: PHASE1_ARTIFACT.wasmBytes },
-        read: outcome.identity === null ? null : { ok: true, value: outcome.identity },
+        read:
+          outcome.identity !== null
+            ? { ok: true, value: outcome.identity }
+            : outcome.readError !== null
+              ? { ok: false, error: outcome.readError }
+              : null,
         steps: outcome.steps,
       })
     : null;
@@ -764,11 +769,20 @@ export function DeployPanel() {
           <strong>
             {outcome.verified
               ? "Deployed and verified against the pinned artifact"
-              : "A contract was created, but it is NOT the pinned artifact"}
+              : outcome.readError !== null
+                ? "A contract was created, but its bytecode could not be read back"
+                : "A contract was created, but it is NOT the pinned artifact"}
           </strong>
           <span className="tiny mono">{outcome.guard}</span>{" "}
           <CopyButton value={outcome.guard} label="deployed guard address" />
           <OutcomeList steps={outcome.steps} />
+          {outcome.readError !== null && (
+            <p className="tiny" style={{ color: "var(--danger)" }}>
+              The post-deploy read failed, so nothing about this instance&apos;s bytecode is
+              verified: {outcome.readError}. Re-check the artifact, or inspect the contract, before
+              routing an agent through it.
+            </p>
+          )}
           {outcome.identity && (
             <p className="tiny muted">
               Instance runs {outcome.identity.fetchedSha256.slice(0, 20)}... (
