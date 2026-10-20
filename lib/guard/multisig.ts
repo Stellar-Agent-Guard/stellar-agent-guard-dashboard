@@ -17,7 +17,7 @@
  * the account.
  *
  * An answer that cannot be known is never guessed. If the account has signers
- * whose signatures cannot be identified from an envelope (hash-X, pre-auth and
+ * whose signatures cannot be identified from an envelope (hash, pre-auth and
  * signed-payload signers carry no Ed25519 hint), the collected weight is only a
  * lower bound, so the remaining weight is reported as `null` rather than as a
  * number that looks authoritative but may be wrong.
