@@ -331,7 +331,8 @@ function CompatibilityView({ report }: { report: CompatibilityReport }) {
             Each row shows how a source field maps to the target policy. Status codes:
             <code>copied</code> = identical, <code>transformed</code> = type converted,
             <code>defaulted</code> = missing (uses zero/empty), <code>unsupported</code> = dropped,
-            <code>type-error</code> = blocks migration, <code>missing-required</code> = blocks migration.
+            <code>type-error</code> = blocks migration, <code>missing-required</code> = blocks
+            migration.
           </p>
           <div className="scrolly">
             <table className="events">
@@ -381,8 +382,14 @@ function FieldConversionRow({ conversion }: { conversion: FieldConversion }) {
     <tr style={{ borderLeft: `3px solid ${statusColors[conversion.status]}` }}>
       <td className="mono tiny">{conversion.targetField}</td>
       <td className="mono tiny">{conversion.sourceField ?? "<em>none</em>"}</td>
-      <td className="mono tiny" dangerouslySetInnerHTML={{ __html: formatValue(conversion.sourceValue) }} />
-      <td className="mono tiny" dangerouslySetInnerHTML={{ __html: formatValue(conversion.convertedValue) }} />
+      <td
+        className="mono tiny"
+        dangerouslySetInnerHTML={{ __html: formatValue(conversion.sourceValue) }}
+      />
+      <td
+        className="mono tiny"
+        dangerouslySetInnerHTML={{ __html: formatValue(conversion.convertedValue) }}
+      />
       <td>
         <span className="pill" style={{ background: statusColors[conversion.status] }}>
           {conversion.status}

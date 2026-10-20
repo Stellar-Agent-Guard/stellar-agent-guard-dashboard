@@ -128,7 +128,9 @@ export function DeployPanel() {
   const [integrity, setIntegrity] = useState<IntegrityReport | null>(null);
   const [inspecting, setInspecting] = useState(false);
   const [inspectError, setInspectError] = useState<string | null>(null);
-  const [inspectProgress, setInspectProgress] = useState<WasmParseProgress | WasmHashProgress | null>(null);
+  const [inspectProgress, setInspectProgress] = useState<
+    WasmParseProgress | WasmHashProgress | null
+  >(null);
   const [inspectCancelled, setInspectCancelled] = useState(false);
 
   // Guard init parameters, audited by the pre-flight validator before the
@@ -887,8 +889,8 @@ export function DeployPanel() {
         <summary>Bytecode inspector</summary>
         <p className="tiny muted">
           Fetches the contract&apos;s stored WASM, hashes it here with Web Crypto, and compares it
-          to the pinned artifact — a second opinion on what the ledger says it is running.
-          Parsing and hashing run in a Web Worker so the UI stays responsive.
+          to the pinned artifact — a second opinion on what the ledger says it is running. Parsing
+          and hashing run in a Web Worker so the UI stays responsive.
         </p>
         <div className="row">
           <button

@@ -51,7 +51,10 @@ export type GuardParamValidation =
  */
 export function validateGuardParam(search: string, currentGuard?: string): GuardParamValidation {
   const params = new URLSearchParams(search);
-  const allGuards = params.getAll(GUARD_QUERY_PARAM).map((v) => v.trim()).filter((v) => v.length > 0);
+  const allGuards = params
+    .getAll(GUARD_QUERY_PARAM)
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
 
   if (allGuards.length === 0) return { status: "absent" };
   if (allGuards.length > 1) {
@@ -65,13 +68,14 @@ export function validateGuardParam(search: string, currentGuard?: string): Guard
     return {
       status: "malformed",
       raw: requested,
-      reason: requested.length < 56
-        ? "contract address too short"
-        : requested.length > 56
-        ? "contract address too long"
-        : !requested.startsWith("C")
-        ? "contract address must start with 'C'"
-        : "invalid base32 encoding",
+      reason:
+        requested.length < 56
+          ? "contract address too short"
+          : requested.length > 56
+            ? "contract address too long"
+            : !requested.startsWith("C")
+              ? "contract address must start with 'C'"
+              : "invalid base32 encoding",
     };
   }
 

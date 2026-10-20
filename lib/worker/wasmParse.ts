@@ -8,7 +8,12 @@
  * running.
  */
 
-import type { WasmInspection, WasmSection, WasmExport, BuildMetadata } from "../guard/wasmInspector.ts";
+import type {
+  WasmInspection,
+  WasmSection,
+  WasmExport,
+  BuildMetadata,
+} from "../guard/wasmInspector.ts";
 
 const MAGIC = [0x00, 0x61, 0x73, 0x6d] as const;
 const CUSTOM_SECTION = 0;
@@ -30,9 +35,7 @@ type ProgressPhase =
   | { phase: "error"; reason: string }
   | { phase: "cancelled" };
 
-type WorkerMessage =
-  | { type: "parse"; bytes: ArrayBuffer }
-  | { type: "cancel" };
+type WorkerMessage = { type: "parse"; bytes: ArrayBuffer } | { type: "cancel" };
 
 function postProgress(phase: ProgressPhase) {
   self.postMessage({ type: "progress", phase });
@@ -148,15 +151,24 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
 
     // Phase 1: Validate header
     postProgress({ phase: "validating-header" });
-    if (cancelled) { postProgress({ phase: "cancelled" }); return; }
+    if (cancelled) {
+      postProgress({ phase: "cancelled" });
+      return;
+    }
 
     if (bytes.length < 8) {
-      postProgress({ phase: "error", reason: `too short to be a WASM module (${bytes.length} bytes)` });
+      postProgress({
+        phase: "error",
+        reason: `too short to be a WASM module (${bytes.length} bytes)`,
+      });
       return;
     }
     for (const [index, expected] of MAGIC.entries()) {
       if (bytes[index] !== expected) {
-        postProgress({ phase: "error", reason: "missing the \\0asm magic: this is not a WASM module" });
+        postProgress({
+          phase: "error",
+          reason: "missing the \\0asm magic: this is not a WASM module",
+        });
         return;
       }
     }
@@ -226,7 +238,10 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
       offset = end;
     }
 
-    if (cancelled) { postProgress({ phase: "cancelled" }); return; }
+    if (cancelled) {
+      postProgress({ phase: "cancelled" });
+      return;
+    }
 
     if (truncated) {
       postProgress({ phase: "error", reason: "a section runs past the end of the buffer" });

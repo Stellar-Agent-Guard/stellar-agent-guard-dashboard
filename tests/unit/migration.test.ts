@@ -177,7 +177,9 @@ test("a present field of the wrong shape is a type issue, not a default", () => 
   // Test that arrays with non-string elements are accepted but filtered (transformed)
   const recipientsReport = validateSourcePolicy(source({ recipients: [1, 2] }));
   assert.equal(recipientsReport.ok, true, "array with non-strings should be accepted and filtered");
-  const recipientsConv = recipientsReport.fieldConversions.find((c) => c.targetField === "recipients");
+  const recipientsConv = recipientsReport.fieldConversions.find(
+    (c) => c.targetField === "recipients",
+  );
   assert.ok(recipientsConv);
   assert.equal(recipientsConv.status, "transformed");
   assert.deepEqual(recipientsConv.convertedValue, []);
@@ -372,10 +374,24 @@ describe("field-by-field conversion tracking", () => {
     for (const conv of report.fieldConversions) {
       assert.ok(conv.targetField);
       assert.ok(conv.label);
-      assert.ok(["copied", "transformed", "defaulted", "unsupported", "unchanged", "type-error", "missing-required"].includes(conv.status));
+      assert.ok(
+        [
+          "copied",
+          "transformed",
+          "defaulted",
+          "unsupported",
+          "unchanged",
+          "type-error",
+          "missing-required",
+        ].includes(conv.status),
+      );
       assert.equal(typeof conv.detail, "string");
       assert.equal(typeof conv.required, "boolean");
-      assert.ok(conv.convertedValue !== undefined || conv.status === "missing-required" || conv.status === "type-error");
+      assert.ok(
+        conv.convertedValue !== undefined ||
+          conv.status === "missing-required" ||
+          conv.status === "type-error",
+      );
     }
   });
 
@@ -447,7 +463,9 @@ describe("field-by-field conversion tracking", () => {
   });
 
   test("protocol rules are transformed (filtered)", () => {
-    const report = validateSourcePolicy(source({ protocols: [{ contract: TOKEN, fns: ["swap"] }, "invalid"] }));
+    const report = validateSourcePolicy(
+      source({ protocols: [{ contract: TOKEN, fns: ["swap"] }, "invalid"] }),
+    );
     const protocols = report.fieldConversions.find((c) => c.targetField === "protocols");
     assert.ok(protocols);
     assert.equal(protocols.status, "transformed");

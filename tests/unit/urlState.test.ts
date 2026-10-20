@@ -336,7 +336,9 @@ describe("tab routing helpers", () => {
 
 describe("validateUrlState (detailed parameter validation)", () => {
   test("reports valid parameters with their values", () => {
-    const validation = validateUrlState(`?guard=${GUARD_A}&network=testnet&tab=telemetry&filter=blocked`);
+    const validation = validateUrlState(
+      `?guard=${GUARD_A}&network=testnet&tab=telemetry&filter=blocked`,
+    );
     assert.equal(validation.guard.status, "valid");
     if (validation.guard.status === "valid") assert.equal(validation.guard.value, GUARD_A);
     assert.equal(validation.network.status, "valid");
@@ -457,7 +459,9 @@ describe("validateUrlState (detailed parameter validation)", () => {
     validation = validateUrlState("?filter=bad");
     assert.equal(validation.hasIssues, true);
 
-    validation = validateUrlState("?guard=CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU7");
+    validation = validateUrlState(
+      "?guard=CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU7",
+    );
     assert.equal(validation.hasIssues, false);
   });
 

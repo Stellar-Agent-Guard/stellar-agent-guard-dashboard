@@ -403,7 +403,9 @@ describe("worker-based inspection with progress and cancellation", () => {
     // so we verify the error type is correct when cancelled externally
     const wasm = wasmModule([exportSection([exportEntry("check", 0, 1)])]);
     let resolveCancel: (value: void) => void;
-    const cancelPromise = new Promise<void>((resolve) => { resolveCancel = resolve; });
+    const cancelPromise = new Promise<void>((resolve) => {
+      resolveCancel = resolve;
+    });
 
     const promise = inspectWasmInWorker(wasm, () => {}).catch((error) => {
       if (error instanceof Error && error.message === "Parsing cancelled") return "cancelled";

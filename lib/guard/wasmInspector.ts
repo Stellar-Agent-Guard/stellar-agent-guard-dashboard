@@ -21,7 +21,14 @@ import { PHASE1_ARTIFACT } from "./network.ts";
 import { sha256Hex } from "./scval.ts";
 
 export interface WasmParseProgress {
-  phase: "validating-header" | "parsing-sections" | "reading-exports" | "reading-producers" | "complete" | "error" | "cancelled";
+  phase:
+    | "validating-header"
+    | "parsing-sections"
+    | "reading-exports"
+    | "reading-producers"
+    | "complete"
+    | "error"
+    | "cancelled";
   current?: number;
   total?: number;
   count?: number;
@@ -455,9 +462,13 @@ export function inspectWasmInWorker(
     };
 
     // Post the bytes to the worker (transfer ownership for efficiency)
-    worker.postMessage({ type: "parse", bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) }, [
-      bytes.buffer,
-    ]);
+    worker.postMessage(
+      {
+        type: "parse",
+        bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+      },
+      [bytes.buffer],
+    );
 
     // Return a cancellation function
     return () => {
@@ -485,13 +496,15 @@ export function hashWasmInWorker(
     } catch {
       // Fallback to inline hashing if workers are not supported
       onProgress({ phase: "hashing", bytesProcessed: 0, totalBytes: bytes.length });
-      sha256Hex(bytes).then((hash) => {
-        onProgress({ phase: "complete", hash });
-        resolve(hash);
-      }).catch((error) => {
-        onProgress({ phase: "error", reason: error.message });
-        reject(error);
-      });
+      sha256Hex(bytes)
+        .then((hash) => {
+          onProgress({ phase: "complete", hash });
+          resolve(hash);
+        })
+        .catch((error) => {
+          onProgress({ phase: "error", reason: error.message });
+          reject(error);
+        });
       return;
     }
 
@@ -516,9 +529,13 @@ export function hashWasmInWorker(
     };
 
     // Post the bytes to the worker (transfer ownership for efficiency)
-    worker.postMessage({ type: "hash", bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) }, [
-      bytes.buffer,
-    ]);
+    worker.postMessage(
+      {
+        type: "hash",
+        bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+      },
+      [bytes.buffer],
+    );
 
     // Return a cancellation function
     return () => {

@@ -237,21 +237,29 @@ export function validateSourcePolicy(source: unknown): CompatibilityReport {
       const value = entry.value;
       if (typeof value === "bigint") convertedValue = value;
       else if (typeof value === "number") convertedValue = BigInt(Math.trunc(value));
-      else if (typeof value === "string" && /^\d+$/.test(value.trim())) convertedValue = BigInt(value.trim());
+      else if (typeof value === "string" && /^\d+$/.test(value.trim()))
+        convertedValue = BigInt(value.trim());
       else convertedValue = 0n;
     } else if (field.name === "assets" || field.name === "recipients") {
       const value = entry.value;
-      convertedValue = Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+      convertedValue = Array.isArray(value)
+        ? value.filter((v): v is string => typeof v === "string")
+        : [];
     } else if (field.name === "protocols") {
       const value = entry.value;
       convertedValue = Array.isArray(value)
         ? value
-            .filter((rule): rule is { contract: string; fns: string[] | null } =>
-              typeof rule === "object" && rule !== null && typeof (rule as any).contract === "string"
+            .filter(
+              (rule): rule is { contract: string; fns: string[] | null } =>
+                typeof rule === "object" &&
+                rule !== null &&
+                typeof (rule as any).contract === "string",
             )
             .map((rule) => ({
               contract: rule.contract,
-              fns: Array.isArray(rule.fns) ? rule.fns.filter((fn): fn is string => typeof fn === "string") : null,
+              fns: Array.isArray(rule.fns)
+                ? rule.fns.filter((fn): fn is string => typeof fn === "string")
+                : null,
             }))
         : [];
     } else {
@@ -267,9 +275,17 @@ export function validateSourcePolicy(source: unknown): CompatibilityReport {
     const wasTransformed =
       (typeof entry.value === "string" && isCapField) ||
       (typeof entry.value === "number" && isCapField) ||
-      (Array.isArray(entry.value) && (field.name === "assets" || field.name === "recipients") && !entry.value.every((item) => typeof item === "string")) ||
-      (Array.isArray(entry.value) && field.name === "protocols" && !entry.value.every((rule) => typeof rule === "object" && rule !== null && typeof (rule as any).contract === "string")) ||
-      (typeof entry.value === "string" && (field.name === "paused" || field.name === "allow_any_recipient"));
+      (Array.isArray(entry.value) &&
+        (field.name === "assets" || field.name === "recipients") &&
+        !entry.value.every((item) => typeof item === "string")) ||
+      (Array.isArray(entry.value) &&
+        field.name === "protocols" &&
+        !entry.value.every(
+          (rule) =>
+            typeof rule === "object" && rule !== null && typeof (rule as any).contract === "string",
+        )) ||
+      (typeof entry.value === "string" &&
+        (field.name === "paused" || field.name === "allow_any_recipient"));
 
     fieldConversions.push({
       targetField: field.name,

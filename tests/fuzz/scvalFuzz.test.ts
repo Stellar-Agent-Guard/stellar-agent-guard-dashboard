@@ -45,8 +45,19 @@ import {
 } from "../../lib/guard/formatters.ts";
 import { EMPTY_DRAFT, buildPolicyConfig, type PolicyDraft } from "../../lib/guard/policyForm.ts";
 import { hexToBytes } from "../../lib/guard/scval.ts";
-import { importPolicyFromJson, exportPolicyDraft, exportPolicyToJson, policyExportSchemaV1 } from "../../lib/guard/policySchema.ts";
-import { parseAssetCapsCsv, parseAssetCapsJson, exportAssetCapsCsv, exportAssetCapsJson, validateAssetCapOverrides } from "../../lib/guard/assetCapsCsv.ts";
+import {
+  importPolicyFromJson,
+  exportPolicyDraft,
+  exportPolicyToJson,
+  policyExportSchemaV1,
+} from "../../lib/guard/policySchema.ts";
+import {
+  parseAssetCapsCsv,
+  parseAssetCapsJson,
+  exportAssetCapsCsv,
+  exportAssetCapsJson,
+  validateAssetCapOverrides,
+} from "../../lib/guard/assetCapsCsv.ts";
 import { validateSourcePolicy, planMigration } from "../../lib/guard/migration.ts";
 
 /** The issue requires at least 1,000 iterations per property. */
@@ -547,7 +558,9 @@ test("exportAssetCapsCsv and exportAssetCapsJson round-trip", () => {
         fc.record({
           assetContractAddress: fc.constant(CONTRACT),
           maxCapStroops: fc.bigInt({ min: 1n, max: 2n ** 100n }).map(String),
-          symbol: fc.string({ unit: "grapheme", minLength: 1, maxLength: 12 }).filter((s) => s.trim().length > 0 && s === s.trim()),
+          symbol: fc
+            .string({ unit: "grapheme", minLength: 1, maxLength: 12 })
+            .filter((s) => s.trim().length > 0 && s === s.trim()),
         }),
         { maxLength: 2 },
       ),

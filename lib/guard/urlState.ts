@@ -285,22 +285,32 @@ export interface UrlStateValidation {
 function validateGuard(raw: string | null | undefined, current?: string): ParamValidation<string> {
   if (raw === null || raw === undefined || raw.trim() === "") return { status: "absent" };
   const trimmed = raw.trim();
-  if (!trimmed.startsWith("C")) return { status: "malformed", raw: trimmed, reason: "contract address must start with 'C'" };
-  if (trimmed.length < 56) return { status: "malformed", raw: trimmed, reason: "contract address too short" };
-  if (trimmed.length > 56) return { status: "malformed", raw: trimmed, reason: "contract address too long" };
-  if (!looksLikeContractAddress(trimmed)) return { status: "malformed", raw: trimmed, reason: "invalid base32 encoding" };
-  if (current !== undefined && trimmed !== current) return { status: "conflicting", requested: trimmed, current };
+  if (!trimmed.startsWith("C"))
+    return { status: "malformed", raw: trimmed, reason: "contract address must start with 'C'" };
+  if (trimmed.length < 56)
+    return { status: "malformed", raw: trimmed, reason: "contract address too short" };
+  if (trimmed.length > 56)
+    return { status: "malformed", raw: trimmed, reason: "contract address too long" };
+  if (!looksLikeContractAddress(trimmed))
+    return { status: "malformed", raw: trimmed, reason: "invalid base32 encoding" };
+  if (current !== undefined && trimmed !== current)
+    return { status: "conflicting", requested: trimmed, current };
   return { status: "valid", value: trimmed };
 }
 
 /**
  * Validate the network parameter.
  */
-function validateNetwork(raw: string | null | undefined, current?: string): ParamValidation<string> {
+function validateNetwork(
+  raw: string | null | undefined,
+  current?: string,
+): ParamValidation<string> {
   if (raw === null || raw === undefined || raw.trim() === "") return { status: "absent" };
   const trimmed = raw.trim().toLowerCase();
-  if (!isKnownNetwork(trimmed)) return { status: "malformed", raw: trimmed, reason: "unknown network" };
-  if (current !== undefined && trimmed !== current) return { status: "conflicting", requested: trimmed, current };
+  if (!isKnownNetwork(trimmed))
+    return { status: "malformed", raw: trimmed, reason: "unknown network" };
+  if (current !== undefined && trimmed !== current)
+    return { status: "conflicting", requested: trimmed, current };
   return { status: "valid", value: trimmed };
 }
 
@@ -311,18 +321,24 @@ function validateTab(raw: string | null | undefined, current?: UrlTab): ParamVal
   if (raw === null || raw === undefined || raw.trim() === "") return { status: "absent" };
   const trimmed = raw.trim().toLowerCase() as UrlTab;
   if (!isUrlTab(trimmed)) return { status: "malformed", raw: trimmed, reason: "unknown tab" };
-  if (current !== undefined && trimmed !== current) return { status: "conflicting", requested: trimmed, current };
+  if (current !== undefined && trimmed !== current)
+    return { status: "conflicting", requested: trimmed, current };
   return { status: "valid", value: trimmed };
 }
 
 /**
  * Validate the filter parameter.
  */
-function validateFilter(raw: string | null | undefined, current?: VerdictFilter): ParamValidation<VerdictFilter> {
+function validateFilter(
+  raw: string | null | undefined,
+  current?: VerdictFilter,
+): ParamValidation<VerdictFilter> {
   if (raw === null || raw === undefined || raw.trim() === "") return { status: "absent" };
   const trimmed = raw.trim().toLowerCase() as VerdictFilter;
-  if (!isVerdictFilter(trimmed)) return { status: "malformed", raw: trimmed, reason: "unknown filter" };
-  if (current !== undefined && trimmed !== current) return { status: "conflicting", requested: trimmed, current };
+  if (!isVerdictFilter(trimmed))
+    return { status: "malformed", raw: trimmed, reason: "unknown filter" };
+  if (current !== undefined && trimmed !== current)
+    return { status: "conflicting", requested: trimmed, current };
   return { status: "valid", value: trimmed };
 }
 
@@ -371,10 +387,22 @@ export function validateUrlState(search: string, current?: Partial<UrlState>): U
   const filterRaw = params.get(URL_STATE_PARAMS.filter)?.trim().toLowerCase();
 
   // Check for ambiguous (duplicate) parameters
-  const allGuards = params.getAll(URL_STATE_PARAMS.guard).map((v) => v.trim()).filter((v) => v.length > 0);
-  const allNetworks = params.getAll(URL_STATE_PARAMS.network).map((v) => v.trim().toLowerCase()).filter((v) => v.length > 0);
-  const allTabs = params.getAll(URL_STATE_PARAMS.tab).map((v) => v.trim().toLowerCase()).filter((v) => v.length > 0);
-  const allFilters = params.getAll(URL_STATE_PARAMS.filter).map((v) => v.trim().toLowerCase()).filter((v) => v.length > 0);
+  const allGuards = params
+    .getAll(URL_STATE_PARAMS.guard)
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+  const allNetworks = params
+    .getAll(URL_STATE_PARAMS.network)
+    .map((v) => v.trim().toLowerCase())
+    .filter((v) => v.length > 0);
+  const allTabs = params
+    .getAll(URL_STATE_PARAMS.tab)
+    .map((v) => v.trim().toLowerCase())
+    .filter((v) => v.length > 0);
+  const allFilters = params
+    .getAll(URL_STATE_PARAMS.filter)
+    .map((v) => v.trim().toLowerCase())
+    .filter((v) => v.length > 0);
 
   const guardAmbiguous = checkAmbiguousGuards(allGuards);
   const networkAmbiguous = checkAmbiguousNetworks(allNetworks);
@@ -387,7 +415,7 @@ export function validateUrlState(search: string, current?: Partial<UrlState>): U
   const filter = filterAmbiguous ?? validateFilter(filterRaw, current?.filter);
 
   const hasIssues = [guard, network, tab, filter].some(
-    (p) => p.status !== "valid" && p.status !== "absent"
+    (p) => p.status !== "valid" && p.status !== "absent",
   );
 
   return { guard, network, tab, filter, hasIssues };

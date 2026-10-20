@@ -12,14 +12,15 @@ type ProgressPhase =
   | { phase: "error"; reason: string }
   | { phase: "cancelled" };
 
-type WorkerMessage =
-  | { type: "hash"; bytes: ArrayBuffer }
-  | { type: "cancel" };
+type WorkerMessage = { type: "hash"; bytes: ArrayBuffer } | { type: "cancel" };
 
 const CHUNK_SIZE = 1024 * 1024; // 1MB chunks for progress reporting
 
 async function computeHash(bytes: Uint8Array): Promise<string> {
-  const hashBuffer = await crypto.subtle.digest("SHA-256", bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+  const hashBuffer = await crypto.subtle.digest(
+    "SHA-256",
+    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+  );
   return Array.from(new Uint8Array(hashBuffer))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
@@ -45,14 +46,23 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
       postProgress({ phase: "hashing", bytesProcessed: 0, totalBytes });
     }
 
-    if (cancelled) { postProgress({ phase: "cancelled" }); return; }
+    if (cancelled) {
+      postProgress({ phase: "cancelled" });
+      return;
+    }
 
     try {
       const hash = await computeHash(bytes);
-      if (cancelled) { postProgress({ phase: "cancelled" }); return; }
+      if (cancelled) {
+        postProgress({ phase: "cancelled" });
+        return;
+      }
       postProgress({ phase: "complete", hash });
     } catch (error) {
-      postProgress({ phase: "error", reason: error instanceof Error ? error.message : String(error) });
+      postProgress({
+        phase: "error",
+        reason: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 };
