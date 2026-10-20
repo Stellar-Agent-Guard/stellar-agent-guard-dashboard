@@ -3,10 +3,17 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import vm from "node:vm";
 import {
+  IDLE_PWA_ACTIVITY,
   PWA_MANIFEST_PATH,
   PWA_OFFLINE_PATH,
   PWA_THEME_COLOR,
+  PWA_UPDATE_AVAILABLE_TITLE,
   SERVICE_WORKER_PATH,
+  SERVICE_WORKER_SKIP_WAITING_MESSAGE,
+  evaluatePwaUpdate,
+  pwaActivitySnapshot,
+  registerPwaActivity,
+  subscribePwaActivity,
 } from "../../lib/guard/pwa.ts";
 
 interface ManifestIcon {
@@ -91,6 +98,7 @@ interface FetchRequestLike {
 
 interface ServiceWorkerEvent {
   request?: FetchRequestLike;
+  data?: unknown;
   respondWith?(value: Promise<Response>): void;
   waitUntil?(value: Promise<unknown>): void;
 }
@@ -111,14 +119,23 @@ interface FetchOutcome {
  * bypass assertions meaningful — a stale-worker regression has to fail here.
  */
 function createServiceWorkerHarness() {
-  const listeners: Record<string, SwListener[]> = { install: [], activate: [], fetch: [] };
+  const listeners: Record<string, SwListener[]> = {
+    install: [],
+    activate: [],
+    fetch: [],
+    message: [],
+  };
   const storage = new Map<string, Response>();
   const putUrls: string[] = [];
   const matchUrls: string[] = [];
   const precached: string[] = [];
   const fetchedUrls: string[] = [];
   const openedCaches = new Set<string>();
+  const deletedCaches: string[] = [];
   let networkDown = false;
+  // Update-lifecycle observations: a new shell must not promote itself.
+  let skipWaitingCalls = 0;
+  let claimCalls = 0;
 
   const absolute = (input: string): string => {
     try {
@@ -161,7 +178,9 @@ function createServiceWorkerHarness() {
     async keys(): Promise<string[]> {
       return [...openedCaches];
     },
-    async delete(): Promise<boolean> {
+    async delete(name: string): Promise<boolean> {
+      deletedCaches.push(name);
+      openedCaches.delete(name);
       return true;
     },
   };
@@ -177,8 +196,14 @@ function createServiceWorkerHarness() {
     addEventListener(type: string, listener: SwListener): void {
       (listeners[type] ??= []).push(listener);
     },
-    async skipWaiting(): Promise<void> {},
-    clients: { async claim(): Promise<void> {} },
+    async skipWaiting(): Promise<void> {
+      skipWaitingCalls += 1;
+    },
+    clients: {
+      async claim(): Promise<void> {
+        claimCalls += 1;
+      },
+    },
   };
 
   new vm.Script(readFileSync("public/sw.js", "utf8"), { filename: "public/sw.js" }).runInNewContext(
@@ -201,6 +226,35 @@ function createServiceWorkerHarness() {
     };
     for (const listener of listeners.install ?? []) listener(event);
     await Promise.all(pending);
+  }
+
+  async function activate(): Promise<void> {
+    const pending: Promise<unknown>[] = [];
+    const event: ServiceWorkerEvent = {
+      waitUntil(value) {
+        pending.push(Promise.resolve(value));
+      },
+    };
+    for (const listener of listeners.activate ?? []) listener(event);
+    await Promise.all(pending);
+  }
+
+  /** Deliver a `postMessage` from a page to the worker. */
+  async function dispatchMessage(data: unknown): Promise<void> {
+    const pending: Promise<unknown>[] = [];
+    const event: ServiceWorkerEvent = {
+      data,
+      waitUntil(value) {
+        pending.push(Promise.resolve(value));
+      },
+    };
+    for (const listener of listeners.message ?? []) listener(event);
+    await Promise.all(pending);
+  }
+
+  /** Pretend a previous shell version left its cache behind. */
+  function seedCache(name: string): void {
+    openedCaches.add(name);
   }
 
   async function dispatchFetch(
@@ -237,8 +291,18 @@ function createServiceWorkerHarness() {
     putUrls,
     matchUrls,
     fetchedUrls,
+    deletedCaches,
     install,
+    activate,
+    dispatchMessage,
     dispatchFetch,
+    seedCache,
+    skipWaitingCalls(): number {
+      return skipWaitingCalls;
+    },
+    claimCalls(): number {
+      return claimCalls;
+    },
     setNetworkDown(down: boolean): void {
       networkDown = down;
     },
@@ -359,5 +423,177 @@ describe("PWA wiring", () => {
     assert.match(config, /source:\s*"\/sw\.js"/);
     assert.match(config, /Service-Worker-Allowed/);
     assert.match(config, /application\/manifest\+json/);
+  });
+
+  it("agrees with the worker on the message that promotes an update", () => {
+    const worker = readFileSync("public/sw.js", "utf8");
+    assert.match(worker, /addEventListener\("message"/);
+    assert.ok(
+      worker.includes(`"${SERVICE_WORKER_SKIP_WAITING_MESSAGE}"`),
+      "sw.js must compare against the shared message literal",
+    );
+    // The worker must not promote itself on install: the page owns that choice.
+    const installHandler = worker.slice(
+      worker.indexOf('addEventListener("install"'),
+      worker.indexOf('addEventListener("message"'),
+    );
+    assert.ok(installHandler.length > 0, "the install handler must exist");
+    assert.doesNotMatch(
+      installHandler,
+      /self\.skipWaiting\(/,
+      "install must not call skipWaiting, or an update replaces the app unasked",
+    );
+
+    const registrar = readFileSync("components/PwaRegistrar.tsx", "utf8");
+    assert.match(registrar, /registration\.waiting/);
+    assert.match(registrar, /controllerchange/);
+    assert.match(registrar, /postMessage\(\{\s*type:\s*SERVICE_WORKER_SKIP_WAITING_MESSAGE\s*\}\)/);
+  });
+});
+
+// ── Deferred updates (#398, #399) ──────────────────────────────────────────
+
+describe("service worker update lifecycle", () => {
+  it("leaves a new shell waiting on install instead of taking over", async () => {
+    const sw = createServiceWorkerHarness();
+    await sw.install();
+
+    assert.ok(sw.precached.includes("/"), "the shell is still precached");
+    assert.equal(sw.skipWaitingCalls(), 0, "install must not promote itself");
+    assert.equal(sw.claimCalls(), 0, "nothing is claimed until activation is asked for");
+  });
+
+  it("promotes the waiting worker only for the explicit message, then claims once", async () => {
+    const sw = createServiceWorkerHarness();
+    sw.seedCache("stellar-agent-guard-static-v0");
+    await sw.install();
+
+    await sw.dispatchMessage({ type: "UNRELATED" });
+    await sw.dispatchMessage(undefined);
+    assert.equal(sw.skipWaitingCalls(), 0, "an unrelated message cannot activate an update");
+
+    await sw.dispatchMessage({ type: SERVICE_WORKER_SKIP_WAITING_MESSAGE });
+    assert.equal(sw.skipWaitingCalls(), 1);
+
+    await sw.activate();
+    assert.equal(sw.claimCalls(), 1);
+    assert.deepEqual(
+      sw.deletedCaches,
+      ["stellar-agent-guard-static-v0"],
+      "the superseded shell cache is removed on activation",
+    );
+  });
+
+  it("does not replay or intercept a pending write after activation", async () => {
+    const sw = createServiceWorkerHarness();
+    await sw.install();
+    await sw.dispatchMessage({ type: SERVICE_WORKER_SKIP_WAITING_MESSAGE });
+    await sw.activate();
+    sw.resetCounters();
+
+    const outcome = await sw.dispatchFetch("/", { method: "POST", mode: "cors" });
+    assert.equal(outcome.respondWithCalled, false);
+    assert.deepEqual(sw.putUrls, [], "a write is never cached, before or after an update");
+    assert.deepEqual(sw.fetchedUrls, [], "the worker does not replay a write");
+  });
+
+  it("keeps chain reads network-only after activation", async () => {
+    const sw = createServiceWorkerHarness();
+    await sw.install();
+    await sw.dispatchMessage({ type: SERVICE_WORKER_SKIP_WAITING_MESSAGE });
+    await sw.activate();
+
+    for (const url of NETWORK_ONLY_URLS) {
+      sw.resetCounters();
+      const outcome = await sw.dispatchFetch(url, { mode: "cors" });
+      assert.equal(outcome.respondWithCalled, false, `${url} must stay uncached after an update`);
+      assert.deepEqual(sw.matchUrls, []);
+      assert.deepEqual(sw.putUrls, []);
+      assert.deepEqual(sw.fetchedUrls, []);
+    }
+  });
+
+  it("shows no notice when no update is waiting", async () => {
+    const sw = createServiceWorkerHarness();
+    await sw.install();
+    assert.equal(evaluatePwaUpdate({ updateAvailable: false }).visible, false);
+  });
+});
+
+describe("deferred update notice", () => {
+  it("offers an explicit reload when nothing is at risk", () => {
+    const view = evaluatePwaUpdate({ updateAvailable: true, activity: IDLE_PWA_ACTIVITY });
+    assert.equal(view.visible, true);
+    assert.equal(view.deferred, false);
+    assert.equal(view.reason, null);
+    assert.equal(view.title, PWA_UPDATE_AVAILABLE_TITLE);
+    assert.equal(view.reloadLabel, "Reload now");
+    assert.match(view.detail, /chain reads are always fetched live/i);
+  });
+
+  it("defers while a policy or deployment draft is dirty", () => {
+    const view = evaluatePwaUpdate({
+      updateAvailable: true,
+      activity: { draftDirty: true, pendingWrites: 0 },
+    });
+    assert.equal(view.visible, true);
+    assert.equal(view.deferred, true);
+    assert.equal(view.reason, "draft");
+    assert.equal(view.reloadLabel, "Reload and discard draft");
+    assert.match(view.detail, /unsaved/i);
+    assert.match(view.detail, /discards the draft/i);
+  });
+
+  it("defers while a wallet write is pending, and a write outranks a draft", () => {
+    const pending = evaluatePwaUpdate({
+      updateAvailable: true,
+      activity: { draftDirty: true, pendingWrites: 2 },
+    });
+    assert.equal(pending.deferred, true);
+    assert.equal(pending.reason, "pending-write");
+    assert.equal(pending.reloadLabel, "Reload anyway");
+    assert.match(pending.detail, /in flight/i);
+    assert.match(pending.detail, /nothing is replayed/i);
+  });
+});
+
+describe("PWA activity registry", () => {
+  it("reports a draft and counts pending writes independently", () => {
+    const releaseDraft = registerPwaActivity("draft");
+    const releaseFirst = registerPwaActivity("write");
+    const releaseSecond = registerPwaActivity("write");
+
+    try {
+      assert.deepEqual(pwaActivitySnapshot(), { draftDirty: true, pendingWrites: 2 });
+    } finally {
+      releaseDraft();
+      releaseFirst();
+      releaseSecond();
+    }
+  });
+
+  it("returns to the shared idle snapshot when every hold is released", () => {
+    const release = registerPwaActivity("draft");
+    assert.equal(pwaActivitySnapshot().draftDirty, true);
+    release();
+    release(); // double release is a no-op, not a negative count
+    assert.equal(pwaActivitySnapshot(), IDLE_PWA_ACTIVITY);
+    assert.equal(pwaActivitySnapshot().pendingWrites, 0);
+  });
+
+  it("notifies subscribers on every change and stops after unsubscribe", () => {
+    let calls = 0;
+    const unsubscribe = subscribePwaActivity(() => {
+      calls += 1;
+    });
+    const release = registerPwaActivity("write");
+    assert.equal(calls, 1);
+    release();
+    assert.equal(calls, 2);
+    unsubscribe();
+    const again = registerPwaActivity("write");
+    again();
+    assert.equal(calls, 2);
+    assert.equal(pwaActivitySnapshot(), IDLE_PWA_ACTIVITY);
   });
 });

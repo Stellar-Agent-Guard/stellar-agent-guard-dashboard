@@ -32,6 +32,7 @@ import {
 import { useModalFocus } from "../lib/guard/useModalFocus.ts";
 import { noteVerifiedOutcome } from "../lib/guard/statusTransitions.ts";
 import { announce } from "../lib/guard/useAnnounce.ts";
+import { usePwaActivity } from "../lib/guard/usePwaActivity.ts";
 import { CopyButton } from "./CopyButton.tsx";
 import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 
@@ -256,6 +257,9 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
   // confirmation's shape, and the operator's typed answer.
   const [balance, setBalance] = useState<BalanceState>({ status: "unread" });
   const [challengeInput, setChallengeInput] = useState("");
+  // A freeze that is signing or awaiting the post-write read is a pending
+  // write: an update must not replace the app underneath it (#398).
+  usePwaActivity(phase === "signing" || phase === "verifying", "write");
   const demoMode = useDemoMode();
 
   const dialogRef = useRef<HTMLDivElement>(null);

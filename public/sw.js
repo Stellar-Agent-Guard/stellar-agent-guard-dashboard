@@ -15,9 +15,20 @@
  *
  * A stale shell is recoverable — reloading fetches it again. A stale freeze flag
  * is not: during an incident the console must show what the chain says now.
+ *
+ * Updates never replace a running app on their own. This worker deliberately
+ * does not call `skipWaiting()` while installing: a new shell that activated
+ * itself could discard a policy draft or interrupt a wallet approval. It waits,
+ * the page shows a non-blocking notice, and only the page's explicit request
+ * (the `GUARD_SKIP_WAITING` message below) promotes it. See `lib/guard/pwa.ts`.
  */
 
-const CACHE_NAME = "stellar-agent-guard-static-v1";
+/** Must equal `SERVICE_WORKER_SKIP_WAITING_MESSAGE` in `lib/guard/pwa.ts`. */
+const SKIP_WAITING_MESSAGE = "GUARD_SKIP_WAITING";
+
+// Versioned so activation of a new shell drops the previous one's cached assets
+// instead of mixing two builds in one cache.
+const CACHE_NAME = "stellar-agent-guard-static-v2";
 const OFFLINE_URL = "/offline.html";
 
 /** Everything the shell needs to render without the network. */
@@ -73,9 +84,23 @@ self.addEventListener("install", (event) => {
     (async () => {
       const cache = await caches.open(CACHE_NAME);
       await cache.addAll(PRECACHE_URLS);
-      await self.skipWaiting();
+      // No `skipWaiting()` here on purpose: the new worker stays in `waiting`
+      // until a page asks for it, so the operator decides when to reload.
     })(),
   );
+});
+
+/*
+ * The one way an update takes over.
+ *
+ * The page posts this only after an explicit reload action, and after warning
+ * the operator if a draft or a pending write would be discarded. A message from
+ * anywhere else is ignored, and nothing about a transaction is persisted or
+ * replayed by activation: this worker only ever serves the static shell.
+ */
+self.addEventListener("message", (event) => {
+  if (!event.data || event.data.type !== SKIP_WAITING_MESSAGE) return;
+  event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener("activate", (event) => {

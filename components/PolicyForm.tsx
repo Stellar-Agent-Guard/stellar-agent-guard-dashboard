@@ -18,6 +18,7 @@ import {
 } from "../lib/guard/presets.ts";
 import { installPolicy, revokePolicy } from "../lib/guard/guardOps.ts";
 import { historyShortcut, useHistoryState } from "../lib/guard/useHistoryState.ts";
+import { usePwaActivity } from "../lib/guard/usePwaActivity.ts";
 import { computePolicyDiff, type PolicyDiff } from "../lib/guard/policyDiff.ts";
 import { PolicyDiffModal } from "./PolicyDiffModal.tsx";
 import type { InvokeResult } from "../lib/guard/submit.ts";
@@ -123,6 +124,10 @@ export function PolicyForm() {
     canRedo,
   } = useHistoryState<PolicyDraft | null>(null);
   const [busy, setBusy] = useState(false);
+  // Unsaved work a service-worker update must not discard (#398): an edited
+  // policy draft, and the write itself while the wallet is approving it.
+  usePwaActivity(draft !== null, "draft");
+  usePwaActivity(busy, "write");
   const [outcome, setOutcome] = useState<PolicyOutcome | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingDiff, setPendingDiff] = useState<PolicyDiff | null>(null);

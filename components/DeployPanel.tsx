@@ -55,6 +55,14 @@ import {
 import { useGuard } from "./GuardProvider.tsx";
 import { CopyButton } from "./CopyButton.tsx";
 import { writeControlState } from "../lib/guard/observerMode.ts";
+import {
+  compileDeploymentReceipt,
+  deploymentReceiptFilename,
+  formatDeploymentReceipt,
+  type DeploymentReceipt,
+} from "../lib/guard/printReport.ts";
+import { announce } from "../lib/guard/useAnnounce.ts";
+import { usePwaActivity } from "../lib/guard/usePwaActivity.ts";
 import { MigrationWizard } from "./MigrationWizard.tsx";
 import { ErrorBlock, OutcomeList, starLink } from "./bits.tsx";
 
@@ -137,6 +145,12 @@ export function DeployPanel() {
     perTxCap,
     windowCap,
   });
+
+  // A deploy in flight is a pending write, and a typed salt or half-filled
+  // init form is an unsaved deployment draft. A service-worker update waits for
+  // both rather than replacing the app underneath them (#398).
+  usePwaActivity(deploying, "write");
+  usePwaActivity(saltText.trim() !== "" || agentPubkey.trim() !== "", "draft");
 
   const [balance, setBalance] = useState<string | null>(null);
   useEffect(() => {
@@ -379,6 +393,42 @@ export function DeployPanel() {
   function cancelInspect() {
     setInspectCancelled(true);
     // The worker will handle cancellation internally
+  /**
+   * The handoff record for the deploy on screen (#396).
+   *
+   * Derived from the outcome rather than stored, so it can never drift from the
+   * transactions and read the panel is showing. The live read is passed through
+   * as what it is: a success, a failure, or — when the flow never reached it —
+   * `null`, which the receipt records as "unavailable" rather than verified.
+   */
+  const receipt = outcome
+    ? compileDeploymentReceipt({
+        network: { name: NETWORK.name, passphrase: NETWORK.passphrase },
+        predictedAddress: plan?.predicted ?? outcome.guard,
+        deployedAddress: outcome.guard,
+        pinned: { hash: PHASE1_ARTIFACT.wasmHash, bytes: PHASE1_ARTIFACT.wasmBytes },
+        read:
+          outcome.identity !== null
+            ? { ok: true, value: outcome.identity }
+            : outcome.readError !== null
+              ? { ok: false, error: outcome.readError }
+              : null,
+        steps: outcome.steps,
+      })
+    : null;
+
+  function downloadDeploymentReceipt(record: DeploymentReceipt) {
+    const url = URL.createObjectURL(
+      new Blob([formatDeploymentReceipt(record)], { type: "application/json;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = deploymentReceiptFilename(record);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    announce("Downloaded the deployment verification receipt");
   }
 
   async function deploy() {
@@ -742,11 +792,20 @@ export function DeployPanel() {
           <strong>
             {outcome.verified
               ? "Deployed and verified against the pinned artifact"
-              : "A contract was created, but it is NOT the pinned artifact"}
+              : outcome.readError !== null
+                ? "A contract was created, but its bytecode could not be read back"
+                : "A contract was created, but it is NOT the pinned artifact"}
           </strong>
           <span className="tiny mono">{outcome.guard}</span>{" "}
           <CopyButton value={outcome.guard} label="deployed guard address" />
           <OutcomeList steps={outcome.steps} />
+          {outcome.readError !== null && (
+            <p className="tiny" style={{ color: "var(--danger)" }}>
+              The post-deploy read failed, so nothing about this instance&apos;s bytecode is
+              verified: {outcome.readError}. Re-check the artifact, or inspect the contract, before
+              routing an agent through it.
+            </p>
+          )}
           {outcome.identity && (
             <p className="tiny muted">
               Instance runs {outcome.identity.fetchedSha256.slice(0, 20)}... (
@@ -754,6 +813,30 @@ export function DeployPanel() {
               {outcome.identity.reportedWasmHash?.slice(0, 20) ?? "none"}...
             </p>
           )}
+        </div>
+      )}
+
+      {receipt && (
+        <div className="notice info" role="status">
+          <strong>Deployment verification receipt</strong>
+          <span className="tiny">
+            A client-generated record of this deploy: network, predicted and deployed addresses,
+            pinned artifact, transaction references and the verification outcome. It is not a signed
+            credential, and it contains no keys, signed XDR or wallet session details.
+          </span>
+          <span className="tiny muted">
+            Verification: {receipt.verification.status} — {receipt.verification.summary}
+          </span>
+          <div className="row" style={{ marginTop: 8 }}>
+            <button
+              className="secondary"
+              onClick={() => downloadDeploymentReceipt(receipt)}
+              title="Download the deployment receipt as JSON"
+            >
+              Download receipt
+            </button>
+            <span className="tiny muted mono">{deploymentReceiptFilename(receipt)}</span>
+          </div>
         </div>
       )}
 
