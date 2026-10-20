@@ -395,6 +395,8 @@ export function DeployPanel() {
   function cancelInspect() {
     setInspectCancelled(true);
     // The worker will handle cancellation internally
+  }
+
   /**
    * The handoff record for the deploy on screen (#396).
    *
