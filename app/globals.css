@@ -10,7 +10,20 @@
   --warn: #ffb020;
   --danger: #ff5c5c;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  color-scheme: dark;
+  color-scheme: dark light;
+}
+
+[data-theme="high-contrast"] {
+  --bg: #000000;
+  --panel: #ffffff;
+  --panel-2: #f0f0f0;
+  --line: #000000;
+  --text: #000000;
+  --muted: #333333;
+  --accent: #0000ff;
+  --ok: #006400;
+  --warn: #6b4b00;
+  --danger: #b22222;
 }
 
 * {
@@ -261,6 +274,12 @@ label.field .hint {
   padding: 4px 10px;
 }
 
+.skeleton {
+  display: inline-block;
+  animation: skeleton-shimmer 1.4s ease infinite;
+  height: 1em;
+}
+
 .skeleton-row {
   height: 14px;
   margin: 8px 0;
@@ -278,6 +297,7 @@ label.field .hint {
     background-position: -200% 0;
   }
 }
+
 .pill {
   display: inline-block;
   padding: 2.5px 9px;
@@ -323,16 +343,15 @@ label.field .hint {
   margin-bottom: 3px;
 }
 
-/*
- * Warning tier — the shared primitive for "safe, but not doing what the
+/* Warning tier — the shared primitive for "safe, but not doing what the
  * operator assumed", established by the default-deny status pass (issue #25)
  * and reused by the telemetry feed's row severity (issue #26).
- *
  * Two intensities, two tokens, no third colour: `warn` for a state that is
  * working as designed and needs reading, `danger` for one that is refusing
  * work. `.pill.warn` / `.pill.danger` are the inline form of the same tier, so
  * a badge and the banner it belongs to cannot drift apart.
  */
+
 .notice {
   border-left: 3px solid var(--warn);
   background: #1b1710;
@@ -362,8 +381,7 @@ label.field .hint {
   margin-top: 8px;
 }
 
-/*
- * Freeze dry-run output. Visually distinct from a write receipt (banner plus a
+/* Freeze dry-run output. Visually distinct from a write receipt (banner plus a
  * bordered panel) so a simulation can never be mistaken for a broadcast freeze.
  */
 .dry-run {
@@ -385,20 +403,6 @@ label.field .hint {
   font-size: 12.5px;
   font-weight: 700;
   letter-spacing: 0.08em;
-}
-
-/* Empty-state primitive, shared by every data surface (fleet table, telemetry
- * feed, tx history): a centered title + recovery hint, with the surface adding
- * its own recovery control below. Append here; do not fork per-component. */
-.fleet-empty strong,
-.empty-state strong {
-  display: block;
-  margin-bottom: 3px;
-}
-
-.fleet-empty span,
-.empty-state span {
-  display: block;
 }
 
 .demo-badge {
@@ -442,16 +446,15 @@ table.chart-data td {
   vertical-align: top;
 }
 
-/*
- * Row severity tiers (issue #26) — the same two tokens as the warning-tier
- * banner, so a feed row and a status banner cannot disagree about what "red"
- * means. Every tier's wording is already in the row (the decision badge, the
- * source pill), so the colour is emphasis, never the message.
- *
+/* Row severity tiers (issue #26) — the same two tokens as the warning-tier
+ * banner, so a feed row and a status banner cannot disagree about what "red" means.
+ * Every tier's wording is already in the row (the decision badge, the source pill),
+ * so the colour is emphasis, never the message.
  * The marker is an inset box-shadow on the first cell rather than a border:
  * `border-collapse: collapse` (above) makes a row-level border unreliable, and
  * the row's cell padding stays as it was — no reflow, no layout shift.
  */
+
 table.events tbody tr.severity-blocked {
   background: #1c1113;
 }
@@ -465,7 +468,8 @@ table.events tbody tr.severity-diagnostic td:first-child {
 }
 
 /* Allowed and lifecycle rows are deliberately unmarked: the eye should go to the
- * blocks, and an unmarked row is what "nothing happened here" looks like. */
+ * blocks, and an unmarked row is what "nothing happened here" looks like.
+ */
 
 table.asset-caps {
   width: 100%;
@@ -596,7 +600,8 @@ code {
  * stacks to roughly 12 label.field blocks × ~81px ≈ 972px — well past a
  * 667px iPhone SE viewport — so Sign/Export would sit below the fold and
  * invite mis-taps mid-scroll. Under the same 720px breakpoint the form's
- * action bar pins to the viewport bottom instead. */
+ * action bar pins to the viewport bottom instead.
+ */
 .form-actions {
   position: sticky;
   bottom: 0;
@@ -607,8 +612,7 @@ code {
   padding: 12px 18px;
 }
 
-/*
- * Policy presets: the archetype picker and its profile legend, visually grouped
+/* Policy presets: the archetype picker and its profile legend, visually grouped
  * so the legend reads as documentation for the select rather than as form
  * fields.
  */
@@ -626,9 +630,7 @@ code {
   margin-top: 2px;
 }
 
-/*
- * Keyboard accessibility (WCAG 2.1 AA, SC 2.4.7 + 1.4.11).
- *
+/* Keyboard accessibility (WCAG 2.1 AA, SC 2.4.7 + 1.4.11).
  * Every interactive element gets a high-visibility focus indicator on
  * keyboard focus (:focus-visible). `--accent` (#4da3ff) sits at roughly 7:1
  * against `--bg` and 6:1 against `--panel` — comfortably past the 3:1
@@ -641,8 +643,7 @@ code {
   box-shadow: 0 0 0 4px rgba(77, 163, 255, 0.3);
 }
 
-/*
- * Content for screen readers only: removed from the visual layout but kept
+/* Content for screen readers only: removed from the visual layout but kept
  * in the accessibility tree, which is exactly what an aria-live region needs.
  */
 .visually-hidden {
@@ -657,8 +658,7 @@ code {
   border: 0;
 }
 
-/*
- * Modal dialogs (the freeze confirmation): a fixed backdrop over the shell
+/* Modal dialogs (the freeze confirmation): a fixed backdrop over the shell
  * with a centred, scrollable card. `role="dialog"` + `aria-modal` live on the
  * .modal element in PanicPanel; focus is trapped there while it is open.
  */
@@ -694,8 +694,7 @@ code {
   margin-top: 12px;
 }
 
-/*
- * Contract storage explorer (issue #150) — a wider dialog than the confirmation
+/* Contract storage explorer (issue #150) — a wider dialog than the confirmation
  * cards, because the entries are a list rather than a single question.
  */
 .modal.storage-drawer {
@@ -717,7 +716,6 @@ code {
   background: var(--panel-2);
 }
 
-/* An uninitialized key is a fact, not an error: dimmed, never danger-tinted. */
 .storage-entry[data-present="false"] {
   opacity: 0.72;
 }
@@ -726,8 +724,7 @@ code {
   font-size: 12.5px;
 }
 
-/*
- * The decoded value. JSON tokens are coloured by *kind* rather than by
+/* The decoded value. JSON tokens are coloured by *kind* rather than by
  * meaning, and every token still reads as its own literal text, so the colour
  * is a reading aid and never the only way to tell a string from a number.
  */
@@ -824,47 +821,6 @@ code {
   .toast-enter {
     animation: none;
   }
-}
-
-/* ── Skeleton placeholders for pending reads (#31) ──────────────────────────
-
-   Sized in em so a skeleton inherits the font size of the slot it occupies
-   (`.stat .v` at 19px, `.stat .n` at 12px) and reserves the same height the
-   resolved value will — class parity with the loaded element is what prevents
-   the layout shift this component exists to prevent. */
-
-.skeleton {
-  display: inline-block;
-  height: 1em;
-  border-radius: 4px;
-  background: linear-gradient(90deg, var(--line) 25%, var(--panel-2) 50%, var(--line) 75%);
-  background-size: 200% 100%;
-  animation: skeleton-shimmer 1.4s ease-in-out infinite;
-  vertical-align: middle;
-}
-
-/* Note-slot lines are shorter and thinner than value-slot lines. */
-.skeleton.slim {
-  height: 0.8em;
-  width: 70%;
-}
-
-.skeleton:not(.slim) {
-  width: 55%;
-}
-
-@keyframes skeleton-shimmer {
-  from {
-    background-position: 200% 0;
-  }
-  to {
-    background-position: 0% 0;
-  }
-}
-
-/* Motion-sensitive users get a static block: the reservation (and therefore
-   the no-shift contract) is untouched — only the animation stops. */
-@media (prefers-reduced-motion: reduce) {
   .skeleton {
     animation: none;
   }
@@ -893,9 +849,7 @@ code {
   word-break: break-all;
 }
 
-/*
- * Service-worker update notice (components/PwaRegistrar.tsx, #398).
- *
+/* Service-worker update notice (components/PwaRegistrar.tsx, #398).
  * Deliberately a bottom-left strip rather than a modal: an update is never a
  * reason to block a panic button, a wallet approval or an edit in progress. It
  * sits opposite the toast viewport so the two cannot cover each other, and it
@@ -920,25 +874,26 @@ code {
   padding: 10px 12px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
 }
+
 .pwa-update-body {
   display: flex;
   flex-direction: column;
   gap: 3px;
   min-width: 0;
 }
+
 .pwa-update .row {
   margin: 0;
   gap: 8px;
 }
+
 @media print {
   .pwa-update {
     display: none !important;
   }
 }
 
-/*
- * Incident Simulation Mode (rehearsal).
- *
+/* Incident Simulation Mode (rehearsal).
  * The whole panel carries a striped watermark so a trainee cannot mistake a
  * rehearsal for a live incident; the animation is disabled for reduced
  * motion. Every simulated control also hides from print, because a rehearsal
@@ -1047,9 +1002,7 @@ code {
   background: color-mix(in srgb, var(--danger) 8%, transparent);
 }
 
-/*
- * Function picker (contract-spec-driven allowlist selection).
- *
+/* Function picker (contract-spec-driven allowlist selection).
  * Shaped to the same visual language as the rest of the console: panel-2
  * surfaces, the standard line colour, and mono names. The option list is a
  * scrollable region with a fixed max height so a large contract spec cannot
@@ -1129,8 +1082,7 @@ code {
   cursor: pointer;
 }
 
-/*
- * Dead-man-switch expiration alert banners — shown at the top of the console
+/* Dead-man-switch expiration alert banners — shown at the top of the console
  * while the DMS deadline approaches, escalating in three tiers:
  * warning (yellow) below 25% of grace, critical (red, pulsing) below 10%, and
  * expired (dark red) once the switch has tripped. High-contrast fills on the
@@ -1178,8 +1130,7 @@ code {
   color: #ff9c9c;
 }
 
-/*
- * The critical tier pulses so it cannot be mistaken for a static notice; the
+/* The critical tier pulses so it cannot be mistaken for a static notice; the
  * other two tiers stay still so escalation itself is what moves. Honoured by
  * reduced-motion users, for whom a pulsing alarm is noise, not signal.
  */
@@ -1203,7 +1154,7 @@ code {
 
 @media print {
   /* A rehearsal has no place in a compliance record: the watermark, the
-     controls, and every simulated read drop out before the report prints. */
+   controls, and every simulated read drop out before the report prints. */
   .sim-active::before {
     display: none !important;
   }
@@ -1279,8 +1230,7 @@ code {
   display: none;
 }
 
-/*
- * Telemetry chart (components/TelemetryChart.tsx). Colours come from the
+/* Telemetry chart (components/TelemetryChart.tsx). Colours come from the
  * theme tokens, so it follows the light, dark and high-contrast themes.
  */
 .tchart {
@@ -1290,62 +1240,76 @@ code {
   border-radius: 8px;
   background: var(--panel-2);
 }
+
 .tchart-frame {
   position: relative;
   margin-top: 8px;
 }
+
 .tchart-svg {
   display: block;
   width: 100%;
   height: 200px;
   overflow: visible;
 }
+
 .tchart-svg:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
 .tchart-allowed {
   fill: var(--ok);
   background: var(--ok);
 }
+
 .tchart-blocked {
   fill: var(--danger);
   background: var(--danger);
 }
+
 .tchart-spend {
   background: var(--accent);
 }
+
 .tchart-spend-area {
   fill: var(--accent);
   fill-opacity: 0.16;
 }
+
 .tchart-spend-line {
   fill: none;
   stroke: var(--accent);
   stroke-width: 1.5;
   vector-effect: non-scaling-stroke;
 }
+
 .tchart-grid {
   stroke: var(--line);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
+
 .tchart-baseline {
   stroke: var(--muted);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
+
 .tchart-axis {
   fill: var(--muted);
   font-size: 10px;
 }
+
 .tchart-cursor {
   fill: var(--text);
   fill-opacity: 0.07;
 }
+
 .tchart-hit {
   fill: transparent;
 }
+
 .tchart-key {
   display: inline-block;
   width: 9px;
@@ -1353,6 +1317,7 @@ code {
   border-radius: 2px;
   vertical-align: middle;
 }
+
 .tchart-tip {
   position: absolute;
   top: 0;
@@ -1367,6 +1332,7 @@ code {
   pointer-events: none;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
+
 @media print {
   .tchart-tip {
     display: none;
@@ -1394,9 +1360,11 @@ code {
 .setup-status.done {
   color: var(--ok);
 }
+
 .setup-status.pending {
   color: var(--warn);
 }
+
 .setup-status.error {
   color: var(--danger);
 }
