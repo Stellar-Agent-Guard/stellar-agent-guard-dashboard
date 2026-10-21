@@ -35,10 +35,7 @@ test("the runbook names every retryable signal the read path actually produces",
 
 test("the runbook names the console's post-write and read-failure verdicts", () => {
   assertMentions("NOT confirmed", "PanicPanel's post-freeze verification verdict");
-  assertMentions(
-    "the guard's state could not be read",
-    "StatusPanel's snapshot-failure copy",
-  );
+  assertMentions("the guard's state could not be read", "StatusPanel's snapshot-failure copy");
   assertMentions("Wallet connection", "WalletBar's connect-failure panel");
   assertMentions("UNRECOGNIZED BYTECODE", "wasmInspector's unreadable-artifact verdict");
   assertMentions("No policy installed", "the default-deny wording the console and SDK share");

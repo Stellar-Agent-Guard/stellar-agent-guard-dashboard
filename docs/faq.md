@@ -14,4 +14,4 @@ The current deployment targets Stellar Testnet. Network settings can be inspecte
 
 ### An error appeared — should I retry?
 
-Not before a read. Every dashboard error is mapped to what is known, what stays uncertain, and a read-only next step in the [error runbook](runbooks/errors.md) — in short: reads may be retried freely; a refused or failed *write* must be checked against the ledger (by transaction hash or a direct contract read) before anything is sent again, and a failed read never stands in for chain state.
+Not before a read. Every dashboard error is mapped to what is known, what stays uncertain, and a read-only next step in the [error runbook](runbooks/errors.md) — in short: reads may be retried freely; a refused or failed _write_ must be checked against the ledger (by transaction hash or a direct contract read) before anything is sent again, and a failed read never stands in for chain state.

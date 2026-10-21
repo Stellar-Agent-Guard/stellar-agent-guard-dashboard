@@ -414,13 +414,15 @@ describe("print report binding (#369)", () => {
     const base = {
       guard,
       fetchedAt,
-      status: fields.status ?? okRead({
-        heartbeat_expired: false,
-        admin_frozen: false,
-        has_policy: true,
-        last_heartbeat: 0n,
-        now: 1_700_000_060n,
-      }),
+      status:
+        fields.status ??
+        okRead({
+          heartbeat_expired: false,
+          admin_frozen: false,
+          has_policy: true,
+          last_heartbeat: 0n,
+          now: 1_700_000_060n,
+        }),
       policy: fields.policy ?? okRead(policyOf(["A1"])),
       window: fields.window ?? okRead(null),
       identity:
@@ -505,7 +507,10 @@ describe("print report binding (#369)", () => {
 
   test("failed status and identity reads never render as OK, zero or a placeholder", () => {
     const report = compilePrintReport(
-      snapshot(GUARD_B, T2, { status: failedRead("RPC timed out"), identity: failedRead("NO CODE") }),
+      snapshot(GUARD_B, T2, {
+        status: failedRead("RPC timed out"),
+        identity: failedRead("NO CODE"),
+      }),
       "Testnet",
       "GADMIN...",
       NOW,

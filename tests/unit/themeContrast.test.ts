@@ -79,7 +79,9 @@ function tokensIn(selectorNeedle: string): Record<string, string> {
       if (Object.keys(tokens).length > 0) return tokens;
     }
   }
-  throw new Error(`no declarations found for selector containing ${JSON.stringify(selectorNeedle)}`);
+  throw new Error(
+    `no declarations found for selector containing ${JSON.stringify(selectorNeedle)}`,
+  );
 }
 
 /** One #rrggbb value out of a rule (e.g. a surface overridden per theme). */
@@ -115,8 +117,7 @@ function theme(needle: string, name: string): Theme {
     }
     throw new Error(`no base pill surface for ${tier}`);
   };
-  const surface = (tier: string) =>
-    hexIn(`${needle} .pill.${tier}`, "background") ?? baseHex(tier);
+  const surface = (tier: string) => hexIn(`${needle} .pill.${tier}`, "background") ?? baseHex(tier);
   return {
     name,
     tokens,
@@ -129,8 +130,8 @@ function theme(needle: string, name: string): Theme {
 }
 
 const THEMES: Theme[] = [
-  theme("[data-theme=\"light\"]", "light"),
-  theme("[data-theme=\"high-contrast\"]", "high-contrast"),
+  theme('[data-theme="light"]', "light"),
+  theme('[data-theme="high-contrast"]', "high-contrast"),
   // The dark theme has no pill-surface overrides; it owns the base rule.
   theme(":root", "dark"),
 ];
@@ -177,7 +178,7 @@ test("body and panel text meet AA contrast in every theme", () => {
 });
 
 test("the high-contrast theme clears the stronger body-text target", () => {
-  const tokens = tokensIn("[data-theme=\"high-contrast\"]");
+  const tokens = tokensIn('[data-theme="high-contrast"]');
   for (const bg of ["--bg", "--panel", "--panel-2"]) {
     const ratio = contrast(token(tokens, "--text"), token(tokens, bg));
     assert.ok(ratio >= 14, `high-contrast text on ${bg} is ${ratio.toFixed(2)}:1, needs 14:1`);
@@ -211,9 +212,7 @@ test("light-theme solid buttons keep AA text contrast", () => {
   // The light theme overrides button text colour because the dark theme's ink
   // would fail on the darker accent; the pair it forms is asserted here.
   const accent = token(tokensIn('[data-theme="light"]'), "--accent");
-  const rule = cssBlocks().find((block) =>
-    block.selector.includes('[data-theme="light"] button'),
-  );
+  const rule = cssBlocks().find((block) => block.selector.includes('[data-theme="light"] button'));
   assert.ok(rule, "the light theme must override button text");
   const colour = /color:\s*(#[0-9a-f]{6})/i.exec(rule.body)?.[1];
   assert.ok(colour, "the light-theme button override must name a hex colour");

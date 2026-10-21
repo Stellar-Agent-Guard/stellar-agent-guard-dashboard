@@ -12,7 +12,7 @@ never evidence. So every failure below gets three answers, in this order:
 
 - **What you know** — what the console can prove about what did or did not
   reach the network.
-- **What stays uncertain** — what this error cannot tell you (and usually: 
+- **What stays uncertain** — what this error cannot tell you (and usually:
   whether a write did or did not land).
 - **The safe next step** — a read-only check performed against the chain
   itself, before any repeat of a write.
@@ -20,7 +20,7 @@ never evidence. So every failure below gets three answers, in this order:
 Two things this document deliberately will not do:
 
 - **It never advises "just retry."** A retry is safe only for reads. A refused
-  or failed *write* must be checked against the ledger first, because the
+  or failed _write_ must be checked against the ledger first, because the
   failure may have happened after the transaction was included.
 - **It never treats a failed read as information about the chain.** A failed
   `policy()` read does not mean "no policy is installed"; a failed read is an
@@ -48,18 +48,18 @@ one of them — they are meant to agree.
 
 - **What you know:** no signature happened, and nothing signed by this session
   was broadcast. Read panels may be empty because identity reads need a wallet,
-  *not* because the guard on chain is missing or unprotected.
+  _not_ because the guard on chain is missing or unprotected.
 - **What stays uncertain:** everything on chain. Nothing here says anything
   about the guard's state.
 - **Safe next step:** read the contract without a wallet:
   `npm run inspect -- --guard C…` (read-only, self-contained). Reconnect the
   wallet afterwards; if Freighter keeps failing, check that its network setting
-  matches the console's (Testnet) and retry the *connection*, which is the only
+  matches the console's (Testnet) and retry the _connection_, which is the only
   thing that failed.
 
 ## 2. Read timeout (`Read timed out after Nms`, `TIMEOUT`)
 
-- **What you know:** this *read* did not return in time. Reads cannot change
+- **What you know:** this _read_ did not return in time. Reads cannot change
   state, so there is nothing to undo.
 - **What stays uncertain:** the chain state itself — the read neither proved
   nor disproved anything. Do **not** interpret a timed-out `policy()` read as
@@ -76,7 +76,7 @@ one of them — they are meant to agree.
 - **What stays uncertain:** whether the request that was throttled was a poll
   only. Throttling says nothing about transaction status.
 - **Safe next step:** for reads, wait for the backoff to finish — do not hammer
-  refresh, which only extends the throttle. If a *write* was in flight when the
+  refresh, which only extends the throttle. If a _write_ was in flight when the
   throttle appeared, still verify it by hash (section 6) before another signed
   attempt.
 
@@ -84,7 +84,7 @@ one of them — they are meant to agree.
 
 - **What you know:** the transaction never left the browser. Refusal happens at
   simulation, before sign or broadcast, with zero fees spent.
-- **What stays uncertain:** only whether your *intent* matched the policy — the
+- **What stays uncertain:** only whether your _intent_ matched the policy — the
   refusal itself is the answer about this attempt.
 - **Safe next step:** do **not** retry the same transaction blind. Read the
   live policy (`npm run inspect …`, or the console's policy panel after
@@ -95,7 +95,7 @@ one of them — they are meant to agree.
 
 ## 5. Submission failure (`failed` write, transaction included and rejected)
 
-- **What you know:** the transaction *was* included in a ledger and the
+- **What you know:** the transaction _was_ included in a ledger and the
   contract rejected it. `lib/guard/submit.ts` reports the host's own reason
   (`describeRejectedResult`) instead of a bare "trapped". Fee was spent.
 - **What stays uncertain:** why the host rejected it — the rejection is
@@ -110,7 +110,7 @@ one of them — they are meant to agree.
 
 This is the dangerous one, because the write may have landed anyway.
 
-- **What you know:** the console's *verification read* did not observe the
+- **What you know:** the console's _verification read_ did not observe the
   expected effect yet. That is all it knows.
 - **What stays uncertain:** whether the write landed and the verification read
   is early, throttled or raced, or whether the write genuinely failed. The
@@ -163,7 +163,7 @@ This is the dangerous one, because the write may have landed anyway.
 
 ---
 
-## A note on what is *not* an error
+## A note on what is _not_ an error
 
 - `blocked` rows in the telemetry feed are the guard working, not the console
   failing: the account refused something the policy forbids, before broadcast,

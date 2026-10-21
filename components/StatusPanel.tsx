@@ -555,7 +555,8 @@ export function StatusPanel() {
               <ul>
                 {printReport.reads.map((entry) => (
                   <li key={entry.field}>
-                    {entry.field}: {entry.outcome === "read" ? "read" : "unavailable"} — {entry.detail}
+                    {entry.field}: {entry.outcome === "read" ? "read" : "unavailable"} —{" "}
+                    {entry.detail}
                   </li>
                 ))}
               </ul>

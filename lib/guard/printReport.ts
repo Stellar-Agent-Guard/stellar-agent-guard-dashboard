@@ -51,9 +51,7 @@ export const PRINT_UNAVAILABLE_PREFIX = "UNAVAILABLE";
  * (default-deny); a failed read is declared `unavailable` because it
  * established nothing.
  */
-function reportFieldReads(
-  snapshot: GuardSnapshot,
-): PrintFieldReport[] {
+function reportFieldReads(snapshot: GuardSnapshot): PrintFieldReport[] {
   const entry = (field: string, result: { ok: boolean; error?: string }): PrintFieldReport =>
     result.ok
       ? { field, outcome: "read", detail: "read live from the chain for this report" }
@@ -122,9 +120,9 @@ export function compilePrintReport(
           ),
         }
       : policyReadFailed
-        // Not []: an empty list would print as "None" — a reassuring default
-        // the failed read never established.
-        ? unavailableLists()
+        ? // Not []: an empty list would print as "None" — a reassuring default
+          // the failed read never established.
+          unavailableLists()
         : { assets: [], recipients: [], protocols: [] },
     adminKey,
     dmsStatus: status
