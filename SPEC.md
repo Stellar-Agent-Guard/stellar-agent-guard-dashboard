@@ -164,6 +164,13 @@ Details that are load-bearing rather than incidental:
   (`describeRejectedResult`) so the host's own reason is shown instead of a bare "trapped".
 - **Refusals have no hash by construction.** A refused call was never broadcast, so the console says
   so explicitly rather than showing a blank where a transaction hash would go.
+- **The operator confirms the transaction, not the panel's copy of it.** Before the first simulation
+  the pipeline re-reads operation, guard contract, network and signing admin out of the built envelope
+  (`contextFromTransaction`) and refuses the write if the summary the operator was shown is missing or
+  no longer matches (`checkPresignAuthorization`, `lib/guard/authorizationSummary.ts`). A summary that
+  is merely what the caller _said_ it is signing would reassure without constraining, so the panel
+  prints the derived reading of the same probe transaction the pipeline goes on to simulate, and a
+  stale or blank one stops at stage `discovery` — no simulation, no prompt, no broadcast (issue #343).
 - **Only reads are retried, and an unanswered broadcast is its own outcome.** The enforced simulation
   and the inclusion poll are questions to the network, so a throttled or timed-out one is repeated on
   bounded backoff (`withBackoff`, `safety: "idempotent-read"`). A broadcast is not a question: it is
