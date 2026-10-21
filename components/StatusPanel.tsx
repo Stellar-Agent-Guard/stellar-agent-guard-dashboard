@@ -21,6 +21,7 @@ import { StorageExplorerButton } from "./StorageExplorer.tsx";
 import { WebhookAlertBridge } from "./WebhookAlertBridge.tsx";
 import { WebhookSettingsButton } from "./WebhookSettings.tsx";
 import { PHASE1_ARTIFACT, NETWORK } from "../lib/guard/network.ts";
+import { buildReadDiagnostic } from "../lib/rpc/timeouts.ts";
 import { configureHref } from "../lib/guard/deeplink.ts";
 import { NO_POLICY_CONSEQUENCE, policyStateFrom } from "../lib/guard/policyState.ts";
 import { compilePrintReport } from "../lib/guard/printReport.ts";
@@ -82,6 +83,40 @@ function DmsAlertBanner({ alert }: { alert: DmsAlert }) {
 }
 
 /**
+ * Copyable failure context (issue #347).
+ *
+ * A bare RPC error is hard to report and easy to over-share, so each failed read
+ * contributes a four-line diagnostic — operation, endpoint origin, network and
+ * correlation time — with signed payloads and credentials already removed by
+ * the chain layer. It is a report about a failure, never a stand-in for a value.
+ */
+function ReadDiagnostics({ entries }: { entries: Array<{ label: string; text: string }> }) {
+  if (entries.length === 0) return null;
+  return (
+    <section className="no-print" aria-label="Read diagnostics" style={{ marginTop: 16 }}>
+      <h3 style={{ marginTop: 0 }}>
+        Diagnostics for the failed {entries.length === 1 ? "read" : "reads"}
+      </h3>
+      <p className="tiny muted">
+        Safe to paste into a report: the operation, endpoint origin, network and correlation time.
+        Signed XDR, authorization payloads and key material are removed.
+      </p>
+      {entries.map((entry) => (
+        <div key={entry.label} style={{ marginTop: 8 }}>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <span className="tiny">{entry.label}</span>
+            <CopyButton value={entry.text} label={`${entry.label} diagnostics`} />
+          </div>
+          <pre className="mono tiny" style={{ whiteSpace: "pre-wrap", margin: 0 }}>
+            {entry.text}
+          </pre>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+/**
  * The guard's live state, every field read from the chain on each refresh.
  *
  * The two freezes are shown separately rather than as one "frozen" light,
@@ -132,6 +167,32 @@ export function StatusPanel() {
   // is running. Read from the store as a snapshot, never as a ref.
   const rehearsalActive = useRehearsalActive();
   const { masked } = usePrivacy();
+
+  // Safe failure context (issue #347). The chain layer attaches a diagnostic to
+  // each failed read; a refresh that never produced a snapshot contributes one
+  // built from the configured endpoint. Nothing here carries chain values, so a
+  // diagnostic can never be mistaken for state.
+  const readDiagnostics: Array<{ label: string; text: string }> = [];
+  if (snapshot) {
+    const results = [
+      ["status()", snapshot.status],
+      ["policy()", snapshot.policy],
+      ["window", snapshot.window],
+      ["wasm identity", snapshot.identity],
+    ] as const;
+    for (const [label, result] of results) {
+      if (!result.ok && result.diagnostic) readDiagnostics.push({ label, text: result.diagnostic });
+    }
+  } else if (snapshotError) {
+    readDiagnostics.push({
+      label: "guard snapshot",
+      text: buildReadDiagnostic({
+        operation: "readSnapshot",
+        endpoint: NETWORK.rpcUrl,
+        network: NETWORK.name,
+      }).text,
+    });
+  }
 
   return (
     <>
@@ -468,6 +529,8 @@ export function StatusPanel() {
             />
           </>
         )}
+
+        <ReadDiagnostics entries={readDiagnostics} />
 
         {printReport && (
           <div className="print-only print-report">
