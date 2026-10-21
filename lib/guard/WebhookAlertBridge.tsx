@@ -64,7 +64,11 @@ export class WebhookDeliveryTracker {
     if (!record) return;
 
     record.status = "failed";
-    record.statusCode = statusCode;
+    if (statusCode !== undefined) {
+      record.statusCode = statusCode;
+    } else {
+      delete record.statusCode;
+    }
     record.errorMessage = errorMessage;
     record.lastAttemptAt = Date.now();
     record.attempts += 1;

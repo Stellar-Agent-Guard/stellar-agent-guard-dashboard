@@ -36,6 +36,7 @@ import { announce } from "../lib/guard/useAnnounce.ts";
 import { usePwaActivity } from "../lib/guard/usePwaActivity.ts";
 import { CopyButton } from "./CopyButton.tsx";
 import { useDemoMode } from "../lib/guard/useDemoMode.ts";
+import { compileIncidentSummary, formatIncidentSummary } from "../lib/guard/printReport.ts";
 
 /**
  * The emergency panic button.
@@ -279,6 +280,10 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
   // confirmation's shape, and the operator's typed answer.
   const [balance, setBalance] = useState<BalanceState>({ status: "unread" });
   const [challengeInput, setChallengeInput] = useState("");
+  // Incident summary modal state (issue #321)
+  const [showIncidentSummary, setShowIncidentSummary] = useState(false);
+  const [lastReadError, setLastReadError] = useState<string | null>(null);
+  const [lastSuccessfulRead, setLastSuccessfulRead] = useState<string | null>(null);
   // A freeze that is signing or awaiting the post-write read is a pending
   // write: an update must not replace the app underneath it (#398).
   usePwaActivity(phase === "signing" || phase === "verifying", "write");
@@ -828,11 +833,17 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
       {showIncidentSummary && (() => {
         const networkName = wallet?.networkPassphrase?.includes("Public") ? "Public" : 
                            wallet?.networkPassphrase?.includes("Test") ? "Testnet" : "Unknown";
-        const summary = compileIncidentSummary(snapshot ?? null, networkName, {
-          txHash: report?.result.kind === "submitted" ? report.result.hash : undefined,
-          lastReadError: lastReadError ?? undefined,
-          lastSuccessfulRead: lastSuccessfulRead ?? undefined,
-        });
+        const options: { txHash?: string; lastReadError?: string; lastSuccessfulRead?: string } = {};
+        if (report?.result.kind === "submitted") {
+          options.txHash = report.result.hash;
+        }
+        if (lastReadError) {
+          options.lastReadError = lastReadError;
+        }
+        if (lastSuccessfulRead) {
+          options.lastSuccessfulRead = lastSuccessfulRead;
+        }
+        const summary = compileIncidentSummary(snapshot ?? null, networkName, options);
         const formatted = formatIncidentSummary(summary);
 
         return (
