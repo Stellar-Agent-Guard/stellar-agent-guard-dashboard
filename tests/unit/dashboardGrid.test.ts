@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, before, afterEach } from "node:test";
+import { installDom, loadReact, type Act } from "./domHarness.ts";
+import {
+  DashboardGrid,
+  describeResetPreview,
+  type GridPanel,
+} from "../../components/DashboardGrid.tsx";
+import { clearAnnouncements, pendingAnnouncements } from "../../lib/guard/useAnnounce.ts";
 import {
   DEFAULT_LAYOUT,
   LAYOUT_STORAGE_KEY,
@@ -9,6 +16,7 @@ import {
   defaultLayout,
   loadLayout,
   movePanel,
+  reorderAvailablePanels,
   normalizeLayout,
   reorderPanel,
   resetLayout,
@@ -26,16 +34,35 @@ import {
   type StorageLike,
 } from "../../lib/guard/layoutStore.ts";
 
-function fakeStorage(): StorageLike & { data: Map<string, string>; removeItem: (key: string) => void } {
+let React: typeof import("react");
+let createRoot: typeof import("react-dom/client").createRoot;
+let act: Act;
+let root: ReturnType<typeof createRoot> | null = null;
+
+before(async () => {
+  installDom();
+  const loaded = await loadReact();
+  React = loaded.react;
+  createRoot = loaded.createRoot;
+  act = loaded.act;
+});
+
+afterEach(() => {
+  if (root) {
+    act(() => root!.unmount());
+    root = null;
+  }
+  document.body.innerHTML = "";
+  localStorage.clear();
+});
+
+function fakeStorage(): StorageLike & { data: Map<string, string> } {
   const data = new Map<string, string>();
   return {
     data,
-    getItem: (key: string) => data.get(key) ?? null,
-    setItem: (key: string, value: string) => {
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => {
       data.set(key, value);
-    },
-    removeItem: (key: string) => {
-      data.delete(key);
     },
   };
 }
@@ -63,6 +90,17 @@ test("a saved layout round-trips through storage", () => {
   assert.deepEqual(ids(loaded), ids(layout));
 });
 
+test("a quota failure is returned while the layout remains available in memory", () => {
+  const storage: StorageLike = {
+    getItem: () => null,
+    setItem: () => {
+      throw Object.assign(new Error("full"), { name: "QuotaExceededError" });
+    },
+  };
+  const result = saveLayout(setCollapsed(defaultLayout(), "panic", true), storage);
+  assert.deepEqual(result, { ok: false, error: "quota" });
+});
+
 test("loadLayout reads from the versioned storage key", () => {
   const storage = fakeStorage();
   storage.data.set(LAYOUT_STORAGE_KEY, JSON.stringify([{ id: "telemetry", collapsed: false }]));
@@ -76,6 +114,14 @@ test("a corrupted or non-array payload degrades to the default layout", () => {
   assert.deepEqual(ids(loadLayout(storage)), [...DEFAULT_LAYOUT]);
   storage.data.set(LAYOUT_STORAGE_KEY, JSON.stringify({ not: "an array" }));
   assert.deepEqual(ids(loadLayout(storage)), [...DEFAULT_LAYOUT]);
+});
+
+test("a partial legacy layout remains unchanged for recovery", () => {
+  const storage = fakeStorage();
+  const raw = JSON.stringify([{ id: "status", collapsed: false }, { id: "panic" }]);
+  storage.data.set(LAYOUT_STORAGE_KEY, raw);
+  loadLayout(storage);
+  assert.equal(storage.data.get(LAYOUT_STORAGE_KEY), raw);
 });
 
 test("an unknown panel id in storage is dropped, not rendered", () => {
@@ -134,6 +180,17 @@ test("reorderPanel clamps out-of-range indices and no-ops when already there", (
   assert.deepEqual(ids(reorderPanel(defaultLayout(), "status", 0)), [...DEFAULT_LAYOUT]);
 });
 
+test("reordering available panels preserves missing slots and persists through reset", () => {
+  const storage = fakeStorage();
+  const available: PanelId[] = ["status", "telemetry", "xdr"];
+  const moved = reorderAvailablePanels(defaultLayout(), "telemetry", 0, available);
+  assert.deepEqual(ids(moved), ["telemetry", "txhistory", "panic", "status", "multisig", "xdr"]);
+  saveLayout(moved, storage);
+  assert.deepEqual(ids(loadLayout(storage)), ids(moved));
+  assert.deepEqual(ids(resetLayout()), [...DEFAULT_LAYOUT]);
+  assert.equal(reorderAvailablePanels(moved, "panic", 0, available), moved);
+});
+
 test("movePanel steps a panel one slot and refuses to run off the ends", () => {
   const up = movePanel(defaultLayout(), "txhistory", "up");
   assert.deepEqual(ids(up)[0], "txhistory");
@@ -165,7 +222,159 @@ test("resetLayout restores the default arrangement regardless of current state",
 
 test("loadLayout with no storage returns the default (server render, private mode)", () => {
   assert.deepEqual(ids(loadLayout(null)), [...DEFAULT_LAYOUT]);
-  assert.deepEqual(saveLayout(defaultLayout(), null), undefined);
+  assert.deepEqual(saveLayout(defaultLayout(), null), { ok: false, error: "unavailable" });
+});
+
+test("keyboard move controls use rendered-panel boundaries and reset persisted order", async () => {
+  clearAnnouncements();
+  const div = document.createElement("div");
+  document.body.appendChild(div);
+  root = createRoot(div);
+  const panels: GridPanel[] = [
+    { id: "status", title: "Status panel", content: React.createElement("p", null, "status") },
+    {
+      id: "telemetry",
+      title: "Telemetry panel",
+      content: React.createElement("p", null, "telemetry"),
+    },
+  ];
+  await act(() => {
+    root!.render(React.createElement(DashboardGrid, { panels }));
+  });
+  await act(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  });
+
+  const statusMoveUp = div.querySelector(
+    'button[aria-label="Move Status panel earlier"]',
+  ) as HTMLButtonElement;
+  const telemetryMoveDown = div.querySelector(
+    'button[aria-label="Move Telemetry panel later"]',
+  ) as HTMLButtonElement;
+  assert.equal(statusMoveUp.disabled, true);
+  assert.equal(telemetryMoveDown.disabled, true);
+
+  const statusMoveDown = div.querySelector(
+    'button[aria-label="Move Status panel later"]',
+  ) as HTMLButtonElement;
+  await act(() => statusMoveDown.click());
+  assert.ok(div.querySelector("section:nth-child(1) h2")?.textContent?.includes("Telemetry panel"));
+  assert.ok(
+    pendingAnnouncements().some((item) => item.message === "Status panel moved to position 2 of 2"),
+  );
+  const stored = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) ?? "{}") as {
+    data: { order: { id: PanelId }[] };
+  };
+  assert.deepEqual(
+    stored.data.order.map((placement) => placement.id),
+    ["telemetry", "txhistory", "panic", "status", "multisig", "xdr"],
+  );
+
+  // Reset is previewed first (#379): the click opens a dialog and leaves the
+  // arrangement untouched until the operator confirms.
+  const resetButton = [...div.querySelectorAll("button")].find(
+    (button) => button.textContent === "Reset Layout",
+  );
+  assert.ok(resetButton);
+  await act(() => resetButton.click());
+  assert.ok(div.querySelector('[role="alertdialog"]'), "the preview dialog opens");
+  const unchanged = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) ?? "{}") as {
+    data: { order: { id: PanelId }[] };
+  };
+  assert.deepEqual(
+    unchanged.data.order.map((placement) => placement.id),
+    ["telemetry", "txhistory", "panic", "status", "multisig", "xdr"],
+    "opening the preview does not reset anything",
+  );
+
+  const confirmReset = [...div.querySelectorAll("button")].find(
+    (button) => button.textContent === "Confirm Reset",
+  ) as HTMLButtonElement;
+  assert.ok(confirmReset);
+  await act(() => confirmReset.click());
+  const resetOrder = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) ?? "{}") as {
+    data: { order: { id: PanelId }[] };
+  };
+  assert.deepEqual(
+    resetOrder.data.order.map((placement) => placement.id),
+    [...DEFAULT_LAYOUT],
+  );
+  assert.equal(div.querySelector('[role="alertdialog"]'), null, "the dialog closes");
+});
+
+test("cancelling the reset preview leaves the current arrangement intact", async () => {
+  clearAnnouncements();
+  localStorage.clear();
+  const div = document.createElement("div");
+  document.body.appendChild(div);
+  root = createRoot(div);
+  const panels: GridPanel[] = [
+    { id: "status", title: "Status panel", content: React.createElement("p", null, "status") },
+    {
+      id: "telemetry",
+      title: "Telemetry panel",
+      content: React.createElement("p", null, "telemetry"),
+    },
+  ];
+  await act(() => {
+    root!.render(React.createElement(DashboardGrid, { panels }));
+  });
+  await act(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  });
+
+  const moveDown = div.querySelector(
+    'button[aria-label="Move Status panel later"]',
+  ) as HTMLButtonElement;
+  await act(() => moveDown.click());
+  const before = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) ?? "{}") as {
+    data: { order: { id: PanelId }[] };
+  };
+
+  const resetButton = [...div.querySelectorAll("button")].find(
+    (button) => button.textContent === "Reset Layout",
+  ) as HTMLButtonElement;
+  await act(() => resetButton.click());
+  assert.ok(div.querySelector('[role="alertdialog"]'), "the preview opens");
+  assert.ok(div.textContent?.includes("Panels moved:"), "the preview names what will move");
+
+  const cancel = [...div.querySelectorAll("button")].find(
+    (button) => button.textContent === "Cancel",
+  ) as HTMLButtonElement;
+  await act(() => cancel.click());
+  assert.equal(div.querySelector('[role="alertdialog"]'), null);
+  const after = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) ?? "{}") as {
+    data: { order: { id: PanelId }[] };
+  };
+  assert.deepEqual(after, before, "cancelling writes nothing");
+  assert.ok(div.querySelector("section:nth-child(1) h2")?.textContent?.includes("Telemetry panel"));
+});
+
+// ── Reset preview (#379) ────────────────────────────────────────────────
+
+test("reset preview names moved, restored, hidden, and collapse changes", () => {
+  const current = setCollapsed(reorderPanel(defaultLayout(), "xdr", 0), "panic", true);
+  const preview = describeResetPreview(current, resetLayout());
+  assert.ok(preview.moved.includes("xdr"));
+  assert.deepEqual(preview.restored, []);
+  assert.deepEqual(preview.hidden, []);
+  assert.deepEqual(preview.collapsed, ["panic"]);
+});
+
+test("reset preview ignores stale entries the grid does not render", () => {
+  // A layout missing panels is impossible after normalizeLayout, but the
+  // comparison itself must not invent moves for ids only one side knows.
+  const current: DashboardLayout = { order: [{ id: "telemetry", collapsed: false }] };
+  const target: DashboardLayout = {
+    order: [
+      { id: "status", collapsed: false },
+      { id: "telemetry", collapsed: false },
+    ],
+  };
+  const preview = describeResetPreview(current, target);
+  assert.deepEqual(preview.restored, ["status"]);
+  assert.deepEqual(preview.moved, []);
+  assert.deepEqual(preview.hidden, []);
 });
 
 // ── Named layouts (#378) ────────────────────────────────────────────────
@@ -280,85 +489,103 @@ test("corrupted named layouts storage degrades to empty list", () => {
 
 test("invalid entries in named layouts storage are dropped", () => {
   const storage = fakeStorage();
-  storage.data.set(NAMED_LAYOUTS_STORAGE_KEY, JSON.stringify([
-    { name: "Valid", layout: { order: [{ id: "status", collapsed: false }] } },
-    { name: "", layout: { order: [{ id: "status", collapsed: false }] } }, // empty name
-    { name: "Also Valid", layout: "not an object" }, // bad layout
-    { name: "Another Valid", layout: { order: [{ id: "telemetry", collapsed: false }] } }, // valid
-    { not: "a layout object" }, // completely wrong shape
-  ]));
+  storage.data.set(
+    NAMED_LAYOUTS_STORAGE_KEY,
+    JSON.stringify([
+      { name: "Valid", layout: { order: [{ id: "status", collapsed: false }] } },
+      { name: "", layout: { order: [{ id: "status", collapsed: false }] } }, // empty name
+      { name: "Also Valid", layout: "not an object" }, // bad layout
+      { name: "Another Valid", layout: { order: [{ id: "telemetry", collapsed: false }] } }, // valid
+      { not: "a layout object" }, // completely wrong shape
+    ]),
+  );
   const loaded = loadNamedLayouts(storage);
   assert.equal(loaded.length, 2);
   assert.equal(loaded[0]?.name, "Valid");
   assert.equal(loaded[1]?.name, "Another Valid");
 });
 
-// ── Reset preview (#379) ────────────────────────────────────────────────
+test("the toolbar saves, switches, and renames a named layout", async () => {
+  clearAnnouncements();
+  localStorage.clear();
+  const div = document.createElement("div");
+  document.body.appendChild(div);
+  root = createRoot(div);
+  const panels: GridPanel[] = [
+    { id: "status", title: "Status panel", content: React.createElement("p", null, "status") },
+    {
+      id: "telemetry",
+      title: "Telemetry panel",
+      content: React.createElement("p", null, "telemetry"),
+    },
+  ];
+  await act(() => {
+    root!.render(React.createElement(DashboardGrid, { panels }));
+  });
+  await act(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  });
 
-test("resetLayout produces the default arrangement for preview", () => {
-  const preview = resetLayout();
-  assert.deepEqual(ids(preview), [...DEFAULT_LAYOUT]);
-  assert.ok(preview.order.every((entry) => entry.collapsed === false));
-});
+  // Save the current (default) arrangement under a name.
+  const saveButton = [...div.querySelectorAll("button")].find(
+    (button) => button.textContent === "Save Layout",
+  );
+  assert.ok(saveButton);
+  await act(() => saveButton.click());
+  const input = div.querySelector('input[aria-label="Layout name"]') as HTMLInputElement;
+  assert.ok(input, "the save dialog opens");
+  const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+  await act(() => {
+    setValue?.call(input, "Wall monitor");
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+  });
+  const confirmSave = [...div.querySelectorAll("button")].find(
+    (button) => button.textContent === "Save",
+  ) as HTMLButtonElement;
+  await act(() => confirmSave.click());
 
-test("reset preview can detect moved panels", () => {
-  const current = reorderPanel(defaultLayout(), "xdr", 0);
-  const preview = resetLayout();
-  const currentOrder = current.order.map((p) => p.id);
-  const defaultOrder = preview.order.map((p) => p.id);
-  const moved = defaultOrder.filter((id, index) => currentOrder.indexOf(id) !== index);
-  assert.ok(moved.includes("xdr"));
-  assert.ok(moved.includes("status"));
-});
+  const saved = JSON.parse(
+    localStorage.getItem(NAMED_LAYOUTS_STORAGE_KEY) ?? "[]",
+  ) as NamedLayout[];
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0]?.name, "Wall monitor");
+  assert.ok(div.querySelector("#layout-select"), "the saved layout appears in the dropdown");
+  assert.ok(pendingAnnouncements().some((item) => item.message === 'Layout "Wall monitor" saved'));
 
-test("reset preview can detect restored panels", () => {
-  // A layout missing some panels
-  const current: DashboardLayout = {
-    order: [
-      { id: "status", collapsed: false },
-      { id: "panic", collapsed: false },
-    ],
-  };
-  const preview = resetLayout();
-  const currentOrder = current.order.map((p) => p.id);
-  const defaultOrder = preview.order.map((p) => p.id);
-  const restored = defaultOrder.filter((id) => !currentOrder.includes(id));
-  assert.ok(restored.includes("telemetry"));
-  assert.ok(restored.includes("multisig"));
-  assert.ok(restored.includes("xdr"));
-});
+  // Switching layouts goes through the dropdown and persists the choice.
+  const select = div.querySelector("#layout-select") as HTMLSelectElement;
+  await act(() => {
+    select.value = "Wall monitor";
+    select.dispatchEvent(new window.Event("change", { bubbles: true }));
+  });
+  assert.ok(pendingAnnouncements().some((item) => item.message === 'Layout "Wall monitor" loaded'));
 
-test("reset preview can detect hidden panels", () => {
-  // A layout with extra panels (stale entries that normalizeLayout would drop)
-  const current: DashboardLayout = {
-    order: [
-      { id: "status", collapsed: false },
-      { id: "txhistory", collapsed: false },
-      { id: "panic", collapsed: false },
-      { id: "telemetry", collapsed: false },
-      { id: "multisig", collapsed: false },
-      { id: "xdr", collapsed: false },
-      { id: "status", collapsed: false }, // Duplicate - will be dropped by normalizeLayout
-    ],
-  };
-  const preview = resetLayout();
-  const currentOrder = current.order.map((p) => p.id);
-  const defaultOrder = preview.order.map((p) => p.id);
-  // After normalizeLayout, duplicates are removed, so hidden panels would be those
-  // that exist in the current (pre-normalized) but not in the default
-  const hidden = currentOrder.filter((id, index) => currentOrder.indexOf(id) !== index);
-  assert.ok(hidden.includes("status"));
-});
+  // The active layout can be renamed in place.
+  const renameButton = [...div.querySelectorAll("button")].find(
+    (button) => button.textContent === "Rename Layout",
+  );
+  assert.ok(renameButton);
+  await act(() => renameButton.click());
+  const renameInput = div.querySelector('input[aria-label="Layout name"]') as HTMLInputElement;
+  await act(() => {
+    setValue?.call(renameInput, "NOC wall");
+    renameInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+  });
+  const confirmRename = [...div.querySelectorAll("button")].find(
+    (button) => button.textContent === "Rename",
+  ) as HTMLButtonElement;
+  await act(() => confirmRename.click());
+  const renamed = JSON.parse(
+    localStorage.getItem(NAMED_LAYOUTS_STORAGE_KEY) ?? "[]",
+  ) as NamedLayout[];
+  assert.equal(renamed[0]?.name, "NOC wall");
 
-test("reset preview detects collapse state changes", () => {
-  const current = setCollapsed(defaultLayout(), "panic", true);
-  const preview = resetLayout();
-  const currentCollapsed = new Set(current.order.filter((p) => p.collapsed).map((p) => p.id));
-  const defaultCollapsed = new Set(preview.order.filter((p) => p.collapsed).map((p) => p.id));
-  const defaultOrder = preview.order.map((p) => p.id);
-  const collapseChanges = current.order
-    .filter((p) => defaultOrder.includes(p.id))
-    .filter((p) => currentCollapsed.has(p.id) !== defaultCollapsed.has(p.id));
-  assert.equal(collapseChanges.length, 1);
-  assert.equal(collapseChanges[0]?.id, "panic");
+  // The delete action clears the active selection.
+  const deleteButton = [...div.querySelectorAll("button")].find(
+    (button) => button.textContent === "Delete Layout",
+  );
+  assert.ok(deleteButton);
+  await act(() => deleteButton.click());
+  assert.equal(loadNamedLayouts().length, 0);
+  assert.equal(div.querySelector("#layout-select"), null);
 });

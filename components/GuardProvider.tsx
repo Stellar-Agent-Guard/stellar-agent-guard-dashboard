@@ -516,8 +516,8 @@ export function GuardProvider({
   }, [scope, demo]);
 
   // Pick up an already-authorized wallet without prompting for access again.
-  // Only for wallets whose reconnect is silent: asking a web popup wallet to
-  // "just reconnect" would open a window on page load.
+  // The network is read rather than assumed, so a wallet on the wrong network
+  // cannot quietly enable writes after client-side navigation.
   useEffect(() => {
     if (demo) return;
     const preferred = loadPreferredProvider();
@@ -525,9 +525,30 @@ export function GuardProvider({
     let cancelled = false;
     void (async () => {
       try {
-        const address = await currentAddress();
+        const id = preferred ?? "freighter";
+        const connector = createWalletConnector(id, scope);
+        const address = await connector.getPublicKey();
         if (!address || cancelled) return;
-        setWallet({ address, networkPassphrase: NETWORK.passphrase, network: NETWORK.name });
+        const network = await connector.getNetwork();
+        if (cancelled) return;
+        const mismatch = detectNetworkMismatch(network.passphrase, NETWORK.passphrase, {
+          targetNetwork: NETWORK.name,
+          walletNetwork: network.name,
+        });
+        if (mismatch) {
+          connectorRef.current = null;
+          setWallet(null);
+          setNetworkMismatch(mismatch);
+          return;
+        }
+        connectorRef.current = connector;
+        setProviderId(id);
+        setNetworkMismatch(null);
+        setWallet({
+          address,
+          networkPassphrase: network.passphrase,
+          network: network.name,
+        });
       } catch {
         // A wallet that is not installed is a normal state, not an error to show.
       }
@@ -535,7 +556,7 @@ export function GuardProvider({
     return () => {
       cancelled = true;
     };
-  }, [demo]);
+  }, [demo, scope]);
 
   const connect = useCallback(
     async (preferred?: WalletProviderId) => {
@@ -1032,6 +1053,17 @@ export function GuardProvider({
     enabled: wallet !== null,
     onExpire: handleIdleExpire,
   });
+  const idleWarningRef = useRef<HTMLDivElement>(null);
+  const stayConnectedRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (idleState.phase === "warning" && wallet) idleWarningRef.current?.focus();
+  }, [idleState.phase, wallet]);
+  useEffect(() => {
+    const seconds = idleState.secondsLeft;
+    if (idleState.phase === "warning" && wallet && (seconds <= 10 || seconds % 10 === 0)) {
+      announce(`Session expires in ${seconds} seconds`);
+    }
+  }, [idleState.phase, idleState.secondsLeft, wallet]);
   const setIdleTimeout = useCallback((valueMs: number) => {
     saveIdleTimeoutMs(valueMs);
     setIdleTimeoutMs(valueMs);
@@ -1229,7 +1261,14 @@ export function GuardProvider({
               aria-modal="true"
               aria-labelledby="session-lock-title"
               aria-describedby="session-lock-body"
+              ref={idleWarningRef}
               tabIndex={-1}
+              onKeyDown={(event) => {
+                if (event.key === "Tab") {
+                  event.preventDefault();
+                  stayConnectedRef.current?.focus();
+                }
+              }}
             >
               <strong id="session-lock-title">
                 Session expiring due to inactivity. Click to stay connected.
@@ -1240,7 +1279,9 @@ export function GuardProvider({
                 signed again.
               </p>
               <div className="row">
-                <button onClick={stayConnected}>Stay connected</button>
+                <button ref={stayConnectedRef} onClick={stayConnected}>
+                  Stay connected
+                </button>
               </div>
             </div>
           </div>

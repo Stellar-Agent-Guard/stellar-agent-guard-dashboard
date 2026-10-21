@@ -17,6 +17,7 @@ import { withBackoff, RetryableError } from "./retry.ts";
 import {
   Account,
   Address,
+  FeeBumpTransaction,
   Operation,
   SorobanDataBuilder,
   Transaction,
@@ -31,6 +32,15 @@ import { stringifyError } from "./chain.ts";
 import { announce } from "./useAnnounce.ts";
 import { recordTx } from "./txHistory.ts";
 import { hardwareGuide } from "./hardwareGuide.ts";
+import {
+  PHASE_LABEL,
+  interruptionFromSignerFailure,
+  recordWriteInterruption,
+  recoveryGuidance,
+  revalidateWallet,
+  type WriteInterruption,
+  type WritePhase,
+} from "./writeReview.ts";
 
 /** Inclusion fee floor, in stroops, for a single-operation transaction. */
 // `FeePreset` is imported as a type on purpose: `scripts/prove-phase3.ts` runs
@@ -51,6 +61,15 @@ export interface WalletSigner {
   signTransaction(transactionXdr: string): Promise<string>;
   /** Sign a Soroban authorization entry, returning the signed entry's XDR. */
   signAuthEntry(entryXdr: string): Promise<string>;
+  /**
+   * Read the wallet's *live* address, or null when the provider is gone.
+   *
+   * Optional because headless keypair signers used by scripts and tests cannot
+   * change account underneath a review. Browser signers implement it, and every
+   * write boundary re-reads it so a review can only ever be signed by the
+   * account it was built for (issue #340).
+   */
+  currentAddress?: () => Promise<string | null>;
 }
 
 export type InvokeResult =
@@ -74,9 +93,15 @@ export type InvokeResult =
        * is no transaction hash — that is the whole point of enforcing pre-flight.
        */
       kind: "refused";
-      stage: "discovery" | "enforcement" | "submission";
+      stage: "discovery" | "enforcement" | "submission" | "wallet";
       detail: string;
       diagnosticEvents: unknown[];
+      /**
+       * Set when the write stopped because the wallet disconnected or its
+       * account changed mid-flight (issues #340, #341). A distinct, recoverable
+       * outcome: the enclosing review must be repeated, never resumed.
+       */
+      writeInterruption?: WriteInterruption;
     }
   | {
       /** Broadcast and rejected by the network after inclusion. */
@@ -352,6 +377,7 @@ function safeJson(value: unknown): string {
  * own `fn_call`/`error`/`log` entries are what make a trap diagnosable.
  */
 export function diagnosticEventsOf(response: unknown): unknown[] {
+  if (!response || typeof response !== "object") return [];
   const candidate = response as {
     diagnosticEventsXdr?: unknown;
     events?: unknown;
@@ -416,6 +442,46 @@ async function pollForInclusion(
       detail: `transaction timed out after ${attempts} attempts`,
       diagnosticEvents: [],
     };
+  }
+}
+
+/**
+ * The refusable result for a wallet interruption.
+ *
+ * Publishes the phase-specific guidance once, for the wallet panel, and returns
+ * the same copy in `detail` so every existing caller can render it without
+ * knowing about interruptions. Nothing is recorded as a transaction: an
+ * interrupted write has no hash this console can claim.
+ */
+function interruptedResult(interruption: WriteInterruption): InvokeResult {
+  const guidance = recoveryGuidance(interruption);
+  recordWriteInterruption(interruption);
+  return {
+    kind: "refused",
+    stage: "wallet",
+    detail: `${guidance.headline} ${guidance.detail} ${guidance.nextStep}`,
+    diagnosticEvents: [],
+    writeInterruption: interruption,
+  };
+}
+
+/**
+ * Re-check the wallet binding at a write boundary, returning a result instead
+ * of throwing when the wallet moved. `null` means the write may continue.
+ */
+async function boundary(signer: WalletSigner, phase: WritePhase): Promise<InvokeResult | null> {
+  try {
+    await revalidateWallet({
+      boundAddress: signer.address,
+      phase,
+      readAddress: signer.currentAddress,
+    });
+    return null;
+  } catch (error) {
+    const interruption = interruptionFromSignerFailure(error, phase);
+    if (!interruption) throw error;
+    announce(`Wallet interrupted during ${PHASE_LABEL[phase]} — nothing was resubmitted`);
+    return interruptedResult(interruption.interruption);
   }
 }
 
@@ -532,8 +598,20 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     }
     // The wallet produces the signature over the exact preimage the host will
     // re-derive, including the credential kind and the entry's expiration ledger.
+    // Before asking for it, the live account is re-read: a wallet that switched
+    // administrators since the simulation must not sign this review (issue #340).
+    const beforeAuth = await boundary(signer, "authorization");
+    if (beforeAuth) return beforeAuth;
     promptWallet();
-    const signedEntryXdr = await signer.signAuthEntry(entry.toXDR("base64"));
+    let signedEntryXdr: string;
+    try {
+      signedEntryXdr = await signer.signAuthEntry(entry.toXDR("base64"));
+    } catch (error) {
+      const interruption = interruptionFromSignerFailure(error, "authorization");
+      if (!interruption) throw error;
+      announce("Wallet interrupted during authorization signing — nothing was resubmitted");
+      return interruptedResult(interruption.interruption);
+    }
     signed.push(xdr.SorobanAuthorizationEntry.fromXDR(signedEntryXdr, "base64"));
   }
 
@@ -606,8 +684,22 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     };
   }
 
+  // The last chance to notice a wallet that moved between the authorization
+  // signatures and the envelope signature: the envelope is what commits the
+  // source account, so signing it for a different administrator is precisely
+  // the silent source switch this check exists to prevent.
+  const beforeEnvelope = await boundary(signer, "envelope");
+  if (beforeEnvelope) return beforeEnvelope;
   promptWallet();
-  const signedEnvelope = await signer.signTransaction(assembled.transaction.toXDR());
+  let signedEnvelope: string;
+  try {
+    signedEnvelope = await signer.signTransaction(assembled.transaction.toXDR());
+  } catch (error) {
+    const interruption = interruptionFromSignerFailure(error, "envelope");
+    if (!interruption) throw error;
+    announce("Wallet interrupted during transaction signing — nothing was resubmitted");
+    return interruptedResult(interruption.interruption);
+  }
 
   if (maxTime > 0 && detectExpiration(Math.floor(Date.now() / 1000), maxTime)) {
     return {
@@ -621,6 +713,12 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   // The envelope's fee field carries inclusion fee + resource fee — exactly
   // what the network will charge for this transaction.
   const feeStroops = transaction.fee;
+
+  // Broadcast is the last boundary: a provider that vanished here may have
+  // been the only witness to a submission, so the outcome is reported as
+  // "verify before retrying" rather than as a failure (issue #341).
+  const beforeSend = await boundary(signer, "submission");
+  if (beforeSend) return beforeSend;
 
   let sent: rpc.Api.SendTransactionResponse;
   try {
@@ -656,7 +754,7 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     };
   }
 
-  announce("Transaction submitted to network");
+  announce(`Transaction ${request.fn} submitted to network for guard ${request.contract}`);
 
   const included = await pollForInclusion(
     server,
@@ -697,29 +795,41 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
  */
 export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeResult> {
   const result = await runInvocation(request);
+  const context = `for guard ${request.contract}`;
   if (result.kind === "exported") {
-    announce("Transaction XDR exported for offline signing");
+    announce(`Transaction XDR exported for offline signing ${context}`);
+  } else if (result.kind === "refused" && result.writeInterruption) {
+    // The provider went away or the account changed mid-write. The guidance is
+    // phase-specific and already on screen; the announcement says which phase,
+    // and deliberately does not claim the write failed — at submission time it
+    // may have landed.
+    const guidance = recoveryGuidance(result.writeInterruption);
+    announce(`${guidance.headline} ${guidance.nextStep}`, "assertive");
   } else if (result.kind === "refused") {
-    announce("Transaction refused — nothing was broadcast");
+    announce(`Transaction refused — nothing was broadcast ${context}`, "assertive");
   } else if (result.kind === "failed") {
     recordTx({
       hash: result.hash,
       operation: request.fn,
       status: "failed",
       feeStroops: result.feeStroops ?? null,
+      networkName: NETWORK.name,
+      networkPassphrase: request.passphrase ?? NETWORK.passphrase,
     });
-    announce("Transaction failed on chain");
+    announce(`Transaction failed on chain ${context}`, "assertive");
   } else if (result.kind === "submitted") {
     recordTx({
       hash: result.hash,
       operation: request.fn,
       status: "confirmed",
       feeStroops: result.feeStroops ?? null,
+      networkName: NETWORK.name,
+      networkPassphrase: request.passphrase ?? NETWORK.passphrase,
     });
     announce(
       result.ledger !== null && result.status === rpc.Api.GetTransactionStatus.SUCCESS
-        ? `Transaction confirmed on ledger ${result.ledger}`
-        : "Transaction confirmed on the network",
+        ? `Transaction confirmed on ledger ${result.ledger} ${context}`
+        : `Transaction confirmed on the network ${context}`,
     );
     // Only the transaction is announced here, never what the operator meant by
     // it. A freeze's *effect* is claimed by whoever can verify it: the panic
@@ -771,4 +881,107 @@ export function createTransactionEnvelope(
 
 export function detectExpiration(currentTime: number, maxTime: number) {
   return currentTime >= maxTime;
+}
+
+export interface SignedEnvelopePreflight {
+  checkedAt: string;
+  sequence: {
+    status: "current" | "stale" | "ahead" | "unknown";
+    detail: string;
+  };
+  expiration: {
+    status: "active" | "expired" | "not_yet_valid" | "not_bounded" | "unknown";
+    detail: string;
+  };
+}
+
+/** Compare an imported envelope with fresh chain observations without changing it. */
+export function evaluateSignedEnvelopePreflight(params: {
+  sequence: string;
+  timeBounds?: { minTime: string; maxTime: string };
+  accountSequence?: string;
+  ledgerCloseTime?: string | number;
+  checkedAt?: string;
+}): SignedEnvelopePreflight {
+  const sequence = (() => {
+    if (params.accountSequence === undefined) {
+      return { status: "unknown" as const, detail: "Account sequence could not be read." };
+    }
+    const expected = BigInt(params.accountSequence) + 1n;
+    const envelopeSequence = BigInt(params.sequence);
+    if (envelopeSequence === expected) {
+      return { status: "current" as const, detail: `Sequence ${params.sequence} is next.` };
+    }
+    return envelopeSequence < expected
+      ? {
+          status: "stale" as const,
+          detail: `Envelope sequence ${params.sequence} is behind the next account sequence ${expected}.`,
+        }
+      : {
+          status: "ahead" as const,
+          detail: `Envelope sequence ${params.sequence} is ahead of the next account sequence ${expected}.`,
+        };
+  })();
+
+  const expiration = (() => {
+    if (!params.timeBounds || params.timeBounds.maxTime === "0") {
+      return { status: "not_bounded" as const, detail: "Envelope has no maximum time bound." };
+    }
+    if (params.ledgerCloseTime === undefined) {
+      return { status: "unknown" as const, detail: "Latest ledger close time could not be read." };
+    }
+    const ledgerCloseTime = Number(params.ledgerCloseTime);
+    const minTime = Number(params.timeBounds.minTime);
+    const maxTime = Number(params.timeBounds.maxTime);
+    if (!Number.isFinite(ledgerCloseTime) || !Number.isFinite(maxTime)) {
+      return {
+        status: "unknown" as const,
+        detail: "Envelope or ledger time bounds are unavailable.",
+      };
+    }
+    if (ledgerCloseTime >= maxTime) {
+      return {
+        status: "expired" as const,
+        detail: "Latest ledger close time is at or past the envelope expiration.",
+      };
+    }
+    if (minTime > 0 && ledgerCloseTime < minTime) {
+      return {
+        status: "not_yet_valid" as const,
+        detail: "Latest ledger close time is before the envelope start time.",
+      };
+    }
+    return {
+      status: "active" as const,
+      detail: "Envelope time bounds include the latest ledger close time.",
+    };
+  })();
+
+  return {
+    checkedAt: params.checkedAt ?? new Date().toISOString(),
+    sequence,
+    expiration,
+  };
+}
+
+/** Read the account sequence and latest ledger time used by the advisory preflight. */
+export async function preflightSignedEnvelope(
+  server: rpc.Server,
+  envelope: Transaction | FeeBumpTransaction,
+): Promise<SignedEnvelopePreflight> {
+  const transaction = envelope instanceof FeeBumpTransaction ? envelope.innerTransaction : envelope;
+  const [accountResult, ledgerResult] = await Promise.allSettled([
+    server.getAccount(transaction.source),
+    server.getLatestLedger(),
+  ]);
+  return evaluateSignedEnvelopePreflight({
+    sequence: transaction.sequence,
+    ...(transaction.timeBounds === undefined ? {} : { timeBounds: transaction.timeBounds }),
+    ...(accountResult.status === "fulfilled"
+      ? { accountSequence: accountResult.value.sequenceNumber() }
+      : {}),
+    ...(ledgerResult.status === "fulfilled"
+      ? { ledgerCloseTime: ledgerResult.value.closeTime }
+      : {}),
+  });
 }

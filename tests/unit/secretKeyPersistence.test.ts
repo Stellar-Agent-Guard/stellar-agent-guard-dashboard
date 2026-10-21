@@ -13,7 +13,6 @@ import {
   previewAddressBookImport,
   applyAddressBookImport,
   exportAddressBook,
-  type Contact,
   type StorageLike,
 } from "../../lib/guard/addressBook.ts";
 import {
@@ -44,7 +43,10 @@ const VALID_GUARD = "CAPADGEK457RHKN4RYVUMDJTFHDSG7R5HREQONKLYK7MFKC5WFENPP44";
 
 function memoryStorage(
   initial: Record<string, string> = {},
-): StorageLike & InstanceStorageLike & LayoutStorageLike & TxHistoryStorageLike & { dump(): Record<string, string> } {
+): StorageLike &
+  InstanceStorageLike &
+  LayoutStorageLike &
+  TxHistoryStorageLike & { dump(): Record<string, string> } {
   const data = new Map(Object.entries(initial));
   return {
     getItem: (key) => (data.has(key) ? (data.get(key) as string) : null),
@@ -105,7 +107,10 @@ describe("address book: secret-like input never reaches storage", () => {
 
   test("upsertContact rejects secret key as address", () => {
     const storage = memoryStorage();
-    assert.throws(() => upsertContact({ address: SECRET, label: "Test" }, storage), /valid Stellar/);
+    assert.throws(
+      () => upsertContact({ address: SECRET, label: "Test" }, storage),
+      /valid Stellar/,
+    );
     assert.equal(loadAddressBook(storage).length, 0);
   });
 
@@ -133,9 +138,7 @@ describe("address book: secret-like input never reaches storage", () => {
       schema: "stellar-agent-guard/address-book",
       version: 1,
       exportedAt: "2026-10-20T00:00:00.000Z",
-      contacts: [
-        { address: PUBLIC, label: "Good" },
-      ],
+      contacts: [{ address: PUBLIC, label: "Good" }],
     });
     const preview = previewAddressBookImport(file, loadAddressBook(storage));
     applyAddressBookImport(preview, "replace", storage);
@@ -143,7 +146,9 @@ describe("address book: secret-like input never reaches storage", () => {
     const storedValue = dump["stellar-agent-guard-dashboard.addressBook.v1"];
     assert.ok(storedValue);
     assert.equal(storedValue.includes(SECRET), false);
-    const contacts = JSON.parse(storedValue) as Contact[];
+    // Read the book back through the store: the raw payload is a versioned
+    // envelope, and the store is the interface the app actually reads.
+    const contacts = loadAddressBook(storage);
     assert.equal(contacts.length, 1);
     assert.ok(contacts[0]);
     assert.equal(contacts[0]!.address, PUBLIC);
@@ -165,13 +170,34 @@ describe("registry: secret-like input validation at addGuard level", () => {
   test("loadInstances never returns secret keys from corrupted storage", () => {
     const storage = memoryStorage();
     // Manually inject a secret key into storage (simulating corruption)
-    storage.setItem("stellar-agent-guard-dashboard.instances.v2.testnet", JSON.stringify([
-      { guard: SECRET, label: "Bad", network: "testnet", addedAt: "2026-01-01T00:00:00.000Z", provenance: "test" },
-      { guard: VALID_GUARD, label: "Good", network: "testnet", addedAt: "2026-01-01T00:00:00.000Z", provenance: "test" },
-    ]));
+    storage.setItem(
+      "stellar-agent-guard-dashboard.instances.v2.testnet",
+      JSON.stringify([
+        {
+          guard: SECRET,
+          label: "Bad",
+          network: "testnet",
+          addedAt: "2026-01-01T00:00:00.000Z",
+          provenance: "test",
+        },
+        {
+          guard: VALID_GUARD,
+          label: "Good",
+          network: "testnet",
+          addedAt: "2026-01-01T00:00:00.000Z",
+          provenance: "test",
+        },
+      ]),
+    );
     const instances = loadInstances({ storage });
-    assert.equal(instances.some((i) => i.guard === SECRET), false);
-    assert.equal(instances.some((i) => i.guard === VALID_GUARD), true);
+    assert.equal(
+      instances.some((i) => i.guard === SECRET),
+      false,
+    );
+    assert.equal(
+      instances.some((i) => i.guard === VALID_GUARD),
+      true,
+    );
   });
 
   test("rememberInstance stores whatever address is given (validation at addGuard level)", () => {
@@ -180,7 +206,10 @@ describe("registry: secret-like input validation at addGuard level", () => {
     // The validation happens in addGuard which calls verifyGuardIsLive
     rememberInstance(VALID_GUARD, "Test", { storage });
     const instances = loadInstances({ storage });
-    assert.equal(instances.some((i) => i.guard === VALID_GUARD), true);
+    assert.equal(
+      instances.some((i) => i.guard === VALID_GUARD),
+      true,
+    );
   });
 });
 
@@ -202,7 +231,10 @@ describe("layout store: secret-like input never reaches storage", () => {
     };
     saveLayout(maliciousLayout as DashboardLayout, storage);
     const loaded = loadLayout(storage);
-    assert.equal(loaded.order.some((p) => p.id === SECRET), false);
+    assert.equal(
+      loaded.order.some((p) => p.id === SECRET),
+      false,
+    );
   });
 
   test("saveNamedLayout rejects secret key in layout name (too long)", () => {
@@ -228,7 +260,10 @@ describe("layout store: secret-like input never reaches storage", () => {
     const result = saveNamedLayout("My Layout", layout, storage);
     assert.equal(result.ok, true);
     const layouts = loadNamedLayouts(storage);
-    assert.equal(layouts[0]?.layout.order.some((p) => p.id === SECRET), false);
+    assert.equal(
+      layouts[0]?.layout.order.some((p) => p.id === SECRET),
+      false,
+    );
   });
 });
 
@@ -245,7 +280,10 @@ describe("end-to-end: secret key paste flow", () => {
     const sanitized = sanitizeAddressInput(SECRET);
     assert.equal(sanitized, "");
     // saveContact with empty address should throw
-    assert.throws(() => saveContact({ address: sanitized, label: "Test" }, storage), /valid Stellar/);
+    assert.throws(
+      () => saveContact({ address: sanitized, label: "Test" }, storage),
+      /valid Stellar/,
+    );
     assert.equal(loadAddressBook(storage).length, 0);
   });
 
@@ -263,7 +301,10 @@ describe("end-to-end: secret key paste flow", () => {
     const mixed = `${PUBLIC}\n${SECRET}`;
     const sanitized = sanitizeAddressInput(mixed);
     assert.equal(sanitized, "");
-    assert.throws(() => saveContact({ address: sanitized, label: "Test" }, storage), /valid Stellar/);
+    assert.throws(
+      () => saveContact({ address: sanitized, label: "Test" }, storage),
+      /valid Stellar/,
+    );
     assert.equal(loadAddressBook(storage).length, 0);
   });
 });
