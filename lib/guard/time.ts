@@ -110,7 +110,8 @@ export function formatEventTimestamp(
   // `longOffset` yields "GMT+02:00", or bare "GMT" at zero offset. Rendered
   // as "UTC…" because that is the frame of reference operators compare in.
   const offsetName = part("timeZoneName");
-  const zoneLabel = offsetName === "GMT" || offsetName === "UTC" ? "UTC+00:00" : offsetName.replace(/^GMT/, "UTC");
+  const zoneLabel =
+    offsetName === "GMT" || offsetName === "UTC" ? "UTC+00:00" : offsetName.replace(/^GMT/, "UTC");
 
   return { utc, local, zoneLabel };
 }

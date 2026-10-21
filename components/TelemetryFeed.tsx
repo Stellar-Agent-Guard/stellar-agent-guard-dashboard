@@ -706,7 +706,8 @@ const TelemetryRow = memo(function TelemetryRow({
             title={`${timestamp.local} ${timestamp.zoneLabel} · ${timestamp.utc} UTC`}
           >
             {timestamp.local} {timestamp.zoneLabel}
-            <br />{timestamp.utc} UTC
+            <br />
+            {timestamp.utc} UTC
           </div>
         )}
         {event.ledger ? (
