@@ -1049,6 +1049,19 @@ export function OutcomeBlock({
       </div>
     );
   }
+  if (result.kind === "ambiguous") {
+    return (
+      <div className="error">
+        <span className="t">
+          Broadcast with no answer — the policy may or may not have changed: {starLink(result.hash)}
+        </span>
+        <span className="mono tiny">
+          {result.detail} — re-read the contract, or look this hash up on the explorer, before
+          sending anything again.
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="error">
       <span className="t">Broadcast but rejected on chain — {starLink(result.hash)}</span>
