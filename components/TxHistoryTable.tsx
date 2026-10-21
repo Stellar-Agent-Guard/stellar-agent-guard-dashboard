@@ -201,44 +201,50 @@ export function TxHistoryTable() {
         </p>
       ) : (
         <>
-          <div className="scrolly" style={{ marginTop: 14 }}>
-            <table className="events">
+          <div className="scrolly table-stack" style={{ marginTop: 14 }}>
+            <table className="events stack">
               <thead>
                 <tr>
-                  <th>Timestamp</th>
-                  <th>Operation</th>
-                  <th>Status</th>
-                  <th>Network</th>
-                  <th>Tx Hash</th>
-                  <th>Gas Fee</th>
-                  <th>Chain verification</th>
+                  <th scope="col">Timestamp</th>
+                  <th scope="col">Operation</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Network</th>
+                  <th scope="col">Tx Hash</th>
+                  <th scope="col">Gas Fee</th>
+                  <th scope="col">Chain verification</th>
                 </tr>
               </thead>
               <tbody>
                 {paged.rows.map((entry) => (
                   <tr key={entry.hash}>
-                    <td className="mono tiny" title={entry.recordedAt}>
+                    <td className="mono tiny" data-label="Timestamp" title={entry.recordedAt}>
                       {formatTimestamp(entry.recordedAt)}
                     </td>
-                    <td className="mono tiny">{entry.operation}</td>
-                    <td>
+                    <td className="mono tiny" data-label="Operation">
+                      {entry.operation}
+                    </td>
+                    <td data-label="Status">
                       {entry.status === "confirmed" ? (
                         <span className="pill ok">Confirmed</span>
                       ) : (
                         <span className="pill danger">Failed</span>
                       )}
                     </td>
-                    <td className="tiny" title={entry.networkPassphrase ?? "Network not recorded"}>
+                    <td
+                      className="tiny"
+                      data-label="Network"
+                      title={entry.networkPassphrase ?? "Network not recorded"}
+                    >
                       <div>{entry.networkName ?? "Unknown network"}</div>
                       <div className="muted">{entry.networkPassphrase ?? "Legacy history"}</div>
                     </td>
-                    <td>
+                    <td data-label="Tx Hash">
                       <TxHashCell hash={entry.hash} />
                     </td>
-                    <td className="mono tiny">
+                    <td className="mono tiny" data-label="Gas Fee">
                       {entry.feeStroops !== null ? `${entry.feeStroops} stroops` : "—"}
                     </td>
-                    <td className="tiny">
+                    <td className="tiny" data-label="Chain verification">
                       {txHistoryMatchesNetwork(entry, NETWORK.passphrase) ? (
                         <button
                           type="button"

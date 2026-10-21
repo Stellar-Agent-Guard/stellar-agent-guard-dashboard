@@ -32,6 +32,15 @@ import { stringifyError } from "./chain.ts";
 import { announce } from "./useAnnounce.ts";
 import { recordTx } from "./txHistory.ts";
 import { hardwareGuide } from "./hardwareGuide.ts";
+import {
+  PHASE_LABEL,
+  interruptionFromSignerFailure,
+  recordWriteInterruption,
+  recoveryGuidance,
+  revalidateWallet,
+  type WriteInterruption,
+  type WritePhase,
+} from "./writeReview.ts";
 
 /** Inclusion fee floor, in stroops, for a single-operation transaction. */
 // `FeePreset` is imported as a type on purpose: `scripts/prove-phase3.ts` runs
@@ -52,6 +61,15 @@ export interface WalletSigner {
   signTransaction(transactionXdr: string): Promise<string>;
   /** Sign a Soroban authorization entry, returning the signed entry's XDR. */
   signAuthEntry(entryXdr: string): Promise<string>;
+  /**
+   * Read the wallet's *live* address, or null when the provider is gone.
+   *
+   * Optional because headless keypair signers used by scripts and tests cannot
+   * change account underneath a review. Browser signers implement it, and every
+   * write boundary re-reads it so a review can only ever be signed by the
+   * account it was built for (issue #340).
+   */
+  currentAddress?: () => Promise<string | null>;
 }
 
 export type InvokeResult =
@@ -75,9 +93,15 @@ export type InvokeResult =
        * is no transaction hash — that is the whole point of enforcing pre-flight.
        */
       kind: "refused";
-      stage: "discovery" | "enforcement" | "submission";
+      stage: "discovery" | "enforcement" | "submission" | "wallet";
       detail: string;
       diagnosticEvents: unknown[];
+      /**
+       * Set when the write stopped because the wallet disconnected or its
+       * account changed mid-flight (issues #340, #341). A distinct, recoverable
+       * outcome: the enclosing review must be repeated, never resumed.
+       */
+      writeInterruption?: WriteInterruption;
     }
   | {
       /** Broadcast and rejected by the network after inclusion. */
@@ -422,6 +446,46 @@ async function pollForInclusion(
 }
 
 /**
+ * The refusable result for a wallet interruption.
+ *
+ * Publishes the phase-specific guidance once, for the wallet panel, and returns
+ * the same copy in `detail` so every existing caller can render it without
+ * knowing about interruptions. Nothing is recorded as a transaction: an
+ * interrupted write has no hash this console can claim.
+ */
+function interruptedResult(interruption: WriteInterruption): InvokeResult {
+  const guidance = recoveryGuidance(interruption);
+  recordWriteInterruption(interruption);
+  return {
+    kind: "refused",
+    stage: "wallet",
+    detail: `${guidance.headline} ${guidance.detail} ${guidance.nextStep}`,
+    diagnosticEvents: [],
+    writeInterruption: interruption,
+  };
+}
+
+/**
+ * Re-check the wallet binding at a write boundary, returning a result instead
+ * of throwing when the wallet moved. `null` means the write may continue.
+ */
+async function boundary(signer: WalletSigner, phase: WritePhase): Promise<InvokeResult | null> {
+  try {
+    await revalidateWallet({
+      boundAddress: signer.address,
+      phase,
+      readAddress: signer.currentAddress,
+    });
+    return null;
+  } catch (error) {
+    const interruption = interruptionFromSignerFailure(error, phase);
+    if (!interruption) throw error;
+    announce(`Wallet interrupted during ${PHASE_LABEL[phase]} — nothing was resubmitted`);
+    return interruptedResult(interruption.interruption);
+  }
+}
+
+/**
  * Run a wallet-authorized contract call, submitting only on a passing enforced
  * simulation.
  */
@@ -534,8 +598,20 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     }
     // The wallet produces the signature over the exact preimage the host will
     // re-derive, including the credential kind and the entry's expiration ledger.
+    // Before asking for it, the live account is re-read: a wallet that switched
+    // administrators since the simulation must not sign this review (issue #340).
+    const beforeAuth = await boundary(signer, "authorization");
+    if (beforeAuth) return beforeAuth;
     promptWallet();
-    const signedEntryXdr = await signer.signAuthEntry(entry.toXDR("base64"));
+    let signedEntryXdr: string;
+    try {
+      signedEntryXdr = await signer.signAuthEntry(entry.toXDR("base64"));
+    } catch (error) {
+      const interruption = interruptionFromSignerFailure(error, "authorization");
+      if (!interruption) throw error;
+      announce("Wallet interrupted during authorization signing — nothing was resubmitted");
+      return interruptedResult(interruption.interruption);
+    }
     signed.push(xdr.SorobanAuthorizationEntry.fromXDR(signedEntryXdr, "base64"));
   }
 
@@ -608,8 +684,22 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     };
   }
 
+  // The last chance to notice a wallet that moved between the authorization
+  // signatures and the envelope signature: the envelope is what commits the
+  // source account, so signing it for a different administrator is precisely
+  // the silent source switch this check exists to prevent.
+  const beforeEnvelope = await boundary(signer, "envelope");
+  if (beforeEnvelope) return beforeEnvelope;
   promptWallet();
-  const signedEnvelope = await signer.signTransaction(assembled.transaction.toXDR());
+  let signedEnvelope: string;
+  try {
+    signedEnvelope = await signer.signTransaction(assembled.transaction.toXDR());
+  } catch (error) {
+    const interruption = interruptionFromSignerFailure(error, "envelope");
+    if (!interruption) throw error;
+    announce("Wallet interrupted during transaction signing — nothing was resubmitted");
+    return interruptedResult(interruption.interruption);
+  }
 
   if (maxTime > 0 && detectExpiration(Math.floor(Date.now() / 1000), maxTime)) {
     return {
@@ -623,6 +713,12 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   // The envelope's fee field carries inclusion fee + resource fee — exactly
   // what the network will charge for this transaction.
   const feeStroops = transaction.fee;
+
+  // Broadcast is the last boundary: a provider that vanished here may have
+  // been the only witness to a submission, so the outcome is reported as
+  // "verify before retrying" rather than as a failure (issue #341).
+  const beforeSend = await boundary(signer, "submission");
+  if (beforeSend) return beforeSend;
 
   let sent: rpc.Api.SendTransactionResponse;
   try {
@@ -702,6 +798,13 @@ export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeRe
   const context = `for guard ${request.contract}`;
   if (result.kind === "exported") {
     announce(`Transaction XDR exported for offline signing ${context}`);
+  } else if (result.kind === "refused" && result.writeInterruption) {
+    // The provider went away or the account changed mid-write. The guidance is
+    // phase-specific and already on screen; the announcement says which phase,
+    // and deliberately does not claim the write failed — at submission time it
+    // may have landed.
+    const guidance = recoveryGuidance(result.writeInterruption);
+    announce(`${guidance.headline} ${guidance.nextStep}`, "assertive");
   } else if (result.kind === "refused") {
     announce(`Transaction refused — nothing was broadcast ${context}`, "assertive");
   } else if (result.kind === "failed") {
