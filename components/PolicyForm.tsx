@@ -22,6 +22,9 @@ import { usePwaActivity } from "../lib/guard/usePwaActivity.ts";
 import { computePolicyDiff, type PolicyDiff } from "../lib/guard/policyDiff.ts";
 import { PolicyDiffModal } from "./PolicyDiffModal.tsx";
 import type { InvokeResult } from "../lib/guard/submit.ts";
+import { previewAuthorizationSummary } from "../lib/guard/submit.ts";
+import type { AuthorizationContext } from "../lib/guard/authorizationSummary.ts";
+import { NETWORK } from "../lib/guard/network.ts";
 import {
   policyConfirmed,
   policyFailed,
@@ -134,6 +137,20 @@ export function PolicyForm() {
   const [outcome, setOutcome] = useState<PolicyOutcome | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingDiff, setPendingDiff] = useState<PolicyDiff | null>(null);
+  /**
+   * The authorization the diff modal shows, and therefore the one the operator
+   * confirms with "Confirm and sign" (issue #343).
+   *
+   * It travels with the write instead of being re-read from the panel's props at
+   * submit time, so what the pipeline checks is literally what was on screen. If
+   * the guard, the wallet or the network moved while the dialog was open, the
+   * transaction the console builds no longer matches this copy and the write is
+   * refused before the wallet is prompted — which is the point of carrying it
+   * rather than deriving it again.
+   */
+  const [pendingAuthorization, setPendingAuthorization] = useState<AuthorizationContext | null>(
+    null,
+  );
   const [assetCapChanges, setAssetCapChanges] = useState<Record<string, AssetCapChange>>({});
   // A preset is applied in two steps: choosing one stages it here, and the
   // confirmation dialog applies it. The draft is never replaced by a stray
@@ -331,6 +348,18 @@ export function PolicyForm() {
       const installed =
         snapshot?.policy.ok && snapshot.policy.value !== null ? snapshot.policy.value : null;
       setPendingDiff(computePolicyDiff(installed, validation.config));
+      // The summary the operator reads is read out of a transaction built by the
+      // same builder the write will use, so "set_policy on this guard, signed by
+      // this account, on this network" is a fact about the envelope rather than a
+      // restatement of what the form thinks it is sending.
+      setPendingAuthorization(
+        previewAuthorizationSummary({
+          contract: guard,
+          fn: "set_policy",
+          admin: wallet?.address ?? "",
+          passphrase: NETWORK.passphrase,
+        }),
+      );
       return;
     }
     await runInstall(true);
@@ -338,6 +367,8 @@ export function PolicyForm() {
 
   async function runInstall(exportOnly = false) {
     setPendingDiff(null);
+    const authorization = pendingAuthorization;
+    setPendingAuthorization(null);
     setBusy(true);
     setError(null);
     setOutcome(null);
@@ -348,6 +379,11 @@ export function PolicyForm() {
         guard,
         draft: effective,
         exportOnly,
+        // An install carries the summary the operator confirmed, including when
+        // that summary was `null` — nothing shown means nothing confirmed, and the
+        // pipeline refuses it rather than signing. An XDR export asks the wallet
+        // for no signature at all, so it has nothing to carry.
+        ...(exportOnly ? {} : { authorization }),
       });
       setOutcome(result);
       if (result.kind === "invoked" && result.result.kind === "refused") {
@@ -939,8 +975,12 @@ export function PolicyForm() {
       {pendingDiff && (
         <PolicyDiffModal
           diff={pendingDiff}
+          authorization={pendingAuthorization}
           onConfirm={() => void runInstall(false)}
-          onCancel={() => setPendingDiff(null)}
+          onCancel={() => {
+            setPendingDiff(null);
+            setPendingAuthorization(null);
+          }}
         />
       )}
     </div>
