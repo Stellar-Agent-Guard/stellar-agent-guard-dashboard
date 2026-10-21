@@ -13,6 +13,171 @@
   color-scheme: dark;
 }
 
+/*
+ * Theme tokens (issue #367).
+ *
+ * The shell stamps the operator's choice as [data-theme] on <html>
+ * (components/ThemeProvider.tsx). The dark theme above is the default; the
+ * blocks below override its tokens and its hard-coded dark surfaces, which
+ * would otherwise carry over into the light and high-contrast themes and fail
+ * contrast outright.
+ *
+ * Contrast target: WCAG 2.1 AA — body and severity text at 4.5:1 or better in
+ * every theme, 7:1 or better for body text in the high-contrast theme so frozen
+ * and blocked states stay readable in poor lighting. Severity is never colour
+ * alone: every warn and danger pill carries a glyph (`.pill.*::before`), and
+ * disabled controls get one too, in all themes.
+ */
+
+[data-theme="light"] {
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --panel-2: #e9eef4;
+  --line: #c9d3e0;
+  --text: #1a222e;
+  --muted: #54606f;
+  --accent: #1a62d9;
+  --ok: #106b3c;
+  --warn: #7a5200;
+  --danger: #b3261e;
+  color-scheme: light;
+}
+
+/* Solid-toned buttons: dark text inherited from the dark theme would sit at
+   ~3.4:1 on the light accent, so light-theme buttons take white. */
+[data-theme="light"] button {
+  color: #ffffff;
+}
+
+[data-theme="light"] .pill.ok {
+  color: #106b3c;
+  border-color: #8fc3a6;
+  background: #d9f0e2;
+}
+[data-theme="light"] .pill.warn {
+  color: #7a5200;
+  border-color: #cfa93f;
+  background: #f8ecc9;
+}
+[data-theme="light"] .pill.danger {
+  color: #b3261e;
+  border-color: #e0a09a;
+  background: #fadcda;
+}
+[data-theme="light"] .error {
+  background: #fdf2f1;
+}
+[data-theme="light"] .notice {
+  background: #fdf8ec;
+}
+[data-theme="light"] .notice.danger {
+  background: #fdf2f1;
+}
+[data-theme="light"] .notice.info {
+  background: #e9f0fd;
+}
+[data-theme="light"] input,
+[data-theme="light"] textarea,
+[data-theme="light"] select {
+  background: #ffffff;
+}
+[data-theme="light"] pre.tx,
+[data-theme="light"] .json-tree {
+  background: #ffffff;
+}
+[data-theme="light"] table.events td {
+  border-bottom-color: var(--line);
+}
+[data-theme="light"] table.events tbody tr.severity-blocked {
+  background: #fbeae8;
+}
+[data-theme="light"] .dms-banner.warning {
+  color: #6b4a00;
+  border-color: #c9a13c;
+  background: #fdf3d7;
+}
+[data-theme="light"] .dms-banner.critical {
+  color: #8a1b13;
+  border-color: #d98c85;
+  background: #fbe0de;
+}
+[data-theme="light"] .dms-banner.expired {
+  color: #7c150e;
+  border-color: #c97a74;
+  background: #f3d4d2;
+}
+[data-theme="light"] .dry-run-banner,
+[data-theme="light"] .demo-badge {
+  color: #6b4a00;
+  background: #fdf3d7;
+}
+[data-theme="light"] .modal-backdrop {
+  background: rgba(10, 14, 20, 0.5);
+}
+[data-theme="light"] .skeleton-row {
+  background: linear-gradient(90deg, #dde4ee 25%, #eef1f7 50%, #dde4ee 75%);
+}
+[data-theme="light"] .skeleton {
+  background: linear-gradient(90deg, #dde4ee 25%, #eef1f7 50%, #dde4ee 75%);
+}
+
+[data-theme="high-contrast"] {
+  --bg: #050608;
+  --panel: #0d0f14;
+  --panel-2: #131822;
+  --line: #56657d;
+  --text: #ffffff;
+  --muted: #aeb8c6;
+  --accent: #7cb8ff;
+  --ok: #45e088;
+  --warn: #ffd166;
+  --danger: #ff8a8a;
+  color-scheme: dark;
+}
+
+[data-theme="high-contrast"] :focus-visible {
+  outline-width: 3px;
+}
+
+/* Severity pills in the high-contrast theme: tinted surfaces stay (they are
+   necessary for print parity and the icons), but each tier's border becomes the
+   tier colour itself, so the tier survives even a full greyscale render. */
+[data-theme="high-contrast"] .pill.ok {
+  border-color: var(--ok);
+}
+[data-theme="high-contrast"] .pill.warn {
+  border-color: var(--warn);
+}
+[data-theme="high-contrast"] .pill.danger {
+  border-color: var(--danger);
+  border-width: 2px;
+}
+
+/*
+ * Severity glyphs — the non-colour half of the severity tier. The wording on
+ * the pills already names the state ("FROZEN", "blocked"); this is the icon
+ * redundancy a colour-blind or greyscale operator gets. Pseudo-elements do not
+ * enter the DOM's text content, so announcements and exports are unchanged.
+ */
+.pill.ok::before {
+  content: "\2713\00a0"; /* ✓ */
+}
+.pill.warn::before {
+  content: "\26a0\00a0"; /* ⚠ */
+}
+.pill.danger::before {
+  content: "\26d4\00a0"; /* ⛔ */
+}
+
+/* Disabled actions: the dimming is colour, so a leading ⊘ glyph plus the
+   not-allowed cursor keep "this control can't work now" legible without it. */
+button:disabled {
+  cursor: not-allowed;
+}
+button:disabled::before {
+  content: "\2298\00a0"; /* ⊘ */
+}
+
 * {
   box-sizing: border-box;
 }

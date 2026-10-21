@@ -545,6 +545,22 @@ export function StatusPanel() {
               <strong>Contract ID:</strong> <span className="mono">{printReport.contractId}</span>
             </p>
             <p>
+              {/* One read, stated on the record: every value printed below came
+                  from this single snapshot, so a report cannot quietly mix two
+                  guards or a stale field with a fresh one. */}
+              <strong>Read at:</strong> {printReport.readAt} (one read snapshot)
+            </p>
+            <p>
+              <strong>Per-field read outcomes:</strong>
+              <ul>
+                {printReport.reads.map((entry) => (
+                  <li key={entry.field}>
+                    {entry.field}: {entry.outcome === "read" ? "read" : "unavailable"} — {entry.detail}
+                  </li>
+                ))}
+              </ul>
+            </p>
+            <p>
               <strong>Bytecode Hash:</strong>{" "}
               <span className="mono">{printReport.bytecodeHash}</span>
             </p>

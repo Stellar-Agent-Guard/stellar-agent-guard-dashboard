@@ -5,12 +5,15 @@ import {
   compilePrintReport,
   deploymentReceiptFilename,
   formatDeploymentReceipt,
+  PRINT_UNAVAILABLE_PREFIX,
   DEPLOYMENT_RECEIPT_DISCLAIMER,
   DEPLOYMENT_RECEIPT_SCHEMA_VERSION,
   type DeploymentReceiptInput,
 } from "../../lib/guard/printReport.ts";
+import { describePolicy } from "stellar-agent-guard-sdk";
 import type { InvokeResult } from "../../lib/guard/submit.ts";
 import type { WasmIdentity } from "../../lib/guard/chain.ts";
+import type { GuardSnapshot } from "../../lib/guard/guardOps.ts";
 
 test("compilePrintReport extracts correct fields from snapshot", () => {
   const mockSnapshot = {
@@ -355,5 +358,188 @@ describe("deployment verification receipt", () => {
       deploymentReceiptFilename(unreached),
       /deployment-receipt-testnet-CAYJZT4XH5SW-2026-10-20\.json/,
     );
+  });
+});
+
+// ── Print output ↔ one explicit read snapshot (#369) ──────────────────────
+
+/**
+ * The printable report is shared as evidence, so it must prove which read it
+ * came from and label every field that failed. These tests drive two full
+ * snapshots through `compilePrintReport` the way the panel does — guard switch,
+ * refreshes racing, some reads failing — and assert nothing ever prints as a
+ * settled value that no successful read established.
+ */
+
+describe("print report binding (#369)", () => {
+  const NOW = "2026-10-20T16:45:00.000Z";
+  const T1 = "2026-10-20T16:40:00.000Z"; // older snapshot
+  const T2 = "2026-10-20T16:42:00.000Z"; // newer snapshot
+  const GUARD_A = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  const GUARD_B = "CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU7";
+  const HASH_A = "hashAAA";
+
+  function okRead(value: unknown) {
+    return { ok: true as const, value };
+  }
+  function failedRead(error: string) {
+    return { ok: false as const, error, diagnostic: `diagnostic for ${error}` };
+  }
+
+  function policyOf(assets: string[]) {
+    return {
+      per_tx_cap: 100n,
+      window_cap: 1000n,
+      window_secs: 60n,
+      assets,
+      recipients: ["R1"],
+      protocols: [],
+      paused: false,
+      active_from: 0n,
+      active_until: 0n,
+      allow_any_recipient: false,
+    };
+  }
+
+  function snapshot(
+    guard: string,
+    fetchedAt: string,
+    fields: {
+      status?: unknown;
+      policy?: unknown;
+      window?: unknown;
+      identity?: unknown;
+    } = {},
+  ): GuardSnapshot {
+    const base = {
+      guard,
+      fetchedAt,
+      status: fields.status ?? okRead({
+        heartbeat_expired: false,
+        admin_frozen: false,
+        has_policy: true,
+        last_heartbeat: 0n,
+        now: 1_700_000_060n,
+      }),
+      policy: fields.policy ?? okRead(policyOf(["A1"])),
+      window: fields.window ?? okRead(null),
+      identity:
+        fields.identity ??
+        okRead({ reportedWasmHash: HASH_A, fetchedSha256: HASH_A, bytes: 39673, match: true }),
+    };
+    return base as unknown as GuardSnapshot;
+  }
+
+  test("each report is bound to one network and guard read, never a blend of two", () => {
+    // Two compiles the panel could make back-to-back: a snapshot of guard A,
+    // then, after a switch, one of guard B whose reads landed out of order
+    // (policy and identity still failing from the earlier refresh).
+    const reportA = compilePrintReport(snapshot(GUARD_A, T1), "Testnet", "GADMIN...", NOW);
+    const reportB = compilePrintReport(
+      snapshot(GUARD_B, T2, {
+        policy: failedRead("RPC rate limited"),
+        identity: failedRead("RPC timed out"),
+      }),
+      "Testnet",
+      "GADMIN...",
+      NOW,
+    );
+
+    // Every report names its own guard, network and read time.
+    assert.equal(reportA.contractId, GUARD_A);
+    assert.equal(reportA.network, "Testnet");
+    assert.equal(reportA.readAt, T1);
+    assert.equal(reportB.contractId, GUARD_B);
+    assert.equal(reportB.readAt, T2);
+
+    // No value from A leaks into B's record, and nothing in A is A's.
+    const serialA = JSON.stringify(reportA);
+    const serialB = JSON.stringify(reportB);
+    assert.ok(serialA.includes(HASH_A), "A's own identity hash is reported");
+    assert.ok(serialB.includes(GUARD_B) && !serialB.includes(HASH_A));
+    assert.ok(serialB.includes(GUARD_A) === false, "a guard switch must reset the contract id");
+
+    // The read time is the snapshot's own, not the compile moment.
+    assert.notEqual(reportA.readAt, reportA.timestamp);
+    assert.equal(reportA.timestamp, NOW);
+  });
+
+  test("reads completing out of order keep their outcomes on a per-field basis", () => {
+    // status() from an early read, policy() and window() failed, identity() succeeded
+    // later — one snapshot carrying all four individual outcomes.
+    const mixed = snapshot(GUARD_A, T1, {
+      policy: failedRead("connection reset"),
+      window: failedRead("NOT_FOUND"),
+    });
+    const report = compilePrintReport(mixed, "Testnet", "GADMIN...", NOW);
+
+    const byField = new Map(report.reads.map((entry) => [entry.field, entry]));
+    assert.equal(byField.get("status")?.outcome, "read");
+    assert.equal(byField.get("policy")?.outcome, "unavailable");
+    assert.equal(byField.get("window")?.outcome, "unavailable");
+    assert.equal(byField.get("wasm identity")?.outcome, "read");
+    // A failing field never downgrades its neighbours: identity still read.
+    assert.match(byField.get("policy")?.detail ?? "", /connection reset/);
+  });
+
+  test("a failed policy read is labelled, never a no-policy state or a zero", () => {
+    const report = compilePrintReport(
+      snapshot(GUARD_B, T2, { policy: failedRead("RPC rate limited") }),
+      "Testnet",
+      "GADMIN...",
+      NOW,
+    );
+
+    assert.match(report.policyRules, new RegExp(PRINT_UNAVAILABLE_PREFIX));
+    assert.ok(
+      !report.policyRules.includes("No policy installed"),
+      "default-deny is a state only a successful read can establish",
+    );
+    // Empty arrays would print as "None" — the reassuring default the failed
+    // read never earned. The unavailable marker travels into the list itself.
+    assert.deepEqual(report.allowlists.assets, [
+      `${PRINT_UNAVAILABLE_PREFIX} — the policy read failed`,
+    ]);
+    assert.ok(report.reads.find((entry) => entry.field === "policy")?.outcome === "unavailable");
+  });
+
+  test("failed status and identity reads never render as OK, zero or a placeholder", () => {
+    const report = compilePrintReport(
+      snapshot(GUARD_B, T2, { status: failedRead("RPC timed out"), identity: failedRead("NO CODE") }),
+      "Testnet",
+      "GADMIN...",
+      NOW,
+    );
+
+    assert.match(report.dmsStatus, new RegExp(PRINT_UNAVAILABLE_PREFIX));
+    assert.ok(!report.dmsStatus.startsWith("OK"), "a failed status() is not OK");
+    assert.notEqual(report.dmsStatus, "UNKNOWN", "the old bare placeholder is gone too");
+    assert.match(report.bytecodeHash, new RegExp(PRINT_UNAVAILABLE_PREFIX));
+    assert.notEqual(report.bytecodeHash, "-", "a dash is not a hash failure's value");
+    assert.ok(!/[0-9a-f]{16}/i.test(report.bytecodeHash), "no hash-like value is invented");
+  });
+
+  test("a successful policy-less read prints the one no-policy wording it earned", () => {
+    const report = compilePrintReport(
+      snapshot(GUARD_A, T1, { policy: okRead(null) }),
+      "Testnet",
+      "GADMIN...",
+      NOW,
+    );
+
+    assert.equal(report.policyRules, "No policy installed");
+    assert.deepEqual(report.allowlists.assets, []); // genuinely nothing: the read earned it
+    assert.deepEqual(report.allowlists.recipients, []);
+    assert.ok(report.reads.every((entry) => entry.outcome === "read"));
+  });
+
+  test("a fully successful report still carries its snapshot binding", () => {
+    const policy = policyOf(["A1"]);
+    const report = compilePrintReport(snapshot(GUARD_A, T1), "Testnet", "GADMIN...", NOW);
+
+    assert.equal(report.policyRules, describePolicy(policy as never));
+    assert.equal(report.dmsStatus, "OK");
+    assert.equal(report.readAt, T1);
+    assert.ok(report.reads.every((entry) => entry.outcome === "read"));
   });
 });

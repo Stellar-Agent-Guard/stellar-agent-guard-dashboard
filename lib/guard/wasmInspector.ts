@@ -19,6 +19,24 @@ import { sha256Hex } from "./scval.ts";
 
 const MAGIC = [0x00, 0x61, 0x73, 0x6d] as const;
 
+/**
+ * The documented ceiling on any single artifact handed to this inspector
+ * (issue #371).
+ *
+ * The pinned Phase 1 artifact is ~40 KB; every legitimate Soroban contract
+ * bytecode sits far under one megabyte. An input above the ceiling is refused
+ * *before the section walk begins*, so a remote artifact — or a truncated,
+ * corrupt or hostile transfer of one — can allocate parsing work only up to a
+ * known bound instead of whatever its declared length implies. The bound is a
+ * named export so callers, workers and tests all quote the same number.
+ */
+export const MAX_WASM_INSPECTION_BYTES = 8 * 1024 * 1024;
+
+/** The reason string for an over-ceiling input, shared by every module. */
+export function wasmInspectionOversizeReason(bytes: number): string {
+  return `input is ${bytes} bytes, above the documented ${MAX_WASM_INSPECTION_BYTES}-byte inspection ceiling; refusing to parse`;
+}
+
 const CUSTOM_SECTION = 0;
 const EXPORT_SECTION = 7;
 
@@ -71,6 +89,11 @@ export type WasmInspection =
  * next to a hash an operator is about to trust.
  */
 export function inspectWasm(bytes: Uint8Array): WasmInspection {
+  // The bound is enforced before anything else, including the magic check:
+  // the whole point is that no further work is triggered by this input.
+  if (bytes.length > MAX_WASM_INSPECTION_BYTES) {
+    return { ok: false, reason: wasmInspectionOversizeReason(bytes.length) };
+  }
   if (bytes.length < 8)
     return { ok: false, reason: `too short to be a WASM module (${bytes.length} bytes)` };
   for (const [index, expected] of MAGIC.entries()) {

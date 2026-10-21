@@ -11,3 +11,7 @@ The freeze transaction is signed and broadcast on-chain. Once included in a ledg
 ### How do I switch networks?
 
 The current deployment targets Stellar Testnet. Network settings can be inspected in `lib/guard/network.ts`.
+
+### An error appeared — should I retry?
+
+Not before a read. Every dashboard error is mapped to what is known, what stays uncertain, and a read-only next step in the [error runbook](runbooks/errors.md) — in short: reads may be retried freely; a refused or failed *write* must be checked against the ledger (by transaction hash or a direct contract read) before anything is sent again, and a failed read never stands in for chain state.

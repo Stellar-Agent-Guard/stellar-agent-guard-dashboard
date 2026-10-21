@@ -17,28 +17,115 @@ export interface AuditReport {
   adminKey: string;
   dmsStatus: string;
   network: string;
+  /**
+   * The compiled report's own generation time, distinct from the read below.
+   * Every *value* in this report comes from the read stamped in `readAt`.
+   */
   timestamp: string;
+  /**
+   * The snapshot's own fetch time (#369). Together with `contractId` and
+   * `network` this binds each value to exactly one live read of one guard on
+   * one network — a report can never blend two guards or two reads.
+   */
+  readAt: string;
+  /** Per-field read outcome, so a failed read is named, never defaulted. */
+  reads: PrintFieldReport[];
 }
 
+/** A single read in the snapshot: did it succeed, and what happened. */
+export interface PrintFieldReport {
+  field: string;
+  outcome: "read" | "unavailable";
+  detail: string;
+}
+
+/** The wording a failed field read must keep — never a settled-looking value. */
+export const PRINT_UNAVAILABLE_PREFIX = "UNAVAILABLE";
+
+/**
+ * Build a per-field read report from the snapshot's own `ReadResult`s.
+ *
+ * The labels match the UI (`ReadWithRetry` renders the same distinction per
+ * field), and the details carry the read's own error text — redacted upstream.
+ * A successful read of a null policy is a *state* the read established
+ * (default-deny); a failed read is declared `unavailable` because it
+ * established nothing.
+ */
+function reportFieldReads(
+  snapshot: GuardSnapshot,
+): PrintFieldReport[] {
+  const entry = (field: string, result: { ok: boolean; error?: string }): PrintFieldReport =>
+    result.ok
+      ? { field, outcome: "read", detail: "read live from the chain for this report" }
+      : {
+          field,
+          outcome: "unavailable",
+          detail: `${PRINT_UNAVAILABLE_PREFIX} — the read failed: ${result.error ?? "unknown error"}`,
+        };
+  return [
+    entry("status", snapshot.status),
+    entry("policy", snapshot.policy),
+    entry("window", snapshot.window),
+    entry("wasm identity", snapshot.identity),
+  ];
+}
+
+/**
+ * Compile the printable compliance report from exactly one guard snapshot.
+ *
+ * Deliberately no field of this report is invented:
+ *   - every value comes from the one snapshot passed in — the report's
+ *     `readAt`/`contractId`/`network` name the read they came from, so two
+ *     reports of two guards (or a refresh between reads) can never blend;
+ *   - a field whose read failed is labelled `UNAVAILABLE (...)` and contributes
+ *     no value at all: no "No policy installed", no zero, no "-" dressed up as
+ *     a state. Whether the account is unprotected is a *chain* fact only a
+ *     successful read can establish.
+ */
 export function compilePrintReport(
   snapshot: GuardSnapshot,
   networkName: string,
   adminKey: string,
+  /** Injected clock for deterministic tests; defaults to now. */
+  generatedAt: string = new Date().toISOString(),
 ): AuditReport {
   const policy = snapshot.policy.ok ? snapshot.policy.value : null;
   const status = snapshot.status.ok ? snapshot.status.value : null;
+  const policyReadFailed = !snapshot.policy.ok;
+  const unavailableLists = (): AuditReport["allowlists"] => {
+    const missing = `${PRINT_UNAVAILABLE_PREFIX} — the policy read failed`;
+    return {
+      assets: [missing],
+      recipients: [missing],
+      protocols: [missing],
+    };
+  };
 
   return {
     contractId: snapshot.guard,
-    bytecodeHash: snapshot.identity.ok ? (snapshot.identity.value.reportedWasmHash ?? "-") : "-",
-    policyRules: policy ? describePolicy(policy) : "No policy installed",
-    allowlists: {
-      assets: policy ? policy.assets : [],
-      recipients: policy ? (policy.allow_any_recipient ? ["* (Any)"] : policy.recipients) : [],
-      protocols: policy
-        ? policy.protocols.map((p) => `${p.contract} ${p.fns ? `(${p.fns.join(", ")})` : "(Any)"}`)
-        : [],
-    },
+    bytecodeHash: snapshot.identity.ok
+      ? (snapshot.identity.value.reportedWasmHash ?? "none reported by the ledger")
+      : `${PRINT_UNAVAILABLE_PREFIX} — the wasm identity read failed`,
+    policyRules: policy
+      ? describePolicy(policy)
+      : policyReadFailed
+        ? `${PRINT_UNAVAILABLE_PREFIX} — the policy read failed`
+        : // A successful read that found none installed: the one "no policy"
+          // wording a report is allowed to use, because the read established it.
+          "No policy installed",
+    allowlists: policy
+      ? {
+          assets: policy.assets,
+          recipients: policy.allow_any_recipient ? ["* (Any)"] : policy.recipients,
+          protocols: policy.protocols.map(
+            (p) => `${p.contract} ${p.fns ? `(${p.fns.join(", ")})` : "(Any)"}`,
+          ),
+        }
+      : policyReadFailed
+        // Not []: an empty list would print as "None" — a reassuring default
+        // the failed read never established.
+        ? unavailableLists()
+        : { assets: [], recipients: [], protocols: [] },
     adminKey,
     dmsStatus: status
       ? isDeadManFrozen(status)
@@ -46,9 +133,11 @@ export function compilePrintReport(
         : status.heartbeat_expired
           ? "EXPIRED"
           : "OK"
-      : "UNKNOWN",
+      : `${PRINT_UNAVAILABLE_PREFIX} — the status read failed`,
     network: networkName,
-    timestamp: new Date().toISOString(),
+    timestamp: generatedAt,
+    readAt: snapshot.fetchedAt,
+    reads: reportFieldReads(snapshot),
   };
 }
 
