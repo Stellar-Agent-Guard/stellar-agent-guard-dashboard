@@ -281,9 +281,9 @@ test("disconnecting disables the timer and prevents a later expiry", async () =>
   const mounted = await mount(Probe);
   try {
     await act(async () => {
-      mounted.container.querySelector("button")?.dispatchEvent(
-        new window.MouseEvent("click", { bubbles: true }),
-      );
+      mounted.container
+        .querySelector("button")
+        ?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
     });
     await act(async () => {
       mock.timers.tick(5_000);

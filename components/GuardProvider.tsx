@@ -1060,11 +1060,7 @@ export function GuardProvider({
   }, [idleState.phase, wallet]);
   useEffect(() => {
     const seconds = idleState.secondsLeft;
-    if (
-      idleState.phase === "warning" &&
-      wallet &&
-      (seconds <= 10 || seconds % 10 === 0)
-    ) {
+    if (idleState.phase === "warning" && wallet && (seconds <= 10 || seconds % 10 === 0)) {
       announce(`Session expires in ${seconds} seconds`);
     }
   }, [idleState.phase, idleState.secondsLeft, wallet]);

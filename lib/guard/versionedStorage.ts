@@ -1,13 +1,7 @@
 /** Shared contracts for recoverable browser-persisted records. */
 
 export type StorageErrorKind =
-  | "quota"
-  | "permission"
-  | "parse"
-  | "unavailable"
-  | "future-version"
-  | "migration"
-  | "unknown";
+  "quota" | "permission" | "parse" | "unavailable" | "future-version" | "migration" | "unknown";
 
 export type StorageOutcome<T> = { ok: true; value: T } | { ok: false; error: StorageErrorKind };
 

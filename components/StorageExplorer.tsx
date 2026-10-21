@@ -391,8 +391,8 @@ export function StorageExplorerButton() {
       {inventoryOpen && (
         <section id="browser-storage-inventory" aria-label="Browser storage inventory">
           <p className="tiny muted">
-            Local browser records only. They are convenience inputs and never replace live chain reads;
-            secret keys are not stored.
+            Local browser records only. They are convenience inputs and never replace live chain
+            reads; secret keys are not stored.
           </p>
           <div className="scrolly">
             <table className="events">
@@ -407,7 +407,9 @@ export function StorageExplorerButton() {
               <tbody>
                 {STORAGE_INVENTORY.map((entry) => (
                   <tr key={`${entry.area}:${entry.key}`}>
-                    <td className="mono tiny">{entry.key} ({entry.area})</td>
+                    <td className="mono tiny">
+                      {entry.key} ({entry.area})
+                    </td>
                     <td className="tiny">{entry.purpose}</td>
                     <td className="tiny">{entry.category}</td>
                     <td className="tiny">{entry.containsPublicMetadata ? "Yes" : "No"}</td>

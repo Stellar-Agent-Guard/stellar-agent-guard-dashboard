@@ -184,7 +184,11 @@ describe("versioned browser storage", () => {
       raw: JSON.stringify({ count: 1 }),
       schema: "test/record",
       version: 2,
-      migrations: { 0: () => { throw new Error("migration failed"); } },
+      migrations: {
+        0: () => {
+          throw new Error("migration failed");
+        },
+      },
       validate: (_value): _value is { count: number; ready: boolean } => true,
     });
     assert.equal(failed.ok, false);
@@ -196,7 +200,12 @@ describe("versioned browser storage", () => {
     assert.equal(classifyStorageError({ name: "SecurityError" }), "permission");
     assert.equal(writeStoredValue(null, "key", "value").ok, false);
     const denied = writeStoredValue(
-      { getItem: () => null, setItem: () => { throw { name: "QuotaExceededError" }; } },
+      {
+        getItem: () => null,
+        setItem: () => {
+          throw { name: "QuotaExceededError" };
+        },
+      },
       "key",
       "value",
     );
