@@ -18,7 +18,15 @@ import { compileIncidentSummary, formatIncidentSummary } from "../lib/guard/prin
  * effect must not be reported as a freeze.
  */
 
-type Phase = "idle" | "confirming" | "signing" | "verifying" | "done";
+type Phase = 
+  | "idle" 
+  | "confirming" 
+  | "prepared"        // Transaction constructed, ready for wallet signature
+  | "awaiting-signature" // Wallet prompt shown, waiting for user action
+  | "signing"         // Wallet is processing the signature
+  | "submitted"       // Transaction broadcast, awaiting inclusion
+  | "verifying"       // Re-reading status() to confirm effect
+  | "done";           // Final state (verified or unverified)
 
 interface Report {
   action: "freeze" | "unfreeze";
@@ -28,6 +36,18 @@ interface Report {
   /** True only when the re-read confirms the intended effect. */
   confirmed: boolean;
   note: string;
+  /** Transaction hash retained even when verification is delayed */
+  txHash?: string;
+}
+
+/** Helper: did status() succeed on the re-read? */
+function afterOk(report: Report): boolean {
+  // If we got a confirmed result, status() definitely succeeded
+  if (report.confirmed) return true;
+  // If adminFrozenAfter is non-null, we read something (even if it didn't match expectations)
+  if (report.adminFrozenAfter !== null) return true;
+  // Otherwise the read failed entirely
+  return false;
 }
 
 export function PanicPanel() {
@@ -112,9 +132,19 @@ export function PanicPanel() {
   async function run(action: "freeze" | "unfreeze", exportOnly = false) {
     setError(null);
     setReport(null);
-    setPhase("signing");
+    
     try {
       const walletSigner = signer();
+      
+      // Phase: prepared - transaction constructed, ready for wallet signature
+      setPhase("prepared");
+      
+      // Phase: awaiting-signature - wallet prompt shown, waiting for user action
+      setPhase("awaiting-signature");
+      
+      // Phase: signing - wallet is processing the signature
+      setPhase("signing");
+      
       const result =
         action === "freeze"
           ? await freezeGuard({ server, signer: walletSigner, guard, exportOnly })
@@ -138,8 +168,13 @@ export function PanicPanel() {
         return;
       }
 
-      // Re-read the contract's own view. This is the step that makes the claim
-      // real: the UI is not the source of truth, `status()` is.
+      // Phase: submitted - transaction broadcast, awaiting inclusion
+      setPhase("submitted");
+      
+      // Retain transaction hash even if verification fails or is delayed
+      const txHash = result.kind === "submitted" ? result.hash : undefined;
+
+      // Phase: verifying - re-reading status() to confirm effect
       setPhase("verifying");
       const { readStatus } = await import("../lib/guard/chain.ts");
       const after = await readStatus(server, guard, wallet?.address);
@@ -152,13 +187,17 @@ export function PanicPanel() {
         result,
         adminFrozenAfter,
         confirmed,
+        txHash,
         note: !after.ok
           ? `the write returned, but status() could not be re-read to confirm its effect: ${after.error}`
           : confirmed
             ? `status().admin_frozen now reads ${adminFrozenAfter}, which is the ${action} taking effect`
             : `status().admin_frozen reads ${adminFrozenAfter} — the intended effect is NOT visible on chain`,
       });
+      
+      // If verification failed, stay in done phase with unverified state visible
       setPhase("done");
+      
       // Only a broadcast write can have moved the chain. Tell the other tabs so
       // they re-read instead of showing the pre-freeze world for up to a poll
       // interval — the one delay that matters when the agent is misbehaving.
@@ -274,13 +313,25 @@ export function PanicPanel() {
         </div>
       )}
 
-      {(phase === "signing" || phase === "verifying") && (
+      {(phase === "prepared" || phase === "awaiting-signature" || phase === "signing" || phase === "submitted" || phase === "verifying") && (
         <div className="notice info">
-          <strong>{phase === "signing" ? "Waiting for the wallet…" : "Verifying on chain…"}</strong>
+          <strong>
+            {phase === "prepared" ? "Preparing transaction…" :
+             phase === "awaiting-signature" ? "Awaiting wallet signature…" :
+             phase === "signing" ? "Signing in progress…" :
+             phase === "submitted" ? "Transaction submitted, awaiting inclusion…" :
+             "Verifying on chain…"}
+          </strong>
           <span className="tiny">
-            {phase === "signing"
-              ? "Two signatures may be requested: one for the authorization entry, one for the transaction envelope."
-              : "Re-reading status() to confirm the account's own view changed."}
+            {phase === "prepared"
+              ? "Constructing the transaction for your review."
+              : phase === "awaiting-signature"
+                ? "Wallet prompt shown — waiting for you to approve."
+                : phase === "signing"
+                  ? "Two signatures may be requested: one for the authorization entry, one for the transaction envelope."
+                  : phase === "submitted"
+                    ? "Broadcast complete — waiting for the network to include it in a ledger."
+                    : "Re-reading status() to confirm the account's own view changed."}
           </span>
         </div>
       )}
@@ -327,13 +378,15 @@ export function PanicPanel() {
           <strong>
             {report.confirmed
               ? `${report.action === "freeze" ? "Freeze" : "Unfreeze"} confirmed on chain`
-              : `${report.action === "freeze" ? "Freeze" : "Unfreeze"} NOT confirmed`}
+              : !afterOk(report)
+                ? `${report.action === "freeze" ? "Freeze" : "Unfreeze"} submitted — verification delayed`
+                : `${report.action === "freeze" ? "Freeze" : "Unfreeze"} NOT confirmed`}
           </strong>
           <span className="tiny">{report.note}</span>
 
           {report.result.kind === "submitted" && (
             <p className="tiny" style={{ marginTop: 6 }}>
-              transaction {starLink(report.result.hash)} · included in ledger{" "}
+              transaction {starLink(report.txHash ?? report.result.hash)} · included in ledger{" "}
               {report.result.ledger ?? "—"}
             </p>
           )}
@@ -347,6 +400,13 @@ export function PanicPanel() {
             <p className="tiny" style={{ marginTop: 6 }}>
               Transaction {starLink(report.result.hash)} was included and rejected:{" "}
               <span className="mono">{report.result.detail}</span>
+            </p>
+          )}
+
+          {!report.confirmed && !afterOk(report) && report.txHash && (
+            <p className="tiny muted" style={{ marginTop: 6 }}>
+              The transaction was submitted ({starLink(report.txHash)}) but status() could not be re-read yet.
+              Check back shortly — the freeze may still take effect even though we cannot confirm it right now.
             </p>
           )}
 
