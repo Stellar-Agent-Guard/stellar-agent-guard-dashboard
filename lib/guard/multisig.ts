@@ -251,7 +251,9 @@ export function evaluateApprovalState(params: {
     incompleteReasons.push("The account signer list contains duplicate signer keys.");
   }
   if (!(params.signatureDataComplete ?? true)) {
-    incompleteReasons.push("Envelope signature hints do not uniquely identify the account signers.");
+    incompleteReasons.push(
+      "Envelope signature hints do not uniquely identify the account signers.",
+    );
   }
   if (!validThresholds(thresholds)) {
     incompleteReasons.push("One or more account thresholds are missing or invalid.");
@@ -363,7 +365,8 @@ export function evaluateApprovalState(params: {
  * envelope towards the threshold.
  */
 export function pendingSigners(state: MultisigApprovalState): string[] {
-  if (state.evaluationStatus !== "supported" || state.ready || state.requiredWeight === null) return [];
+  if (state.evaluationStatus !== "supported" || state.ready || state.requiredWeight === null)
+    return [];
   let remaining = state.requiredWeight - state.collectedWeight;
   const waiting: string[] = [];
   for (const signer of state.signers) {
@@ -429,7 +432,9 @@ export function signerRuleChanges(
   }
 
   for (const level of ["low", "med", "high"] as const) {
-    const before = previous.thresholds.find((threshold) => threshold.level === level)?.requiredWeight;
+    const before = previous.thresholds.find(
+      (threshold) => threshold.level === level,
+    )?.requiredWeight;
     const after = current.thresholds.find((threshold) => threshold.level === level)?.requiredWeight;
     if (before !== after) {
       changes.push(

@@ -412,7 +412,10 @@ test("unsupported signer data cannot produce a ready or met threshold", () => {
   assert.equal(state.remainingWeight, null, "a lower bound is not a definite shortfall");
   assert.equal(state.thresholds[1]?.remainingWeight, null);
   assert.equal(state.thresholds[0]?.remainingWeight, null);
-  assert.equal(state.thresholds.some((threshold) => threshold.met), false);
+  assert.equal(
+    state.thresholds.some((threshold) => threshold.met),
+    false,
+  );
   assert.equal(state.unattributableSigners.length, 1);
   assert.equal(state.unattributableSigners[0]?.label, "Hash signer");
   assert.match(remainingWeightSummary(state), /Threshold status is unsupported/);

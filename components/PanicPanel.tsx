@@ -531,9 +531,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
       {pendingFreeze && (
         <p className="notice info tiny" role="status">
           A freeze operation is pending for this guard
-          {pendingFreeze.owner === localWriteOwner
-            ? " in this tab."
-            : " in another dashboard tab."}
+          {pendingFreeze.owner === localWriteOwner ? " in this tab." : " in another dashboard tab."}
         </p>
       )}
       {pendingUnfreeze && (

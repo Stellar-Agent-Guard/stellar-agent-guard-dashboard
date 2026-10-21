@@ -148,7 +148,10 @@ export interface GuardWriteLockScope {
 }
 
 const inMemoryGuardWriteLocks = new Map<string, GuardWriteLockRecord>();
-const guardWriteLockListeners = new Map<string, Set<(record: GuardWriteLockRecord | null) => void>>();
+const guardWriteLockListeners = new Map<
+  string,
+  Set<(record: GuardWriteLockRecord | null) => void>
+>();
 
 export interface TabSyncOptions {
   channelName?: string;
@@ -368,7 +371,8 @@ export function subscribeGuardWriteLock(
   const key = guardWriteLockKey(scope);
   const storage = storageForGuardWrite(options);
   const now = options.now ?? Date.now;
-  const eventTarget = options.eventTarget === undefined ? defaultEventTarget() : options.eventTarget;
+  const eventTarget =
+    options.eventTarget === undefined ? defaultEventTarget() : options.eventTarget;
   const listeners = guardWriteLockListeners.get(key) ?? new Set();
   listeners.add(listener);
   guardWriteLockListeners.set(key, listeners);

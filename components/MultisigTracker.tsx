@@ -224,7 +224,11 @@ export function MultisigTracker() {
         <button onClick={() => void analyse()} disabled={busy || xdr.trim().length === 0}>
           {busy ? "Reading account…" : "Check approvals"}
         </button>
-        <button className="secondary" onClick={() => void refreshSignerRules()} disabled={busy || !report}>
+        <button
+          className="secondary"
+          onClick={() => void refreshSignerRules()}
+          disabled={busy || !report}
+        >
           {busy && report ? "Refreshing rules…" : "Refresh signer rules"}
         </button>
       </div>
@@ -274,16 +278,20 @@ export function MultisigTracker() {
           <div className="notice" style={{ marginTop: 10 }}>
             <strong>Data sources</strong>
             <span className="tiny">
-              Envelope signatures: parsed locally from the pasted XDR ({report.envelopeSignatures.length} signature(s)); not a chain read.
+              Envelope signatures: parsed locally from the pasted XDR (
+              {report.envelopeSignatures.length} signature(s)); not a chain read.
             </span>
             <span className="tiny">
-              Current signer weights and thresholds: {report.signerReadAt
+              Current signer weights and thresholds:{" "}
+              {report.signerReadAt
                 ? `Horizon read at ${new Date(report.signerReadAt).toLocaleString()}.`
                 : "unavailable."}
             </span>
             {report.signerReadError && <span className="tiny">{report.signerReadError}</span>}
             {report.state.evaluationReasons.map((reason) => (
-              <span className="tiny" key={reason}>{reason}</span>
+              <span className="tiny" key={reason}>
+                {reason}
+              </span>
             ))}
           </div>
 
@@ -291,7 +299,9 @@ export function MultisigTracker() {
             <div className="notice" role="status" style={{ marginTop: 10 }}>
               <strong>Signer rules changed since the previous live read</strong>
               {report.signerRuleChanges.map((change) => (
-                <span className="tiny" key={change}>{change}</span>
+                <span className="tiny" key={change}>
+                  {change}
+                </span>
               ))}
               <span className="tiny muted">
                 Approval was recalculated using the latest signer weights and thresholds.
@@ -320,27 +330,30 @@ export function MultisigTracker() {
               {report.state.thresholds.map((threshold) => (
                 <li key={threshold.level}>
                   {THRESHOLD_LABELS[threshold.level]} ({threshold.requiredWeight}):{" "}
-                    {report.state.evaluationStatus !== "supported" || threshold.requiredWeight === null
-                      ? "not evaluated"
-                      : threshold.remainingWeight === null
-                        ? "unknown"
-                    : threshold.remainingWeight === 0
-                      ? "met"
-                      : `${threshold.remainingWeight} more weight required`}{" "}
+                  {report.state.evaluationStatus !== "supported" ||
+                  threshold.requiredWeight === null
+                    ? "not evaluated"
+                    : threshold.remainingWeight === null
+                      ? "unknown"
+                      : threshold.remainingWeight === 0
+                        ? "met"
+                        : `${threshold.remainingWeight} more weight required`}{" "}
                   <span className="muted">
-                    (collected {threshold.collectedWeight}; required {threshold.requiredWeight ?? "unknown"})
+                    (collected {threshold.collectedWeight}; required{" "}
+                    {threshold.requiredWeight ?? "unknown"})
                   </span>
                 </li>
               ))}
             </ul>
-            {report.state.evaluationStatus === "supported" && report.state.coverage === "unknown" && (
-              <span className="tiny muted">
-                This account has signers whose signatures cannot be identified from an envelope
-                (hash, pre-auth, signed-payload or ambiguous-hint signers). Their signatures still
-                count on the network, so the remaining weight is a lower bound, not an exact figure.
-                Re-check after those co-signers report back.
-              </span>
-            )}
+            {report.state.evaluationStatus === "supported" &&
+              report.state.coverage === "unknown" && (
+                <span className="tiny muted">
+                  This account has signers whose signatures cannot be identified from an envelope
+                  (hash, pre-auth, signed-payload or ambiguous-hint signers). Their signatures still
+                  count on the network, so the remaining weight is a lower bound, not an exact
+                  figure. Re-check after those co-signers report back.
+                </span>
+              )}
           </div>
 
           {report.state.duplicateSignatures.length > 0 && (

@@ -831,15 +831,27 @@ export function evaluateSignedEnvelopePreflight(params: {
     const minTime = Number(params.timeBounds.minTime);
     const maxTime = Number(params.timeBounds.maxTime);
     if (!Number.isFinite(ledgerCloseTime) || !Number.isFinite(maxTime)) {
-      return { status: "unknown" as const, detail: "Envelope or ledger time bounds are unavailable." };
+      return {
+        status: "unknown" as const,
+        detail: "Envelope or ledger time bounds are unavailable.",
+      };
     }
     if (ledgerCloseTime >= maxTime) {
-      return { status: "expired" as const, detail: "Latest ledger close time is at or past the envelope expiration." };
+      return {
+        status: "expired" as const,
+        detail: "Latest ledger close time is at or past the envelope expiration.",
+      };
     }
     if (minTime > 0 && ledgerCloseTime < minTime) {
-      return { status: "not_yet_valid" as const, detail: "Latest ledger close time is before the envelope start time." };
+      return {
+        status: "not_yet_valid" as const,
+        detail: "Latest ledger close time is before the envelope start time.",
+      };
     }
-    return { status: "active" as const, detail: "Envelope time bounds include the latest ledger close time." };
+    return {
+      status: "active" as const,
+      detail: "Envelope time bounds include the latest ledger close time.",
+    };
   })();
 
   return {
@@ -865,6 +877,8 @@ export async function preflightSignedEnvelope(
     ...(accountResult.status === "fulfilled"
       ? { accountSequence: accountResult.value.sequenceNumber() }
       : {}),
-    ...(ledgerResult.status === "fulfilled" ? { ledgerCloseTime: ledgerResult.value.closeTime } : {}),
+    ...(ledgerResult.status === "fulfilled"
+      ? { ledgerCloseTime: ledgerResult.value.closeTime }
+      : {}),
   });
 }

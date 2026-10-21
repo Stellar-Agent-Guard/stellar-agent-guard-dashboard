@@ -116,7 +116,9 @@ export async function readAccountSigners(
     } else {
       record.signers.forEach((value, index) => {
         if (typeof value !== "object" || value === null) {
-          incompleteReasons.push(`Horizon returned an invalid signer record at position ${index + 1}.`);
+          incompleteReasons.push(
+            `Horizon returned an invalid signer record at position ${index + 1}.`,
+          );
           return;
         }
         const signer = value as HorizonSignerRecord;
@@ -126,12 +128,16 @@ export async function readAccountSigners(
           (signer.weight as number) < 0 ||
           (signer.weight as number) > 255
         ) {
-          incompleteReasons.push(`Horizon returned incomplete signer data at position ${index + 1}.`);
+          incompleteReasons.push(
+            `Horizon returned incomplete signer data at position ${index + 1}.`,
+          );
           return;
         }
         const kind = signerKind(typeof signer.type === "string" ? signer.type : undefined);
         if (kind === "ed25519" && signerHint(signer.key) === null) {
-          incompleteReasons.push(`Horizon returned an invalid Ed25519 signer key at position ${index + 1}.`);
+          incompleteReasons.push(
+            `Horizon returned an invalid Ed25519 signer key at position ${index + 1}.`,
+          );
           return;
         }
         signers.push({
@@ -149,7 +155,9 @@ export async function readAccountSigners(
       : [];
     const thresholds =
       thresholdValues.length === 3 &&
-      thresholdValues.every((value) => Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 255)
+      thresholdValues.every(
+        (value) => Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 255,
+      )
         ? {
             low_threshold: rawThresholds!.low_threshold as number,
             med_threshold: rawThresholds!.med_threshold as number,

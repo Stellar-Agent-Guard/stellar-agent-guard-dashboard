@@ -84,24 +84,35 @@ export function SubmitSignedXDRPanel() {
         style={{ width: "100%", height: "80px", marginBottom: "12px", fontFamily: "monospace" }}
       />
       <div className="row">
-        <button className="secondary" disabled={busy || checking || !xdr.trim()} onClick={() => void checkEnvelope()}>
+        <button
+          className="secondary"
+          disabled={busy || checking || !xdr.trim()}
+          onClick={() => void checkEnvelope()}
+        >
           {checking ? "Checking latest ledger…" : "Check envelope"}
         </button>
-        <button disabled={busy || checking || !xdr.trim() || checkedEnvelope !== xdr.trim()} onClick={() => void submit()}>
+        <button
+          disabled={busy || checking || !xdr.trim() || checkedEnvelope !== xdr.trim()}
+          onClick={() => void submit()}
+        >
           {busy ? "Submitting..." : "Submit to Network"}
         </button>
       </div>
       {preflight && checkedEnvelope === xdr.trim() && (
         <div className="notice info" role="status" style={{ marginTop: 12 }}>
-          <strong>Read-only preflight, checked {new Date(preflight.checkedAt).toLocaleString()}</strong>
+          <strong>
+            Read-only preflight, checked {new Date(preflight.checkedAt).toLocaleString()}
+          </strong>
           <span className="tiny">
             Sequence: {preflight.sequence.status.replaceAll("_", " ")} — {preflight.sequence.detail}
           </span>
           <span className="tiny">
-            Expiration: {preflight.expiration.status.replaceAll("_", " ")} — {preflight.expiration.detail}
+            Expiration: {preflight.expiration.status.replaceAll("_", " ")} —{" "}
+            {preflight.expiration.detail}
           </span>
           <span className="tiny muted">
-            Advisory only. No envelope fields were changed; the network&apos;s final RPC response is authoritative.
+            Advisory only. No envelope fields were changed; the network&apos;s final RPC response is
+            authoritative.
           </span>
         </div>
       )}

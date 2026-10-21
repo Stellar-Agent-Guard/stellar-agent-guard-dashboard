@@ -224,9 +224,13 @@ describe("guard write leases", () => {
     const { storage } = createMockStorage();
     const scope = { guard: GUARD, action: "freeze" as const, network: "testnet" };
     const updates: Array<string | null> = [];
-    const unsubscribe = subscribeGuardWriteLock(scope, (record) => {
-      updates.push(record?.owner ?? null);
-    }, { storage, eventTarget: null, now: () => FIXED_TIME.getTime() });
+    const unsubscribe = subscribeGuardWriteLock(
+      scope,
+      (record) => {
+        updates.push(record?.owner ?? null);
+      },
+      { storage, eventTarget: null, now: () => FIXED_TIME.getTime() },
+    );
     const claim = acquireGuardWriteLock(scope, {
       storage,
       lifecycleTarget: null,
