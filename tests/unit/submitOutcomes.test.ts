@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import { SorobanDataBuilder, Transaction, rpc, xdr } from "@stellar/stellar-sdk";
-import { invokeWithWallet, type InvokeRequest } from "../../lib/guard/submit.ts";
+import {
+  invokeWithWallet,
+  previewAuthorizationSummary,
+  type InvokeRequest,
+} from "../../lib/guard/submit.ts";
 import { WalletCancellationError } from "../../lib/guard/retry.ts";
 import { clearAnnouncements, pendingAnnouncements } from "../../lib/guard/useAnnounce.ts";
 
@@ -93,6 +97,17 @@ function request(server: FakeServer, signer: InvokeRequest["signer"]): InvokeReq
     signer,
     passphrase: PASSPHRASE,
     guardForFootprint: null,
+    // The confirmed authorization the write path now demands (issue #343). This
+    // file is about what happens *after* that check passes, so it carries the
+    // summary the pipeline would itself derive from this request — the same
+    // reading of the same transaction, which is what lets these tests reach the
+    // broadcast at all.
+    authorization: previewAuthorizationSummary({
+      contract: GUARD,
+      fn: "set_policy",
+      admin: ADMIN,
+      passphrase: PASSPHRASE,
+    }),
     // Fast, deterministic polling: the writes under test are not waiting on a real ledger.
     pollAttempts: 3,
     pollIntervalMs: 1,
