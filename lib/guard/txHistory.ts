@@ -14,6 +14,9 @@
  * never to a crash), and tests inject their own storage.
  */
 
+import { storageErrorMessage, writeStoredValue, type StorageOutcome } from "./versionedStorage.ts";
+import { NETWORK } from "./network.ts";
+
 export interface TxHistoryEntry {
   /** The hash the network accepted. Identity for de-duplication. */
   hash: string;
@@ -22,14 +25,44 @@ export interface TxHistoryEntry {
   status: "confirmed" | "failed";
   /** Total fee paid, in stroops (inclusion + resource), as a decimal string. */
   feeStroops: string | null;
+  /** Network identity captured when this console recorded the write. */
+  networkName: string | null;
+  networkPassphrase: string | null;
   /** ISO 8601 timestamp of when this console recorded the outcome. */
   recordedAt: string;
+}
+
+export type TxVerificationStatus = "pending" | "not-found" | "confirmed" | "failed";
+
+/** Map the live RPC response to a presentation state without changing history. */
+export function txVerificationStatus(status: string): TxVerificationStatus | null {
+  switch (status) {
+    case "PENDING":
+      return "pending";
+    case "NOT_FOUND":
+      return "not-found";
+    case "SUCCESS":
+      return "confirmed";
+    case "FAILED":
+      return "failed";
+    default:
+      return null;
+  }
+}
+
+/** A history row can be checked only against the exact passphrase it records. */
+export function txHistoryMatchesNetwork(entry: TxHistoryEntry, networkPassphrase: string): boolean {
+  return entry.networkPassphrase === networkPassphrase;
 }
 
 /** Maximum entries kept — the oldest beyond this are dropped. */
 export const TX_HISTORY_LIMIT = 200;
 
 export const TX_HISTORY_STORAGE_KEY = "stellar-agent-guard-dashboard.txHistory.v1";
+
+let lastSaveOutcome: StorageOutcome<void> = { ok: true, value: undefined };
+let memoryHistory: TxHistoryEntry[] = [];
+const failedStores = new WeakSet<object>();
 
 /** The subset of `Storage` the store needs, so tests can inject a fake. */
 export interface StorageLike {
@@ -55,6 +88,12 @@ function isEntry(value: unknown): value is TxHistoryEntry {
     typeof entry.operation === "string" &&
     (entry.status === "confirmed" || entry.status === "failed") &&
     typeof entry.recordedAt === "string" &&
+    (entry.networkName === undefined ||
+      entry.networkName === null ||
+      typeof entry.networkName === "string") &&
+    (entry.networkPassphrase === undefined ||
+      entry.networkPassphrase === null ||
+      typeof entry.networkPassphrase === "string") &&
     (entry.feeStroops === null ||
       entry.feeStroops === undefined ||
       typeof entry.feeStroops === "string")
@@ -65,17 +104,26 @@ function isEntry(value: unknown): value is TxHistoryEntry {
  * The stored history, newest first, validated and capped. A corrupted
  * payload yields an empty history rather than a broken dashboard.
  */
-export function loadTxHistory(storage: StorageLike | null = defaultStorage()): TxHistoryEntry[] {
-  if (!storage) return [];
+export function loadTxHistory(storage?: StorageLike | null): TxHistoryEntry[] {
+  const store = storage === undefined ? defaultStorage() : storage;
+  if (!store) return [...memoryHistory];
+  if (failedStores.has(store)) return [...memoryHistory];
   try {
-    const raw = storage.getItem(TX_HISTORY_STORAGE_KEY);
+    const raw = store.getItem(TX_HISTORY_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed
+    const history = parsed
       .filter(isEntry)
-      .map((entry) => ({ ...entry, feeStroops: entry.feeStroops ?? null }))
+      .map((entry) => ({
+        ...entry,
+        feeStroops: entry.feeStroops ?? null,
+        networkName: entry.networkName ?? null,
+        networkPassphrase: entry.networkPassphrase ?? null,
+      }))
       .slice(0, TX_HISTORY_LIMIT);
+    memoryHistory = history;
+    return history;
   } catch {
     return [];
   }
@@ -91,6 +139,15 @@ export function subscribeTxHistory(listener: () => void): () => void {
   };
 }
 
+/** Persistence result for the latest history write, for a concise UI warning. */
+export function txHistorySaveOutcome(): StorageOutcome<void> {
+  return lastSaveOutcome;
+}
+
+export function txHistorySaveWarning(): string | null {
+  return lastSaveOutcome.ok ? null : storageErrorMessage(lastSaveOutcome.error);
+}
+
 function notify(): void {
   for (const listener of [...listeners]) listener();
 }
@@ -104,7 +161,7 @@ function notify(): void {
  */
 export function recordTx(
   entry: Pick<TxHistoryEntry, "hash" | "operation" | "status" | "feeStroops"> &
-    Partial<Pick<TxHistoryEntry, "recordedAt">>,
+    Partial<Pick<TxHistoryEntry, "recordedAt" | "networkName" | "networkPassphrase">>,
   storage: StorageLike | null = defaultStorage(),
 ): TxHistoryEntry[] {
   const recorded: TxHistoryEntry = {
@@ -112,6 +169,8 @@ export function recordTx(
     operation: entry.operation,
     status: entry.status,
     feeStroops: entry.feeStroops ?? null,
+    networkName: entry.networkName ?? NETWORK.name,
+    networkPassphrase: entry.networkPassphrase ?? NETWORK.passphrase,
     recordedAt: entry.recordedAt ?? new Date().toISOString(),
   };
   const current = loadTxHistory(storage);
@@ -119,13 +178,10 @@ export function recordTx(
     0,
     TX_HISTORY_LIMIT,
   );
-  if (storage) {
-    try {
-      storage.setItem(TX_HISTORY_STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // A private-mode write failure must not interrupt the submission path.
-    }
-  }
+  memoryHistory = next;
+  lastSaveOutcome = writeStoredValue(storage, TX_HISTORY_STORAGE_KEY, JSON.stringify(next));
+  if (storage && !lastSaveOutcome.ok) failedStores.add(storage);
+  else if (storage) failedStores.delete(storage);
   notify();
   return next;
 }
@@ -150,7 +206,8 @@ export function filterTxHistory(
   if (query.length === 0 && from.length === 0 && to.length === 0) return entries;
   return entries.filter((entry) => {
     if (query.length > 0) {
-      const haystack = `${entry.operation} ${entry.hash} ${entry.status}`.toLowerCase();
+      const haystack =
+        `${entry.operation} ${entry.hash} ${entry.status} ${entry.networkName ?? ""} ${entry.networkPassphrase ?? ""}`.toLowerCase();
       if (!haystack.includes(query)) return false;
     }
     const day = entry.recordedAt.slice(0, 10);
@@ -187,10 +244,18 @@ function csvCell(value: string): string {
 
 /** The filtered history as CSV: a fixed header plus one quoted row per entry. */
 export function txHistoryToCsv(entries: TxHistoryEntry[]): string {
-  const lines = ["timestamp,operation,status,tx_hash,fee_stroops"];
+  const lines = ["timestamp,operation,status,tx_hash,fee_stroops,network_name,network_passphrase"];
   for (const entry of entries) {
     lines.push(
-      [entry.recordedAt, entry.operation, entry.status, entry.hash, entry.feeStroops ?? ""]
+      [
+        entry.recordedAt,
+        entry.operation,
+        entry.status,
+        entry.hash,
+        entry.feeStroops ?? "",
+        entry.networkName ?? "",
+        entry.networkPassphrase ?? "",
+      ]
         .map(csvCell)
         .join(","),
     );

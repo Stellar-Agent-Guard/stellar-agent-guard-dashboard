@@ -17,6 +17,13 @@
  * it.
  */
 
+import {
+  decodeVersionedRecord,
+  encodeVersionedRecord,
+  writeStoredValue,
+  type StorageOutcome,
+} from "./versionedStorage.ts";
+
 /** The panels the console's grid can hold. */
 export type PanelId = "status" | "txhistory" | "panic" | "telemetry" | "multisig" | "xdr";
 
@@ -40,6 +47,8 @@ export const DEFAULT_LAYOUT: readonly PanelId[] = [
 ];
 
 export const LAYOUT_STORAGE_KEY = "stellar-agent-guard-dashboard.layout.v1";
+export const LAYOUT_SCHEMA = "stellar-agent-guard/dashboard-layout";
+export const LAYOUT_VERSION = 1;
 
 /** The subset of `Storage` the store needs, so tests can inject a fake. */
 export interface StorageLike {
@@ -119,7 +128,43 @@ export function loadLayout(storage: StorageLike | null = defaultStorage()): Dash
   try {
     const raw = storage.getItem(LAYOUT_STORAGE_KEY);
     if (!raw) return defaultLayout();
-    return normalizeLayout(JSON.parse(raw) as unknown);
+    const decoded = decodeVersionedRecord({
+      raw,
+      schema: LAYOUT_SCHEMA,
+      version: LAYOUT_VERSION,
+      migrations: {
+        0: (value) => {
+          if (
+            !Array.isArray(value) ||
+            value.length === 0 ||
+            !value.every(
+              (entry) =>
+                typeof entry === "object" &&
+                entry !== null &&
+                typeof (entry as { id?: unknown }).id === "string" &&
+                typeof (entry as { collapsed?: unknown }).collapsed === "boolean",
+            )
+          ) {
+            throw new Error("Invalid legacy layout");
+          }
+          return normalizeLayout(value);
+        },
+      },
+      validate: (value): value is DashboardLayout =>
+        typeof value === "object" &&
+        value !== null &&
+        Array.isArray((value as DashboardLayout).order) &&
+        (value as DashboardLayout).order.every(isPlacement),
+    });
+    if (!decoded.ok) return defaultLayout();
+    if (decoded.needsMigration) {
+      writeStoredValue(
+        storage,
+        LAYOUT_STORAGE_KEY,
+        encodeVersionedRecord(LAYOUT_SCHEMA, LAYOUT_VERSION, decoded.value),
+      );
+    }
+    return normalizeLayout(decoded.value.order);
   } catch {
     return defaultLayout();
   }
@@ -129,13 +174,12 @@ export function loadLayout(storage: StorageLike | null = defaultStorage()): Dash
 export function saveLayout(
   layout: DashboardLayout,
   storage: StorageLike | null = defaultStorage(),
-): void {
-  if (!storage) return;
-  try {
-    storage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout.order));
-  } catch {
-    // Private mode or quota: the layout stays in memory for this session.
-  }
+): StorageOutcome<void> {
+  return writeStoredValue(
+    storage,
+    LAYOUT_STORAGE_KEY,
+    encodeVersionedRecord(LAYOUT_SCHEMA, LAYOUT_VERSION, normalizeLayout(layout.order)),
+  );
 }
 
 /** Move a panel to a new zero-based index, shifting the others aside. */
@@ -151,6 +195,31 @@ export function reorderPanel(
   const order = [...layout.order];
   const [moved] = order.splice(from, 1);
   order.splice(clamped, 0, moved!);
+  return { order };
+}
+
+/** Reorder rendered panels while leaving unavailable panel slots untouched. */
+export function reorderAvailablePanels(
+  layout: DashboardLayout,
+  id: PanelId,
+  toIndex: number,
+  available: readonly PanelId[],
+): DashboardLayout {
+  const positions = layout.order.flatMap((placement, index) =>
+    available.includes(placement.id) ? [index] : [],
+  );
+  const from = positions.findIndex((position) => layout.order[position]?.id === id);
+  if (from === -1) return layout;
+  const target = Math.min(Math.max(0, Math.trunc(toIndex)), positions.length - 1);
+  if (target === from) return layout;
+
+  const visible = positions.map((position) => layout.order[position]!);
+  const [moved] = visible.splice(from, 1);
+  visible.splice(target, 0, moved!);
+  const order = [...layout.order];
+  positions.forEach((position, index) => {
+    order[position] = visible[index]!;
+  });
   return { order };
 }
 
