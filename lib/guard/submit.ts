@@ -17,8 +17,7 @@ import { withBackoff, RetryableError } from "./retry.ts";
 import {
   Account,
   Address,
-  Keypair,
-  Networks,
+  FeeBumpTransaction,
   Operation,
   SorobanDataBuilder,
   Transaction,
@@ -830,292 +829,105 @@ export function detectExpiration(currentTime: number, maxTime: number) {
   return currentTime >= maxTime;
 }
 
-export function isWalletCancellation(error: unknown): boolean {
-  if (!error) return false;
-  if (typeof error === "object" && (error as any).name === "WalletUserRejectedError") {
-    return true;
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  const normalised = message.toLowerCase();
-  return /reject|denied|declin|cancel|abort|user.*(close|dismiss)/.test(normalised);
-}
-
-export function actionableCancellationMessage(error: unknown): string {
-  if (error && typeof error === "object" && (error as any).name === "WalletUserRejectedError") {
-    return (error as Error).message;
-  }
-  return "Transaction signing was declined in your wallet. Nothing was sent to the network. You can retry when ready.";
-}
-
-export interface DecodedOperationSummary {
-  type: string;
-  summary: string;
-  supported: boolean;
-  contract?: string;
-  functionName?: string;
-  args?: unknown[];
-  unsupportedReason?: string;
-}
-
-export interface EnvelopeInspectionResult {
-  valid: boolean;
-  canSubmit: boolean;
-  networkMatch: boolean;
-  networkPassphrase: string;
-  detectedNetwork?: string;
-  sourceAccount?: string;
-  sequenceNumber?: string;
-  feeStroops?: string;
-  timeBounds?: {
-    minTime?: string;
-    maxTime?: string;
-    expired: boolean;
+export interface SignedEnvelopePreflight {
+  checkedAt: string;
+  sequence: {
+    status: "current" | "stale" | "ahead" | "unknown";
+    detail: string;
   };
-  hasSignatures: boolean;
-  signaturesCount: number;
-  operations: DecodedOperationSummary[];
-  verifiedFields: string[];
-  unsupportedFields: string[];
-  blockReasons: string[];
-}
-
-function getSignatureParts(s: any): { hint: Uint8Array; signature: Uint8Array } {
-  const h = s.hint?.value || s.hint;
-  const sig = s.signature?.value || s.signature;
-  return {
-    hint: h instanceof Uint8Array ? h : new Uint8Array(h),
-    signature: sig instanceof Uint8Array ? sig : new Uint8Array(sig),
+  expiration: {
+    status: "active" | "expired" | "not_yet_valid" | "not_bounded" | "unknown";
+    detail: string;
   };
 }
 
-function uint8ArraysEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-
-const KNOWN_NETWORKS: readonly { name: string; passphrase: string }[] = [
-  { name: "Public", passphrase: Networks.PUBLIC },
-  { name: "Testnet", passphrase: Networks.TESTNET },
-  { name: "Futurenet", passphrase: Networks.FUTURENET },
-  { name: "Standalone", passphrase: "Standalone Network ; February 2017" },
-];
-
-export function verifyEnvelopeNetworkPassphrase(
-  tx: Transaction,
-  expectedPassphrase: string,
-): { matches: boolean; detectedNetwork?: string; hasMatchingSigner: boolean } {
-  if (!tx.signatures || tx.signatures.length === 0) {
-    return { matches: false, hasMatchingSigner: false };
-  }
-
-  try {
-    const sourceKp = Keypair.fromPublicKey(tx.source);
-    const sourceHint = new Uint8Array(sourceKp.rawPublicKey().slice(-4));
-    const matchingSig = tx.signatures.find((s: any) => {
-      const parts = getSignatureParts(s);
-      return uint8ArraysEqual(parts.hint, sourceHint);
-    });
-
-    if (matchingSig) {
-      const { signature } = getSignatureParts(matchingSig);
-      if (sourceKp.verify(tx.hash(), Buffer.from(signature))) {
-        return { matches: true, hasMatchingSigner: true };
-      }
-      for (const net of KNOWN_NETWORKS) {
-        if (net.passphrase === expectedPassphrase) continue;
-        try {
-          const altTx = TransactionBuilder.fromXDR(tx.toXDR(), net.passphrase) as Transaction;
-          if (sourceKp.verify(altTx.hash(), Buffer.from(signature))) {
-            return { matches: false, detectedNetwork: net.passphrase, hasMatchingSigner: true };
-          }
-        } catch {
-          // Ignore
-        }
-      }
-      return { matches: false, hasMatchingSigner: true };
+/** Compare an imported envelope with fresh chain observations without changing it. */
+export function evaluateSignedEnvelopePreflight(params: {
+  sequence: string;
+  timeBounds?: { minTime: string; maxTime: string };
+  accountSequence?: string;
+  ledgerCloseTime?: string | number;
+  checkedAt?: string;
+}): SignedEnvelopePreflight {
+  const sequence = (() => {
+    if (params.accountSequence === undefined) {
+      return { status: "unknown" as const, detail: "Account sequence could not be read." };
     }
-  } catch {
-    // Non-G or unparseable source
-  }
-
-  return { matches: false, hasMatchingSigner: false };
-}
-
-export function summarizeOperation(op: any): DecodedOperationSummary {
-  if (op.type === "invokeHostFunction") {
-    const func = op.func;
-    if (func && (func.type === "hostFunctionTypeInvokeContract" || func.invokeContract)) {
-      const invoke = func.invokeContract || (func.value as any);
-      if (invoke && invoke.contractAddress && invoke.functionName) {
-        try {
-          const contract = Address.fromScAddress(invoke.contractAddress).toString();
-          const fnName = invoke.functionName.bytes
-            ? Buffer.from(invoke.functionName.bytes).toString("utf8")
-            : invoke.functionName.toString();
-          const rawArgs = invoke.args ?? [];
-          const args = rawArgs.map((arg: xdr.ScVal) => {
-            try {
-              return scValToNative(arg);
-            } catch {
-              return arg.toXDR("base64");
-            }
-          });
-          return {
-            type: op.type,
-            summary: `Invoke ${fnName} on ${contract}`,
-            supported: true,
-            contract,
-            functionName: fnName,
-            args,
-          };
-        } catch (e) {
-          return {
-            type: op.type,
-            summary: "InvokeContract with unparseable fields",
-            supported: false,
-            unsupportedReason: e instanceof Error ? e.message : String(e),
-          };
+    const expected = BigInt(params.accountSequence) + 1n;
+    const envelopeSequence = BigInt(params.sequence);
+    if (envelopeSequence === expected) {
+      return { status: "current" as const, detail: `Sequence ${params.sequence} is next.` };
+    }
+    return envelopeSequence < expected
+      ? {
+          status: "stale" as const,
+          detail: `Envelope sequence ${params.sequence} is behind the next account sequence ${expected}.`,
         }
-      }
+      : {
+          status: "ahead" as const,
+          detail: `Envelope sequence ${params.sequence} is ahead of the next account sequence ${expected}.`,
+        };
+  })();
+
+  const expiration = (() => {
+    if (!params.timeBounds || params.timeBounds.maxTime === "0") {
+      return { status: "not_bounded" as const, detail: "Envelope has no maximum time bound." };
+    }
+    if (params.ledgerCloseTime === undefined) {
+      return { status: "unknown" as const, detail: "Latest ledger close time could not be read." };
+    }
+    const ledgerCloseTime = Number(params.ledgerCloseTime);
+    const minTime = Number(params.timeBounds.minTime);
+    const maxTime = Number(params.timeBounds.maxTime);
+    if (!Number.isFinite(ledgerCloseTime) || !Number.isFinite(maxTime)) {
+      return {
+        status: "unknown" as const,
+        detail: "Envelope or ledger time bounds are unavailable.",
+      };
+    }
+    if (ledgerCloseTime >= maxTime) {
+      return {
+        status: "expired" as const,
+        detail: "Latest ledger close time is at or past the envelope expiration.",
+      };
+    }
+    if (minTime > 0 && ledgerCloseTime < minTime) {
+      return {
+        status: "not_yet_valid" as const,
+        detail: "Latest ledger close time is before the envelope start time.",
+      };
     }
     return {
-      type: op.type,
-      summary: `Unsupported host function: ${func?.type ?? "unknown"}`,
-      supported: false,
-      unsupportedReason: `Host function type '${func?.type ?? "unknown"}' is not supported for manual review`,
+      status: "active" as const,
+      detail: "Envelope time bounds include the latest ledger close time.",
     };
-  }
-
-  if (op.type === "payment") {
-    return {
-      type: op.type,
-      summary: `Payment ${op.amount} to ${op.destination}`,
-      supported: true,
-    };
-  }
-
-  if (op.type === "changeTrust") {
-    return {
-      type: op.type,
-      summary: "Change trust for asset",
-      supported: true,
-    };
-  }
+  })();
 
   return {
-    type: op.type,
-    summary: `Unsupported operation: ${op.type}`,
-    supported: false,
-    unsupportedReason: `Operation type '${op.type}' is not supported for safe broadcast review`,
+    checkedAt: params.checkedAt ?? new Date().toISOString(),
+    sequence,
+    expiration,
   };
 }
 
-export function inspectSignedEnvelope(
-  xdrString: string,
-  expectedPassphrase: string = NETWORK.passphrase,
-  currentTimeSec: number = Math.floor(Date.now() / 1000),
-): EnvelopeInspectionResult {
-  const cleanXdr = (xdrString ?? "").trim();
-  const baseResult: EnvelopeInspectionResult = {
-    valid: false,
-    canSubmit: false,
-    networkMatch: false,
-    networkPassphrase: expectedPassphrase,
-    hasSignatures: false,
-    signaturesCount: 0,
-    operations: [],
-    verifiedFields: [],
-    unsupportedFields: [],
-    blockReasons: [],
-  };
-
-  if (!cleanXdr) {
-    baseResult.blockReasons.push("XDR string is empty");
-    return baseResult;
-  }
-
-  let tx: Transaction;
-  try {
-    const parsed = TransactionBuilder.fromXDR(cleanXdr, expectedPassphrase);
-    if (!("operations" in parsed)) {
-      baseResult.blockReasons.push("FeeBump transactions are outside v1 envelope review scope");
-      return baseResult;
-    }
-    tx = parsed as Transaction;
-  } catch (error) {
-    baseResult.blockReasons.push(`Malformed envelope XDR: ${stringifyError(error)}`);
-    return baseResult;
-  }
-
-  baseResult.valid = true;
-  baseResult.sourceAccount = tx.source;
-  baseResult.sequenceNumber = tx.sequence;
-  baseResult.feeStroops = tx.fee;
-
-  baseResult.verifiedFields.push(`Source account: ${tx.source}`);
-  baseResult.verifiedFields.push(`Sequence: ${tx.sequence}`);
-  baseResult.verifiedFields.push(`Fee: ${tx.fee} stroops`);
-
-  const signaturesCount = tx.signatures?.length ?? 0;
-  baseResult.signaturesCount = signaturesCount;
-  baseResult.hasSignatures = signaturesCount > 0;
-  if (!baseResult.hasSignatures) {
-    baseResult.blockReasons.push("Envelope has no signatures");
-  } else {
-    baseResult.verifiedFields.push(`Signatures: ${signaturesCount} signature(s) present`);
-  }
-
-  const netCheck = verifyEnvelopeNetworkPassphrase(tx, expectedPassphrase);
-  baseResult.networkMatch = netCheck.matches;
-  if (netCheck.detectedNetwork) {
-    baseResult.detectedNetwork = netCheck.detectedNetwork;
-    baseResult.blockReasons.push(
-      `Network mismatch: envelope signed for '${netCheck.detectedNetwork}', but dashboard is on '${expectedPassphrase}'`,
-    );
-  } else if (baseResult.hasSignatures && !netCheck.matches) {
-    baseResult.blockReasons.push(
-      `Network mismatch: signatures do not verify against active network '${expectedPassphrase}'`,
-    );
-  } else if (netCheck.matches) {
-    baseResult.verifiedFields.push(`Network binding verified: ${expectedPassphrase}`);
-  }
-
-  const maxTimeStr = tx.timeBounds?.maxTime;
-  const maxTime = maxTimeStr ? Number(maxTimeStr) : 0;
-  const isExpired = maxTime > 0 && currentTimeSec >= maxTime;
-  baseResult.timeBounds = {
-    ...(tx.timeBounds?.minTime !== undefined ? { minTime: tx.timeBounds.minTime } : {}),
-    ...(maxTimeStr !== undefined ? { maxTime: maxTimeStr } : {}),
-    expired: isExpired,
-  };
-
-  if (isExpired) {
-    baseResult.blockReasons.push(`Transaction expired at timestamp ${maxTime} (current: ${currentTimeSec})`);
-  } else if (maxTime > 0) {
-    baseResult.verifiedFields.push(`Expiration verified: valid until ${maxTime}`);
-  }
-
-  for (const op of tx.operations) {
-    const summary = summarizeOperation(op);
-    baseResult.operations.push(summary);
-    if (!summary.supported) {
-      baseResult.unsupportedFields.push(summary.unsupportedReason ?? summary.type);
-      baseResult.blockReasons.push(`Contains unsupported operation: ${summary.type}`);
-    } else {
-      baseResult.verifiedFields.push(`Operation: ${summary.summary}`);
-    }
-  }
-
-  baseResult.canSubmit =
-    baseResult.valid &&
-    baseResult.networkMatch &&
-    !isExpired &&
-    baseResult.hasSignatures &&
-    baseResult.unsupportedFields.length === 0 &&
-    baseResult.blockReasons.length === 0;
-
-  return baseResult;
+/** Read the account sequence and latest ledger time used by the advisory preflight. */
+export async function preflightSignedEnvelope(
+  server: rpc.Server,
+  envelope: Transaction | FeeBumpTransaction,
+): Promise<SignedEnvelopePreflight> {
+  const transaction = envelope instanceof FeeBumpTransaction ? envelope.innerTransaction : envelope;
+  const [accountResult, ledgerResult] = await Promise.allSettled([
+    server.getAccount(transaction.source),
+    server.getLatestLedger(),
+  ]);
+  return evaluateSignedEnvelopePreflight({
+    sequence: transaction.sequence,
+    ...(transaction.timeBounds === undefined ? {} : { timeBounds: transaction.timeBounds }),
+    ...(accountResult.status === "fulfilled"
+      ? { accountSequence: accountResult.value.sequenceNumber() }
+      : {}),
+    ...(ledgerResult.status === "fulfilled"
+      ? { ledgerCloseTime: ledgerResult.value.closeTime }
+      : {}),
+  });
 }
