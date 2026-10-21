@@ -281,6 +281,14 @@ function receiptTransaction(label: string, result: InvokeResult): DeploymentRece
         ledger: null,
         detail: result.detail ? redactDiagnostics(result.detail) : result.detail,
       };
+    case "ambiguous":
+      return {
+        operation: label,
+        outcome: "ambiguous",
+        hash: result.hash,
+        ledger: null,
+        detail: result.detail ? redactDiagnostics(result.detail) : result.detail,
+      };
     case "refused":
       return {
         operation: label,
@@ -373,6 +381,18 @@ export function compileDeploymentReceipt(input: DeploymentReceiptInput): Deploym
         "Create transaction",
         "unavailable",
         "The create transaction was exported unsigned; nothing was broadcast.",
+      ),
+    );
+  } else if (createStep.result.kind === "ambiguous") {
+    checks.push(
+      check(
+        "contract-created",
+        "Create transaction",
+        "unavailable",
+        redactDiagnostics(
+          `The create transaction was broadcast and the network never reported an outcome, ` +
+            `so whether it landed is unknown: ${createStep.result.detail}`,
+        ),
       ),
     );
   } else {
