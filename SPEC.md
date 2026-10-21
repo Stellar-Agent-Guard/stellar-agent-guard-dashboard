@@ -164,6 +164,14 @@ Details that are load-bearing rather than incidental:
   (`describeRejectedResult`) so the host's own reason is shown instead of a bare "trapped".
 - **Refusals have no hash by construction.** A refused call was never broadcast, so the console says
   so explicitly rather than showing a blank where a transaction hash would go.
+- **Only reads are retried, and an unanswered broadcast is its own outcome.** The enforced simulation
+  and the inclusion poll are questions to the network, so a throttled or timed-out one is repeated on
+  bounded backoff (`withBackoff`, `safety: "idempotent-read"`). A broadcast is not a question: it is
+  attempted exactly once, and a timeout there becomes `ambiguous` — sent, fate unknown, hash named —
+  because re-sending would not retry the first freeze, it would risk a second one. A declined wallet
+  prompt is a third thing again (`WalletCancellationError`: nothing was signed, nothing was sent, and
+  only the operator can choose to ask again). `failed` is reserved for what the ledger actually said:
+  included, and rejected. (issue #344)
 
 ### What the console can and cannot do as admin
 
