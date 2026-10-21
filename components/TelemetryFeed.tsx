@@ -33,6 +33,7 @@ import {
   type VerdictFilter,
 } from "../lib/guard/telemetryExport.ts";
 import { severityFor } from "../lib/guard/feedSeverity.ts";
+import { formatEventTimestamp } from "../lib/guard/time.ts";
 import { decodeUrlState, writeUrlState } from "../lib/guard/urlState.ts";
 import {
   FEED_GUARD_CAP,
@@ -549,8 +550,8 @@ export function TelemetryFeed() {
              empty result, so it renders as skeleton rows in the same table
              shape the events will land in — not as an empty-looking message
              and not as zeros. */
-          <div className="scrolly" aria-busy="true">
-            <table className={`events ${densityState === "compact" ? "compact" : ""}`}>
+          <div className="scrolly table-stack" aria-busy="true">
+            <table className={`events stack ${densityState === "compact" ? "compact" : ""}`}>
               {feedHead}
               <tbody aria-hidden="true">
                 {[0, 1, 2].map((row) => (
@@ -596,8 +597,8 @@ export function TelemetryFeed() {
           see them.
         </p>
       ) : (
-        <div className="scrolly">
-          <table className={`events ${densityState === "compact" ? "compact" : ""}`}>
+        <div className="scrolly table-stack">
+          <table className={`events stack ${densityState === "compact" ? "compact" : ""}`}>
             {feedHead}
             <tbody>
               {rows.map((event) => (
@@ -656,13 +657,22 @@ const TelemetryRow = memo(function TelemetryRow({
 }) {
   const severity = severityFor(event);
   const iso = event.ledgerClosedAt ?? event.observedAt ?? null;
+  // Both renderings of the same instant: the local wall time with an explicit
+  // zone label for at-a-glance reading, and the stable UTC value to quote in a
+  // report. The UTC value comes from the parsed instant, so it is unaffected
+  // by this operator's zone or by DST; invalid timestamps yield null and the
+  // cell falls back to the relative time plus `—`.
+  const timestamp = formatEventTimestamp(iso);
   return (
     <tr className={`severity-${severity}`} data-severity={severity} data-stream={event.source}>
-      <td>
+      <td data-label="Event">
+        {/* The severity tier is already colour-coded by the row class; this is the
+            same fact as text, so reduced-motion or monochrome reading keeps it. */}
+        <span className="visually-hidden">Severity: {severity}. </span>
         <div>{labelFor(event)}</div>
         <div className="tiny muted mono">{describeGuardEvent(event)}</div>
       </td>
-      <td>
+      <td data-label="Decision">
         {event.decision ? (
           event.decision.result === "blocked" ? (
             <span className="pill danger">{event.decision.reason ?? "blocked"}</span>
@@ -676,7 +686,7 @@ const TelemetryRow = memo(function TelemetryRow({
           <div className="tiny muted">{explainReason(event.decision.reason)}</div>
         )}
       </td>
-      <td>
+      <td data-label="Guard">
         {guardLabel !== null ? (
           <span className="pill" title={event.contractId ?? "unknown contract"}>
             {guardLabel}
@@ -685,20 +695,31 @@ const TelemetryRow = memo(function TelemetryRow({
           <span className="tiny muted">—</span>
         )}
       </td>
-      <td>
+      <td data-label="Source">
         <span className={`pill${event.source === "diagnostic" ? " warn" : ""}`}>
           {event.source}
         </span>
       </td>
-      <td className="mono tiny">
+      <td className="mono tiny" data-label="Time">
         {iso ? <TimeAgo iso={iso} /> : "—"}
+        {timestamp && (
+          <div
+            className="muted"
+            style={{ marginTop: 2 }}
+            title={`${timestamp.local} ${timestamp.zoneLabel} · ${timestamp.utc} UTC`}
+          >
+            {timestamp.local} {timestamp.zoneLabel}
+            <br />
+            {timestamp.utc} UTC
+          </div>
+        )}
         {event.ledger ? (
           <div className="muted" style={{ marginTop: 2 }}>
             L{event.ledger}
           </div>
         ) : null}
       </td>
-      <td>
+      <td data-label="Transaction">
         {event.transactionHash ? (
           <TxHashCell hash={event.transactionHash} />
         ) : (
@@ -712,12 +733,12 @@ const TelemetryRow = memo(function TelemetryRow({
 const feedHead = (
   <thead>
     <tr>
-      <th>Event</th>
-      <th>Decision</th>
-      <th>Guard</th>
-      <th>Source</th>
-      <th>Time</th>
-      <th>Transaction</th>
+      <th scope="col">Event</th>
+      <th scope="col">Decision</th>
+      <th scope="col">Guard</th>
+      <th scope="col">Source</th>
+      <th scope="col">Time</th>
+      <th scope="col">Transaction</th>
     </tr>
   </thead>
 );

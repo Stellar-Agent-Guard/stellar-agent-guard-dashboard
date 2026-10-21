@@ -18,6 +18,7 @@ import {
 } from "../lib/guard/presets.ts";
 import { installPolicy, revokePolicy } from "../lib/guard/guardOps.ts";
 import { historyShortcut, useHistoryState } from "../lib/guard/useHistoryState.ts";
+import { usePwaActivity } from "../lib/guard/usePwaActivity.ts";
 import { computePolicyDiff, type PolicyDiff } from "../lib/guard/policyDiff.ts";
 import { PolicyDiffModal } from "./PolicyDiffModal.tsx";
 import type { InvokeResult } from "../lib/guard/submit.ts";
@@ -61,8 +62,8 @@ type PolicyOutcome =
   { kind: "invalid"; issues: string[] } | { kind: "invoked"; result: InvokeResult };
 
 /** Speak a policy write's outcome, with the reason when it did not land. */
-function speakPolicy(operation: PolicyOperation, reason: string): void {
-  const spoken = policyFailed(operation, reason);
+function speakPolicy(operation: PolicyOperation, reason: string, guard?: string): void {
+  const spoken = policyFailed(operation, reason, guard);
   announce(spoken.message, spoken.priority);
 }
 
@@ -80,16 +81,18 @@ function speakPolicyOutcome(
   operation: PolicyOperation,
   outcome: PolicyOutcome,
   exportOnly: boolean,
+  guard?: string,
 ): void {
   if (outcome.kind === "invalid") {
     speakPolicy(
       operation,
       `the policy was not valid, so nothing was sent: ${outcome.issues.join("; ")}`,
+      guard,
     );
     return;
   }
   if (outcome.result.kind === "submitted") {
-    const spoken = policyConfirmed(operation);
+    const spoken = policyConfirmed(operation, guard);
     announce(spoken.message, spoken.priority);
     // The write landed, so the next poll should not repeat it. Recorded here
     // because this is the only place that knows what the operator just did;
@@ -105,6 +108,7 @@ function speakPolicyOutcome(
         ? "the transaction was only exported, so nothing was submitted"
         : "the write did not complete",
     ),
+    guard,
   );
 }
 
@@ -123,6 +127,10 @@ export function PolicyForm() {
     canRedo,
   } = useHistoryState<PolicyDraft | null>(null);
   const [busy, setBusy] = useState(false);
+  // Unsaved work a service-worker update must not discard (#398): an edited
+  // policy draft, and the write itself while the wallet is approving it.
+  usePwaActivity(draft !== null, "draft");
+  usePwaActivity(busy, "write");
   const [outcome, setOutcome] = useState<PolicyOutcome | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingDiff, setPendingDiff] = useState<PolicyDiff | null>(null);
@@ -350,14 +358,14 @@ export function PolicyForm() {
       if (result.kind === "invoked" && result.result.kind === "submitted") {
         notifyTabs("POLICY_UPDATED", { payload: { operation: "set_policy" } });
       }
-      speakPolicyOutcome("set_policy", result, exportOnly);
+      speakPolicyOutcome("set_policy", result, exportOnly, guard ?? undefined);
       if (!exportOnly) {
         await refresh();
       }
     } catch (caught) {
       const detail = caught instanceof Error ? caught.message : String(caught);
       setError(detail);
-      speakPolicy("set_policy", detail);
+      speakPolicy("set_policy", detail, guard ?? undefined);
     } finally {
       setBusy(false);
     }
@@ -373,14 +381,19 @@ export function PolicyForm() {
       if (result.kind === "submitted") {
         notifyTabs("POLICY_UPDATED", { payload: { operation: "revoke_policy" } });
       }
-      speakPolicyOutcome("revoke_policy", { kind: "invoked", result }, exportOnly);
+      speakPolicyOutcome(
+        "revoke_policy",
+        { kind: "invoked", result },
+        exportOnly,
+        guard ?? undefined,
+      );
       if (!exportOnly) {
         await refresh();
       }
     } catch (caught) {
       const detail = caught instanceof Error ? caught.message : String(caught);
       setError(detail);
-      speakPolicy("revoke_policy", detail);
+      speakPolicy("revoke_policy", detail, guard ?? undefined);
     } finally {
       setBusy(false);
     }
@@ -1032,6 +1045,14 @@ export function OutcomeBlock({
         <span className="t">
           Refused during {result.stage} — nothing was broadcast, so this cost nothing
         </span>
+        <span className="mono tiny">{result.detail}</span>
+      </div>
+    );
+  }
+  if (result.kind === "cancelled") {
+    return (
+      <div className="warn notice" data-testid="policy-form-cancelled">
+        <span className="t">Transaction signing cancelled — nothing was broadcast</span>
         <span className="mono tiny">{result.detail}</span>
       </div>
     );
