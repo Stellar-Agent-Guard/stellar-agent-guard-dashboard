@@ -4,6 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { GuardStatus } from "stellar-agent-guard-sdk";
 import type { rpc } from "@stellar/stellar-sdk";
 import type { InvokeResult } from "../lib/guard/submit.ts";
+import { previewAuthorizationSummary } from "../lib/guard/submit.ts";
+import { authorizationId } from "../lib/guard/authorizationSummary.ts";
+import { NETWORK } from "../lib/guard/network.ts";
+import { AuthorizationSummaryBlock } from "./AuthorizationSummary.tsx";
 import {
   freezeGuard,
   simulateFreeze,
@@ -270,7 +274,15 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [acknowledged, setAcknowledged] = useState(false);
+  /**
+   * Which authorization summary the operator ticked the box for, by id (#343).
+   *
+   * The acknowledgement is stored against the summary rather than as a boolean so
+   * it invalidates itself: if the guard, the connected account or the operation
+   * changes while the dialog is open, the id changes, the box no longer matches,
+   * and "Sign freeze" goes back to disabled without an effect watching for it.
+   */
+  const [acknowledgedFor, setAcknowledgedFor] = useState<string | null>(null);
   // The dry-run result is kept separate from `report` so a simulation can never
   // be mistaken for a freeze that happened. `simulating` disables the button
   // while the read-only call is in flight.
@@ -305,6 +317,27 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
   // of overwriting fresher state with a stale number.
   const balanceToken = useRef(0);
   const confirming = phase === "confirming";
+
+  /**
+   * What the wallet will be asked to authorize, read out of the transaction the
+   * freeze is built from rather than out of the panel's own props (issue #343).
+   *
+   * Derived during the render that shows the dialog, and handed to the write when
+   * the operator confirms it, so the summary on screen and the summary the
+   * pipeline checks are the same reading of the same envelope. `null` — an
+   * account this console cannot name — is what disables the acknowledgement,
+   * because a signature nobody could describe is not one anybody can approve.
+   */
+  const freezeAuthorization = confirming
+    ? previewAuthorizationSummary({
+        contract: guard,
+        fn: "freeze",
+        admin: wallet?.address ?? "",
+        passphrase: NETWORK.passphrase,
+      })
+    : null;
+  const freezeAuthorizationId = freezeAuthorization ? authorizationId(freezeAuthorization) : null;
+  const acknowledged = acknowledgedFor !== null && acknowledgedFor === freezeAuthorizationId;
 
   /**
    * Read the guard's live XLM balance — the threshold input for the freeze
@@ -370,7 +403,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
     returnFocusRef: triggerRef,
     onDismiss: () => {
       setPhase("idle");
-      setAcknowledged(false);
+      setAcknowledgedFor(null);
     },
   });
 
@@ -425,7 +458,17 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
 
       const result =
         action === "freeze"
-          ? await freeze({ server, signer: walletSigner, guard, exportOnly })
+          ? await freeze({
+              server,
+              signer: walletSigner,
+              guard,
+              exportOnly,
+              // The summary the dialog just showed, carried into the write so the
+              // pipeline can check it against the transaction it builds. `null`
+              // here means the dialog had nothing to show, and the write is
+              // refused rather than prompted.
+              authorization: freezeAuthorization,
+            })
           : await unfreeze({ server, signer: walletSigner, guard, exportOnly });
 
       // Surface any refused-decision diagnostics the write produced, so a refusal
@@ -493,7 +536,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
       // spoken now: nothing else on screen will change once focus is restored.
       speakFreezeOutcome(action, false, detail, undefined, guard);
       setPhase("idle");
-      setAcknowledged(false);
+      setAcknowledgedFor(null);
     }
   }
 
@@ -533,7 +576,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
             disabled={freezeControl.disabled}
             title={freezeControl.title}
             onClick={() => {
-              setAcknowledged(false);
+              setAcknowledgedFor(null);
               setChallengeInput("");
               setPhase("confirming");
               setReport(null);
@@ -591,12 +634,16 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
               -able <code>freeze()</code> call on{" "}
               <span className="mono">{guard.slice(0, 10)}…</span>.
             </p>
+            <AuthorizationSummaryBlock authorization={freezeAuthorization} purpose="this freeze" />
             <div className="checkline">
               <input
                 id="ack-freeze"
                 type="checkbox"
                 checked={acknowledged}
-                onChange={(event) => setAcknowledged(event.target.checked)}
+                disabled={freezeAuthorizationId === null}
+                onChange={(event) =>
+                  setAcknowledgedFor(event.target.checked ? freezeAuthorizationId : null)
+                }
               />
               <label htmlFor="ack-freeze">
                 I understand this halts the agent&apos;s spending, and that undoing it needs a
