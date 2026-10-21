@@ -286,6 +286,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const unfreezeRef = useRef<HTMLButtonElement>(null);
   const lockNetwork = wallet?.networkPassphrase ?? NETWORK.passphrase;
 
   useEffect(() => {
@@ -368,6 +369,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
     open: confirming,
     containerRef: dialogRef,
     returnFocusRef: triggerRef,
+    fallbackFocusRef: unfreezeRef,
     onDismiss: () => {
       setPhase("idle");
       setAcknowledged(false);
@@ -565,6 +567,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
           </button>
           <button
             className="secondary"
+            ref={unfreezeRef}
             disabled={unfreezeControl.disabled}
             title={unfreezeControl.title}
             onClick={() => void run("unfreeze")}
