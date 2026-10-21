@@ -6,7 +6,12 @@ import {
   assembleFromSimulation,
   diagnosticEventsOf,
   describeRejectedResult,
+  isWalletCancellation,
+  actionableCancellationMessage,
+  invokeWithWallet,
 } from "../../lib/guard/submit.ts";
+import { WalletUserRejectedError } from "../../lib/guard/walletConnector.ts";
+import { loadTxHistory, clearTxHistory, TX_HISTORY_STORAGE_KEY } from "../../lib/guard/txHistory.ts";
 import {
   Account,
   Address,
@@ -273,5 +278,80 @@ describe("describeRejectedResult", () => {
   it("returns a fallback when the object has no result data", () => {
     const description = describeRejectedResult({});
     assert.equal(description, "no result data returned by the network");
+  });
+});
+
+describe("wallet cancellation handling (#325)", () => {
+  it("classifies connector-specific rejection and cancellation errors correctly", () => {
+    assert.equal(isWalletCancellation(new WalletUserRejectedError("freighter", "sign transaction")), true);
+    assert.equal(isWalletCancellation(new WalletUserRejectedError("albedo", "sign transaction")), true);
+    assert.equal(isWalletCancellation(new WalletUserRejectedError("xbull", "sign transaction")), true);
+
+    // Connector messages
+    assert.equal(isWalletCancellation(new Error("User declined access")), true);
+    assert.equal(isWalletCancellation(new Error("Request was rejected by the user")), true);
+    assert.equal(isWalletCancellation(new Error("Action rejected by user")), true);
+    assert.equal(isWalletCancellation(new Error("User cancelled the request")), true);
+    assert.equal(isWalletCancellation(new Error("Transaction signing aborted")), true);
+
+    // Unrelated errors
+    assert.equal(isWalletCancellation(new Error("Network connection timed out")), false);
+    assert.equal(isWalletCancellation(new Error("tx_bad_seq")), false);
+    assert.equal(isWalletCancellation(null), false);
+  });
+
+  it("provides actionable user-facing guidance for cancellations", () => {
+    const msg = actionableCancellationMessage(new Error("User declined"));
+    assert.match(msg, /declined in your wallet/i);
+    assert.match(msg, /nothing was sent/i);
+    assert.match(msg, /retry/i);
+
+    const typedMsg = actionableCancellationMessage(new WalletUserRejectedError("freighter", "sign"));
+    assert.match(typedMsg, /declined to sign in Freighter/i);
+  });
+
+  it("records cancellation in local history with hash: null and terminal status 'cancelled'", async () => {
+    clearTxHistory();
+
+    const mockSigner = {
+      address: SIGNER_ADDRESS,
+      signAuthEntry: async (xdrStr: string) => xdrStr,
+      signTransaction: async () => {
+        throw new WalletUserRejectedError("freighter", "sign transaction");
+      },
+    };
+
+    const mockAccount = new Account(SIGNER_ADDRESS, "100");
+    const mockServer = {
+      getAccount: async () => mockAccount,
+      simulateTransaction: async () => ({
+        transactionData: new SorobanDataBuilder().build(),
+        minResourceFee: "100",
+        result: { auth: [], retval: xdr.ScVal.scvVoid() },
+      }),
+    };
+
+    const result = await invokeWithWallet({
+      server: mockServer as any,
+      contract: GUARD_CONTRACT,
+      fn: "freeze",
+      args: [],
+      signer: mockSigner,
+      passphrase: PASSPHRASE,
+    });
+
+    assert.equal(result.kind, "cancelled");
+    if (result.kind === "cancelled") {
+      assert.match(result.detail, /declined/i);
+    }
+
+    const history = loadTxHistory();
+    assert.equal(history.length, 1);
+    const entry = history[0]!;
+    assert.equal(entry.status, "cancelled");
+    assert.equal(entry.hash, null, "Never assign a transaction hash for a request cancelled before submission");
+    assert.equal(entry.operation, "freeze");
+    assert.ok(entry.detail);
+    assert.match(entry.detail!, /declined/i);
   });
 });
