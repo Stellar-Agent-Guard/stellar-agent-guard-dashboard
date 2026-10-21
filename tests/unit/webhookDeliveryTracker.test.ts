@@ -43,7 +43,7 @@ describe("WebhookDeliveryTracker", () => {
       // Simulate time passing
       const originalDateNow = Date.now;
       let counter = 0;
-      Date.now = () => originalDateNow() + (++counter * 1000);
+      Date.now = () => originalDateNow() + ++counter * 1000;
 
       const r2 = tracker.enqueue("https://example.com", "alert-1");
 
@@ -213,7 +213,7 @@ describe("WebhookDeliveryTracker", () => {
 
     test("evicts records older than 24 hours", () => {
       const now = Date.now();
-      const oldTimestamp = now - (25 * 60 * 60 * 1000); // 25 hours ago
+      const oldTimestamp = now - 25 * 60 * 60 * 1000; // 25 hours ago
 
       // Manually insert an old record
       const oldRecord = tracker.enqueue("https://old.com", "old");

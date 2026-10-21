@@ -98,11 +98,7 @@ export function compileIncidentSummary(
     captureTime: new Date().toISOString(),
     network: networkName,
     guardAddress: snapshot?.guard ?? "Unknown",
-    freezeStatus: status
-      ? status.admin_frozen
-        ? "frozen"
-        : "clear"
-      : "unknown",
+    freezeStatus: status ? (status.admin_frozen ? "frozen" : "clear") : "unknown",
     dmsStatus: status
       ? isDeadManFrozen(status)
         ? "FIRED"
