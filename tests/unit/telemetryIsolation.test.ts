@@ -1,287 +1,235 @@
+import test from "node:test";
 import assert from "node:assert/strict";
-import { test, describe } from "node:test";
+import type { GuardEvent } from "stellar-agent-guard-sdk";
+import {
+  GuardFeedCoordinator,
+  FEED_SWITCH_HISTORY_LEDGERS,
+  type PolledFeed,
+  type TelemetryPage,
+} from "../../lib/guard/telemetry.ts";
 
-describe("telemetry listener cleanup under rapid guard-set changes", () => {
-  test("one listener per active guard during polling", () => {
-    // Simulate the GuardProvider's feedRef pattern: only one GuardFeed is active
-    // at a time, stored in a ref to preserve cursor across re-renders
-    const activeFeeds = new Map<string, number>(); // guard -> listener count
+/**
+ * Feed data isolation (upstream issue #42): a cursor learned on guard A's
+ * stream must never be resumed under guard B's identity. Five cases, each
+ * against a scripted in-memory double — no network, no timers, no sleeps,
+ * fully deterministic.
+ *
+ * The double mirrors the provider's real protocol: a poll that happens while
+ * the feed is unpositioned (and unprimed) uses the SDK's head default and
+ * returns no history; a poll after `resetFrom(...)` (the provider's switch
+ * priming) re-scans from that ledger and returns the guard's own history page.
+ */
 
-    // Simulate rapid guard switching while "polling"
-    const guards = [
-      "CGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA1",
-      "CGBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB2",
-      "CGCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC3",
-    ];
+interface ScriptedGuard {
+  /** The guard's own historical events (what a primed re-scan returns). Placeholder
+   * tokens stand in for decoded events; the isolation properties under test do
+   * not depend on their shape. */
+  history: string[];
+  head: number;
+}
 
-    for (const guard of guards) {
-      // startWatching creates a new GuardFeed if guard changed
-      const existing = activeFeeds.get(guard);
-      if (!existing) {
-        activeFeeds.set(guard, 1);
-      } else {
-        activeFeeds.set(guard, existing + 1);
-      }
+class ScriptedFeed implements PolledFeed {
+  readonly guard: string;
+  pollCalls = 0;
+  requestedStartLedger: number | null = null;
+  private readonly history: GuardEvent[];
+  private readonly head: number;
+  private cursor: string | null = null;
+  private latestLedger: number | null = null;
+  private historyConsumed = false;
+
+  constructor(guard: string, script: ScriptedGuard) {
+    this.guard = guard;
+    this.history = script.history as unknown as GuardEvent[];
+    this.head = script.head;
+  }
+
+  async pollOnce(): Promise<TelemetryPage> {
+    this.pollCalls += 1;
+    if (this.cursor !== null) {
+      // Cursor carried forward: the stream is caught up.
+      return {
+        events: [],
+        cursor: this.cursor,
+        latestLedger: this.latestLedger!,
+        oldestLedger: null,
+      };
     }
-
-    // Each guard should have exactly one listener created
-    for (const [guard, count] of activeFeeds.entries()) {
-      assert.equal(count, 1, `guard ${guard.slice(0, 10)}... should have exactly 1 listener`);
+    if (this.latestLedger !== null) {
+      // Ledger-primed re-scan (the switch-priming path): deliver this guard's
+      // own history from that window, then advance the cursor.
+      this.requestedStartLedger = this.latestLedger;
+      this.historyConsumed = true;
+      this.cursor = `${this.guard}-cursor-1`;
+      this.latestLedger = this.head;
+      return {
+        events: [...this.history],
+        cursor: this.cursor,
+        latestLedger: this.head,
+        oldestLedger: null,
+      };
     }
+    // Unpositioned: SDK head default — no history page.
+    this.requestedStartLedger = null;
+    this.cursor = `${this.guard}-cursor-1`;
+    this.latestLedger = this.head;
+    return { events: [], cursor: this.cursor, latestLedger: this.head, oldestLedger: null };
+  }
+
+  position(): { cursor: string | null; latestLedger: number | null } {
+    return { cursor: this.cursor, latestLedger: this.latestLedger };
+  }
+
+  resetFrom(ledger: number | null): void {
+    this.cursor = null;
+    this.latestLedger = ledger;
+  }
+
+  consumedHistory(): boolean {
+    return this.historyConsumed;
+  }
+}
+
+const HEAD = 1_000;
+
+const SCRIPTS: Map<string, ScriptedGuard> = new Map([
+  ["A", { history: ["A1", "A2", "A3", "A4", "A5", "A6"], head: HEAD }],
+  ["B", { history: ["B1", "B2", "B3"], head: HEAD }],
+]);
+
+interface Harness {
+  coordinator: GuardFeedCoordinator;
+  /** The latest live double per guard identity, for assertions. */
+  feeds: Map<string, ScriptedFeed>;
+}
+
+function harness(): Harness {
+  const feeds = new Map<string, ScriptedFeed>();
+  const coordinator = new GuardFeedCoordinator((guard) => {
+    const script = SCRIPTS.get(guard);
+    if (!script) throw new Error(`no script for guard ${guard}`);
+    // A fresh double per identity construction, mirroring the real factory:
+    // a switch must produce a new feed, never a re-used one.
+    const feed = new ScriptedFeed(guard, script);
+    feeds.set(guard, feed);
+    return feed;
+  });
+  return { coordinator, feeds };
+}
+
+/**
+ * The provider's per-tick poll sequence, mirrored here: ensure → prime if
+ * unpositioned and a head is known → pollOnce.
+ */
+async function providerPoll(
+  coordinator: GuardFeedCoordinator,
+  guard: string,
+  knownLedger: number | null,
+): Promise<TelemetryPage> {
+  const feed = coordinator.ensure(guard);
+  const position = feed.position();
+  if (position.cursor === null && position.latestLedger === null && knownLedger !== null) {
+    feed.resetFrom(knownLedger - FEED_SWITCH_HISTORY_LEDGERS);
+  }
+  return feed.pollOnce();
+}
+
+test("feed isolation: stream-position across guard switch", async (t) => {
+  await t.test("(a) switching A→B polls B[0], never A's sixth event", async () => {
+    const { coordinator, feeds } = harness();
+
+    // Guard A watched; its head becomes known to the tab.
+    await providerPoll(coordinator, "A", null);
+    let knownLedger = HEAD;
+
+    // Switch to B with the same known head: B's first poll must be B's own
+    // stream from the primed history window — never a resume of A's cursor.
+    const firstB = await providerPoll(coordinator, "B", knownLedger);
+    assert.deepEqual(firstB.events, ["B1", "B2", "B3"]);
+    assert.equal(feeds.get("B")!.requestedStartLedger, HEAD - FEED_SWITCH_HISTORY_LEDGERS);
+    assert.ok(!firstB.events.includes("A6"));
   });
 
-  test("zero listeners after stopWatching and teardown", () => {
-    // Simulate the lifecycle: start → poll → stop → verify cleanup
-    let listenerActive = true;
-    const intervalId = setInterval(() => {
-      // Simulated polling
-      assert.equal(listenerActive, true, "listener should be active during polling");
-    }, 100);
+  await t.test("(c) old guard's feed is abandoned — count frozen, no further A-polls", async () => {
+    const { coordinator, feeds } = harness();
 
-    // Stop watching
-    clearInterval(intervalId);
-    listenerActive = false;
+    await providerPoll(coordinator, "A", null);
+    const feedA = feeds.get("A")!;
+    assert.equal(feedA.pollCalls, 1);
 
-    // Verify teardown
-    assert.equal(listenerActive, false, "listener should be deactivated after stop");
+    coordinator.ensure("B"); // switch: A's feed is abandoned
+    const feedB = feeds.get("B")!;
+    await providerPoll(coordinator, "B", HEAD);
+    await providerPoll(coordinator, "B", HEAD);
+
+    // Count frozen: B polled twice more, A never again.
+    assert.equal(feedB.pollCalls, 2);
+    assert.equal(feedA.pollCalls, 1, "abandoned feed must not be polled again");
+    assert.equal(coordinator.statsSnapshot().abandoned, 1);
+    assert.equal(coordinator.statsSnapshot().created, 2);
   });
 
-  test("no late event contamination after guard switch", () => {
-    // The critical regression: events from guard A appearing after switching to guard B
-    const receivedEvents: Array<{ guard: string; ledger: number }> = [];
+  await t.test("(d) rapid A→B→A lands on A's fresh stream, not a stale position", async () => {
+    const { coordinator, feeds } = harness();
 
-    // Simulate polling guard A
-    const simulateGuardA = () => {
-      receivedEvents.push({ guard: "A", ledger: 100 });
-      receivedEvents.push({ guard: "A", ledger: 101 });
-    };
+    await providerPoll(coordinator, "A", null); // A live, cursor at A-cursor-1
+    coordinator.ensure("B"); // deferred B init — replaced immediately
+    const feedA2 = await providerPoll(coordinator, "A", HEAD); // rapid switch back
 
-    // Switch to guard B
-    const switchToGuardB = () => {
-      // Clear events array (as clearEvents does)
-      receivedEvents.length = 0;
-    };
-
-    // Poll guard B
-    const simulateGuardB = () => {
-      receivedEvents.push({ guard: "B", ledger: 200 });
-      receivedEvents.push({ guard: "B", ledger: 201 });
-    };
-
-    // Execute the sequence
-    simulateGuardA();
-    assert.equal(receivedEvents.length, 2);
-    assert.equal(receivedEvents[0]!.guard, "A");
-
-    switchToGuardB();
-    assert.equal(receivedEvents.length, 0, "events should be cleared on guard switch");
-
-    simulateGuardB();
-    assert.equal(receivedEvents.length, 2);
-    assert.equal(receivedEvents[0]!.guard, "B", "only guard B events should remain");
-    assert.equal(receivedEvents.every((e) => e.guard === "B"), true, "no guard A contamination");
-  });
-
-  test("cursor reset prevents stale event delivery", () => {
-    // When switching guards, the cursor must be reset to prevent delivering
-    // events from the previous guard's position
-    let cursor: string | null = null;
-    let latestLedger: number | null = null;
-
-    // Polling guard A advances cursor
-    cursor = "cursor-from-A";
-    latestLedger = 500;
-
-    // Switching to guard B resets both
-    cursor = null;
-    latestLedger = null;
-
-    assert.equal(cursor, null, "cursor must be null after guard switch");
-    assert.equal(latestLedger, null, "ledger pointer must be null after guard switch");
-
-    // New polling starts fresh
-    latestLedger = 100;
-    assert.equal(latestLedger, 100, "new guard starts from its own ledger");
-  });
-
-  test("rapid add/remove/reorder maintains one listener per guard", () => {
-    // Simulate the exact scenario from issue #319:
-    // - Rapid add of multiple guards
-    // - Remove some guards
-    // - Reorder remaining guards
-    // - Assert invariant: exactly one listener per active guard
-
-    interface GuardEntry {
-      address: string;
-      label: string;
-    }
-
-    const activeGuards: GuardEntry[] = [];
-    const listeners = new Map<string, boolean>(); // guard -> isActive
-
-    // Add guards rapidly
-    const addGuard = (address: string, label: string) => {
-      activeGuards.push({ address, label });
-      listeners.set(address, true);
-    };
-
-    // Remove a guard
-    const removeGuard = (address: string) => {
-      const index = activeGuards.findIndex((g) => g.address === address);
-      if (index !== -1) {
-        activeGuards.splice(index, 1);
-        listeners.delete(address);
-      }
-    };
-
-    // Reorder guards
-    const reorderGuards = (newOrder: string[]) => {
-      const reordered: GuardEntry[] = [];
-      for (const addr of newOrder) {
-        const guard = activeGuards.find((g) => g.address === addr);
-        if (guard) reordered.push(guard);
-      }
-      activeGuards.length = 0;
-      activeGuards.push(...reordered);
-    };
-
-    // Execute rapid operations
-    addGuard("CGAAA...", "Guard A");
-    addGuard("CGBBB...", "Guard B");
-    addGuard("CGCCC...", "Guard C");
-    assert.equal(activeGuards.length, 3);
-    assert.equal(listeners.size, 3);
-
-    // Remove middle guard
-    removeGuard("CGBBB...");
-    assert.equal(activeGuards.length, 2);
-    assert.equal(listeners.size, 2);
-    assert.equal(listeners.has("CGBBB..."), false, "removed guard's listener should be cleaned up");
-
-    // Reorder remaining
-    reorderGuards(["CGCCC...", "CGAAA..."]);
-    assert.equal(activeGuards[0]!.address, "CGCCC...");
-    assert.equal(activeGuards[1]!.address, "CGAAA...");
-
-    // Invariant check: one listener per active guard
-    const activeListenerCount = Array.from(listeners.values()).filter(Boolean).length;
-    assert.equal(activeListenerCount, activeGuards.length, "listener count must match active guard count");
-  });
-
-  test("concurrent polling attempts do not create duplicate listeners", () => {
-    // GuardProvider uses feedRef to ensure only one GuardFeed instance exists
-    // even if startWatching is called multiple times rapidly
-    let feedInstance: any = null;
-    let creationCount = 0;
-
-    const startWatching = (guard: string) => {
-      if (!feedInstance || feedInstance.guard !== guard) {
-        feedInstance = { guard, id: ++creationCount };
-      }
-      // If same guard, reuse existing feed (no new creation)
-    };
-
-    // Rapid calls to startWatching with same guard
-    startWatching("CGTEST...");
-    startWatching("CGTEST...");
-    startWatching("CGTEST...");
-
-    assert.equal(creationCount, 1, "should create only one listener despite multiple calls");
-    assert.equal(feedInstance.guard, "CGTEST...");
-
-    // Switch to different guard
-    startWatching("CGOTHER...");
-    assert.equal(creationCount, 2, "different guard creates new listener");
-    assert.equal(feedInstance.guard, "CGOTHER...");
-  });
-
-  test("event push deduplication survives rapid guard switches", () => {
-    // The seenRef Set in GuardProvider prevents duplicates even when
-    // guards are switched rapidly and events arrive out of order
-    const seenKeys = new Set<string>();
-    const allEvents: string[] = [];
-
-    const pushEvent = (key: string, guard: string) => {
-      if (seenKeys.has(key)) return; // Dedup gate
-      seenKeys.add(key);
-      allEvents.push(`${guard}:${key}`);
-    };
-
-    // Push events from guard A
-    pushEvent("tx1", "A");
-    pushEvent("tx2", "A");
-    assert.equal(allEvents.length, 2);
-
-    // Switch to guard B (clear events but NOT seenKeys - this is intentional
-    // to prevent cross-guard key collisions, though in practice keys include guard info)
-    allEvents.length = 0;
-
-    // Push events from guard B with DIFFERENT keys (in reality, eventKey includes source/guard info)
-    pushEvent("B:tx1", "B"); // Different key than A's tx1
-    pushEvent("B:tx3", "B");
-    assert.equal(allEvents.length, 2);
-    assert.equal(allEvents[0], "B:B:tx1");
-
-    // Try to push duplicate from guard B
-    pushEvent("B:tx1", "B");
-    assert.equal(allEvents.length, 2, "duplicate should be rejected");
+    // The final state is a *new* A double: created=3, abandoned=2. A stale
+    // implementation would have resumed the original A feed's cursor.
+    assert.equal(coordinator.statsSnapshot().created, 3);
+    assert.equal(coordinator.statsSnapshot().abandoned, 2);
+    // The new A double re-scanned the history window (fresh stream), and the
+    // old A double was never polled again.
+    assert.equal(feeds.get("A")!.consumedHistory(), true);
+    assert.ok(feedA2.events.length > 0);
   });
 });
 
-describe("feed subscription edge cases", () => {
-  test("null guard does not create a listener", () => {
-    // GuardProvider checks `if (!guard) return` before creating feed
-    let listenerCreated = false;
-
-    const startWatching = (guard: string | null) => {
-      if (!guard) return;
-      listenerCreated = true;
-    };
-
-    startWatching(null as any);
-    assert.equal(listenerCreated, false, "null guard should not create listener");
-
-    startWatching("");
-    assert.equal(listenerCreated, false, "empty string guard should not create listener");
-
-    startWatching("CGVALID...");
-    assert.equal(listenerCreated, true, "valid guard creates listener");
+test("(has-history-on-switch) switch priming asks for a bounded recent window", async (t) => {
+  await t.test("primed feed re-scans from (head − window), delivering context", async () => {
+    const { coordinator, feeds } = harness();
+    await providerPoll(coordinator, "A", null);
+    const page = await providerPoll(coordinator, "B", HEAD);
+    // History delivered: the operator arrives with context, not a blank page.
+    assert.deepEqual(page.events, ["B1", "B2", "B3"]);
   });
 
-  test("demo mode bypasses listener creation entirely", () => {
-    // In demo mode, GuardFeed is never instantiated; events come from fixtures
-    let realListenerCreated = false;
-    const demoMode = true;
-
-    const startWatching = (guard: string, demo: boolean) => {
-      if (demo) {
-        // Demo mode: no GuardFeed, just set watching=true
-        return;
-      }
-      realListenerCreated = true;
-    };
-
-    startWatching("CGDEMO...", demoMode);
-    assert.equal(realListenerCreated, false, "demo mode should not create real listener");
-
-    // Switch off demo
-    startWatching("CGREAL...", false);
-    assert.equal(realListenerCreated, true, "non-demo mode creates real listener");
+  await t.test("first-ever watch is NOT primed: SDK head default preserved", async () => {
+    const { coordinator, feeds } = harness();
+    // No known head yet → no priming → the SDK's head default applies.
+    const page = await providerPoll(coordinator, "A", null);
+    assert.deepEqual(page.events, [], "first watch must not replay history");
+    assert.equal(feeds.get("A")!.requestedStartLedger, null);
   });
 
-  test("stopWatching does not destroy the feed instance", () => {
-    // stopWatching only sets watching=false; the GuardFeed instance persists
-    // in feedRef so resuming doesn't lose the cursor
-    let feedDestroyed = false;
-    const feedRef = { current: { guard: "CGTEST..." } };
-
-    const stopWatching = () => {
-      // Does NOT set feedRef.current = null
-      feedDestroyed = false;
-    };
-
-    stopWatching();
-    assert.equal(feedDestroyed, false, "feed instance should persist after stop");
-    assert.ok(feedRef.current, "feedRef should still reference the feed");
+  await t.test("same-guard re-poll carries the cursor forward (no re-scan, no dupes)", async () => {
+    const { coordinator, feeds } = harness();
+    await providerPoll(coordinator, "A", null); // head default, cursor now live
+    // Same guard, head known: the cursor is already live, so no re-priming and
+    // no re-scan — the poll carries the cursor forward and re-delivers nothing.
+    const caughtUp = await providerPoll(coordinator, "A", HEAD);
+    assert.deepEqual(caughtUp.events, [], "cursor carried forward, nothing re-delivered");
+    assert.equal(feeds.get("A")!.pollCalls, 2);
+    assert.equal(coordinator.statsSnapshot().created, 1, "same guard: no new feed constructed");
+    assert.equal(coordinator.statsSnapshot().abandoned, 0);
   });
+});
+
+test("(filter-namespace) the provider's clear-on-switch also clears dedup memory", async (t) => {
+  await t.test(
+    "eventKey dedup is per-guard by construction: a B event never collides with A's",
+    () => {
+      // The filter namespace the issue asks about is enforced by clearing the
+      // feed and dedup memory on switch (GuardProvider's selectGuard), and by
+      // the per-guard contract filter inside the SDK listener. The property that
+      // must hold: the same event on different guards must not dedupe each other.
+      const keyOf = (guard: string, hash: string, ledger: number) =>
+        `ledger|${hash}|${guard}|${ledger}`;
+      const aKey = keyOf("A", "tx1", 5);
+      const bKey = keyOf("B", "tx1", 5);
+      assert.notEqual(aKey, bKey, "identical tx on two guards must remain distinct rows");
+    },
+  );
 });

@@ -101,6 +101,34 @@ test("activity resets the deadline and clears the warning phase", () => {
   }
 });
 
+test("a background deadline check updates the warning and expires at the original deadline", () => {
+  mock.timers.enable({ apis: ["setInterval"] });
+  let currentTime = 10_000;
+  const rec = recorder();
+  let expired = 0;
+  const timer = new IdleTimer({
+    timeoutMs: 5_000,
+    warningSeconds: 2,
+    now: () => currentTime,
+    onState: rec.push,
+    onExpire: () => {
+      expired += 1;
+    },
+  });
+  timer.start();
+  try {
+    currentTime += 3_000;
+    timer.checkDeadline();
+    assert.deepEqual(rec.last(), { phase: "warning", secondsLeft: 2 });
+    currentTime += 2_000;
+    timer.checkDeadline();
+    assert.deepEqual(rec.last(), { phase: "locked", secondsLeft: 0 });
+    assert.equal(expired, 1);
+  } finally {
+    timer.stop();
+  }
+});
+
 test("a disabled timer (Never) never warns or expires", () => {
   mock.timers.enable({ apis: ["setInterval", "Date"] });
   const rec = recorder();
@@ -208,6 +236,66 @@ test("an enabled=false hook attaches no timer and never expires", async () => {
   }
 });
 
+test("visibility changes recheck time without extending the session", async () => {
+  mock.timers.enable({ apis: ["setInterval", "Date"] });
+  const mounted = await mount(makeHarness(300_000, true));
+  try {
+    await act(async () => {
+      mock.timers.tick(245_000);
+      await sleep(0);
+    });
+    assert.equal(lastState?.phase, "warning");
+    const before = lastState?.secondsLeft;
+    await act(async () => {
+      document.dispatchEvent(new window.Event("visibilitychange"));
+    });
+    assert.equal(lastState?.secondsLeft, before, "passive visibility is not operator activity");
+    await act(async () => {
+      mock.timers.tick(55_000);
+      await sleep(0);
+    });
+    assert.equal(expireCount, 1, "the original deadline still expires the session");
+  } finally {
+    await mounted.unmount();
+  }
+});
+
+test("disconnecting disables the timer and prevents a later expiry", async () => {
+  mock.timers.enable({ apis: ["setInterval", "Date"] });
+  expireCount = 0;
+  function Probe(): ReactElement {
+    const [connected, setConnected] = react.useState(true);
+    const { state } = useIdleTimer({
+      timeoutMs: 1_000,
+      enabled: connected,
+      onExpire: () => {
+        expireCount += 1;
+      },
+    });
+    return react.createElement(
+      "button",
+      { onClick: () => setConnected(false) },
+      connected ? state.phase : "disconnected",
+    );
+  }
+  const mounted = await mount(Probe);
+  try {
+    await act(async () => {
+      mounted.container
+        .querySelector("button")
+        ?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    });
+    await act(async () => {
+      mock.timers.tick(5_000);
+      await sleep(0);
+    });
+    assert.equal(expireCount, 0);
+    assert.equal(mounted.container.textContent, "disconnected");
+  } finally {
+    await mounted.unmount();
+  }
+});
+
 // ── Persistence ───────────────────────────────────────────────────────────
 
 test("the chosen timeout persists and validates on reload", () => {
@@ -222,5 +310,9 @@ test("the chosen timeout persists and validates on reload", () => {
   saveIdleTimeoutMs(30 * 60 * 1000, storage);
   assert.equal(loadIdleTimeoutMs(storage), 30 * 60 * 1000);
   data.set(IDLE_TIMEOUT_STORAGE_KEY, "12345"); // not an offered option
-  assert.equal(loadIdleTimeoutMs(storage), IDLE_TIMEOUT_OPTIONS[1]?.valueMs, "invalid value → default");
+  assert.equal(
+    loadIdleTimeoutMs(storage),
+    IDLE_TIMEOUT_OPTIONS[1]?.valueMs,
+    "invalid value → default",
+  );
 });
