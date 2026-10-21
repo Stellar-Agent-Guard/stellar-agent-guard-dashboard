@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import {
   createTransactionEnvelope,
   detectExpiration,
+  evaluateSignedEnvelopePreflight,
+  preflightSignedEnvelope,
   assembleFromSimulation,
   diagnosticEventsOf,
   describeRejectedResult,
@@ -13,6 +15,8 @@ import {
   Contract,
   Operation,
   SorobanDataBuilder,
+  TransactionBuilder,
+  rpc,
   xdr,
 } from "@stellar/stellar-sdk";
 
@@ -104,6 +108,109 @@ function makeSimulationWithAuth(
 const GUARD_CONTRACT = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
 const SIGNER_ADDRESS = "GA76DICZHOAA3L2OUCHG4X6J6DMM2NDEPLUWMK4PVLR2YTXZADHJZIXD";
 const PASSPHRASE = "Test SDF Network ; September 2015";
+
+describe("signed envelope preflight", () => {
+  it("recognizes a current sequence and active time bounds", () => {
+    const result = evaluateSignedEnvelopePreflight({
+      sequence: "6",
+      accountSequence: "5",
+      timeBounds: { minTime: "900", maxTime: "1100" },
+      ledgerCloseTime: "1000",
+      checkedAt: "2026-10-21T12:00:00.000Z",
+    });
+    assert.equal(result.sequence.status, "current");
+    assert.equal(result.expiration.status, "active");
+    assert.equal(result.checkedAt, "2026-10-21T12:00:00.000Z");
+  });
+
+  it("identifies stale sequences, expired envelopes, and envelopes not yet valid", () => {
+    const stale = evaluateSignedEnvelopePreflight({
+      sequence: "5",
+      accountSequence: "5",
+      timeBounds: { minTime: "900", maxTime: "1100" },
+      ledgerCloseTime: "1000",
+    });
+    assert.equal(stale.sequence.status, "stale");
+
+    const expired = evaluateSignedEnvelopePreflight({
+      sequence: "6",
+      accountSequence: "5",
+      timeBounds: { minTime: "900", maxTime: "1000" },
+      ledgerCloseTime: "1000",
+    });
+    assert.equal(expired.expiration.status, "expired");
+
+    const notYetValid = evaluateSignedEnvelopePreflight({
+      sequence: "6",
+      accountSequence: "5",
+      timeBounds: { minTime: "1001", maxTime: "1100" },
+      ledgerCloseTime: "1000",
+    });
+    assert.equal(notYetValid.expiration.status, "not_yet_valid");
+  });
+
+  it("marks unavailable account or ledger reads as unknown", () => {
+    const result = evaluateSignedEnvelopePreflight({
+      sequence: "6",
+      timeBounds: { minTime: "900", maxTime: "1100" },
+    });
+    assert.equal(result.sequence.status, "unknown");
+    assert.equal(result.expiration.status, "unknown");
+  });
+
+  it("uses fresh chain reads and leaves the imported envelope unchanged", async () => {
+    const transaction = new TransactionBuilder(new Account(SIGNER_ADDRESS, "5"), {
+      fee: "100",
+      networkPassphrase: PASSPHRASE,
+    })
+      .addOperation(Operation.accountMerge({ destination: SIGNER_ADDRESS }))
+      .setTimebounds(900, 1100)
+      .build();
+    const importedXdr = transaction.toXDR();
+    const server = {
+      getAccount: async (source: string) => {
+        assert.equal(source, SIGNER_ADDRESS);
+        return new Account(SIGNER_ADDRESS, "5");
+      },
+      getLatestLedger: async () => ({ closeTime: "1000" }),
+    } as unknown as rpc.Server;
+
+    const result = await preflightSignedEnvelope(server, transaction);
+    assert.equal(result.sequence.status, "current");
+    assert.equal(result.expiration.status, "active");
+    assert.equal(transaction.toXDR(), importedXdr);
+  });
+
+  it("keeps each failed RPC observation unknown instead of guessing", async () => {
+    const transaction = new TransactionBuilder(new Account(SIGNER_ADDRESS, "5"), {
+      fee: "100",
+      networkPassphrase: PASSPHRASE,
+    })
+      .addOperation(Operation.accountMerge({ destination: SIGNER_ADDRESS }))
+      .setTimeout(30)
+      .build();
+    const server = {
+      getAccount: async () => {
+        throw new Error("account read failed");
+      },
+      getLatestLedger: async () => ({ closeTime: "1000" }),
+    } as unknown as rpc.Server;
+
+    const result = await preflightSignedEnvelope(server, transaction);
+    assert.equal(result.sequence.status, "unknown");
+    assert.equal(result.expiration.status, "active");
+
+    const failedLedgerServer = {
+      getAccount: async () => new Account(SIGNER_ADDRESS, "5"),
+      getLatestLedger: async () => {
+        throw new Error("ledger read failed");
+      },
+    } as unknown as rpc.Server;
+    const ledgerFailure = await preflightSignedEnvelope(failedLedgerServer, transaction);
+    assert.equal(ledgerFailure.sequence.status, "current");
+    assert.equal(ledgerFailure.expiration.status, "unknown");
+  });
+});
 
 describe("assembleFromSimulation — create_contract authorization preservation", () => {
   it("attaches a recorded create_contract auth entry to the assembled operation", () => {

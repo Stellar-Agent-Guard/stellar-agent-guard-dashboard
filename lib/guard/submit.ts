@@ -23,6 +23,7 @@ import {
 import {
   Account,
   Address,
+  FeeBumpTransaction,
   Operation,
   SorobanDataBuilder,
   Transaction,
@@ -954,4 +955,107 @@ export function createTransactionEnvelope(
 
 export function detectExpiration(currentTime: number, maxTime: number) {
   return currentTime >= maxTime;
+}
+
+export interface SignedEnvelopePreflight {
+  checkedAt: string;
+  sequence: {
+    status: "current" | "stale" | "ahead" | "unknown";
+    detail: string;
+  };
+  expiration: {
+    status: "active" | "expired" | "not_yet_valid" | "not_bounded" | "unknown";
+    detail: string;
+  };
+}
+
+/** Compare an imported envelope with fresh chain observations without changing it. */
+export function evaluateSignedEnvelopePreflight(params: {
+  sequence: string;
+  timeBounds?: { minTime: string; maxTime: string };
+  accountSequence?: string;
+  ledgerCloseTime?: string | number;
+  checkedAt?: string;
+}): SignedEnvelopePreflight {
+  const sequence = (() => {
+    if (params.accountSequence === undefined) {
+      return { status: "unknown" as const, detail: "Account sequence could not be read." };
+    }
+    const expected = BigInt(params.accountSequence) + 1n;
+    const envelopeSequence = BigInt(params.sequence);
+    if (envelopeSequence === expected) {
+      return { status: "current" as const, detail: `Sequence ${params.sequence} is next.` };
+    }
+    return envelopeSequence < expected
+      ? {
+          status: "stale" as const,
+          detail: `Envelope sequence ${params.sequence} is behind the next account sequence ${expected}.`,
+        }
+      : {
+          status: "ahead" as const,
+          detail: `Envelope sequence ${params.sequence} is ahead of the next account sequence ${expected}.`,
+        };
+  })();
+
+  const expiration = (() => {
+    if (!params.timeBounds || params.timeBounds.maxTime === "0") {
+      return { status: "not_bounded" as const, detail: "Envelope has no maximum time bound." };
+    }
+    if (params.ledgerCloseTime === undefined) {
+      return { status: "unknown" as const, detail: "Latest ledger close time could not be read." };
+    }
+    const ledgerCloseTime = Number(params.ledgerCloseTime);
+    const minTime = Number(params.timeBounds.minTime);
+    const maxTime = Number(params.timeBounds.maxTime);
+    if (!Number.isFinite(ledgerCloseTime) || !Number.isFinite(maxTime)) {
+      return {
+        status: "unknown" as const,
+        detail: "Envelope or ledger time bounds are unavailable.",
+      };
+    }
+    if (ledgerCloseTime >= maxTime) {
+      return {
+        status: "expired" as const,
+        detail: "Latest ledger close time is at or past the envelope expiration.",
+      };
+    }
+    if (minTime > 0 && ledgerCloseTime < minTime) {
+      return {
+        status: "not_yet_valid" as const,
+        detail: "Latest ledger close time is before the envelope start time.",
+      };
+    }
+    return {
+      status: "active" as const,
+      detail: "Envelope time bounds include the latest ledger close time.",
+    };
+  })();
+
+  return {
+    checkedAt: params.checkedAt ?? new Date().toISOString(),
+    sequence,
+    expiration,
+  };
+}
+
+/** Read the account sequence and latest ledger time used by the advisory preflight. */
+export async function preflightSignedEnvelope(
+  server: rpc.Server,
+  envelope: Transaction | FeeBumpTransaction,
+): Promise<SignedEnvelopePreflight> {
+  const transaction = envelope instanceof FeeBumpTransaction ? envelope.innerTransaction : envelope;
+  const [accountResult, ledgerResult] = await Promise.allSettled([
+    server.getAccount(transaction.source),
+    server.getLatestLedger(),
+  ]);
+  return evaluateSignedEnvelopePreflight({
+    sequence: transaction.sequence,
+    ...(transaction.timeBounds === undefined ? {} : { timeBounds: transaction.timeBounds }),
+    ...(accountResult.status === "fulfilled"
+      ? { accountSequence: accountResult.value.sequenceNumber() }
+      : {}),
+    ...(ledgerResult.status === "fulfilled"
+      ? { ledgerCloseTime: ledgerResult.value.closeTime }
+      : {}),
+  });
 }

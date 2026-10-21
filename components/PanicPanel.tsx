@@ -40,6 +40,13 @@ import { announce } from "../lib/guard/useAnnounce.ts";
 import { usePwaActivity } from "../lib/guard/usePwaActivity.ts";
 import { CopyButton } from "./CopyButton.tsx";
 import { useDemoMode } from "../lib/guard/useDemoMode.ts";
+import { NETWORK } from "../lib/guard/network.ts";
+import {
+  acquireGuardWriteLock,
+  subscribeGuardWriteLock,
+  type GuardWriteLockLease,
+  type GuardWriteLockRecord,
+} from "../lib/guard/tabSync.ts";
 import { compileIncidentSummary, formatIncidentSummary } from "../lib/guard/printReport.ts";
 
 /**
@@ -292,6 +299,10 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
   // confirmation's shape, and the operator's typed answer.
   const [balance, setBalance] = useState<BalanceState>({ status: "unread" });
   const [challengeInput, setChallengeInput] = useState("");
+  const [pendingFreeze, setPendingFreeze] = useState<GuardWriteLockRecord | null>(null);
+  const [pendingUnfreeze, setPendingUnfreeze] = useState<GuardWriteLockRecord | null>(null);
+  const [localWriteOwner, setLocalWriteOwner] = useState<string | null>(null);
+  const activeWriteLease = useRef<GuardWriteLockLease | null>(null);
   // Incident summary modal state (issue #321)
   const [showIncidentSummary, setShowIncidentSummary] = useState(false);
   const [lastReadError, setLastReadError] = useState<string | null>(null);
@@ -312,6 +323,21 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const unfreezeRef = useRef<HTMLButtonElement>(null);
+  const lockNetwork = wallet?.networkPassphrase ?? NETWORK.passphrase;
+
+  useEffect(() => {
+    const freezeScope = { guard, action: "freeze" as const, network: lockNetwork };
+    const unfreezeScope = { guard, action: "unfreeze" as const, network: lockNetwork };
+    const unsubscribeFreeze = subscribeGuardWriteLock(freezeScope, setPendingFreeze);
+    const unsubscribeUnfreeze = subscribeGuardWriteLock(unfreezeScope, setPendingUnfreeze);
+    return () => {
+      unsubscribeFreeze();
+      unsubscribeUnfreeze();
+      activeWriteLease.current?.release();
+      activeWriteLease.current = null;
+    };
+  }, [guard, lockNetwork]);
   // Newest balance read wins: every (re)read bumps this token, and a reply
   // that arrives after a newer read — or after unmount — is dropped instead
   // of overwriting fresher state with a stale number.
@@ -401,6 +427,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
     open: confirming,
     containerRef: dialogRef,
     returnFocusRef: triggerRef,
+    fallbackFocusRef: unfreezeRef,
     onDismiss: () => {
       setPhase("idle");
       setAcknowledgedFor(null);
@@ -411,12 +438,12 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
   // The panic button is the write an operator reaches for under pressure, so an
   // inert one has to say why in the same words as every other control (#101).
   const freezeControl = writeControlState(wallet, {
-    extraDisabled: alreadyFrozen === true,
+    extraDisabled: alreadyFrozen === true || pendingFreeze !== null,
     preflightUnavailable,
     label: "freeze this account",
   });
   const unfreezeControl = writeControlState(wallet, {
-    extraDisabled: alreadyFrozen === false,
+    extraDisabled: alreadyFrozen === false || pendingUnfreeze !== null,
     preflightUnavailable,
     label: "unfreeze this account",
   });
@@ -441,6 +468,18 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
   }
 
   async function run(action: FreezeAction, exportOnly = false) {
+    const lease = exportOnly
+      ? null
+      : acquireGuardWriteLock({ guard, action, network: lockNetwork });
+    if (!exportOnly && lease === null) {
+      setError(`A ${action} operation is already pending for this guard.`);
+      return;
+    }
+    if (lease) {
+      activeWriteLease.current = lease;
+      setLocalWriteOwner(lease.record.owner);
+    }
+    const renewal = lease ? setInterval(() => void lease.renew(), 30_000) : null;
     setError(null);
     setReport(null);
 
@@ -536,7 +575,14 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
       // spoken now: nothing else on screen will change once focus is restored.
       speakFreezeOutcome(action, false, detail, undefined, guard);
       setPhase("idle");
-      setAcknowledgedFor(null);
+      setAcknowledged(false);
+    } finally {
+      if (renewal !== null) clearInterval(renewal);
+      lease?.release();
+      if (activeWriteLease.current === lease) {
+        activeWriteLease.current = null;
+        setLocalWriteOwner(null);
+      }
     }
   }
 
@@ -568,6 +614,21 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
         </p>
       )}
 
+      {pendingFreeze && (
+        <p className="notice info tiny" role="status">
+          A freeze operation is pending for this guard
+          {pendingFreeze.owner === localWriteOwner ? " in this tab." : " in another dashboard tab."}
+        </p>
+      )}
+      {pendingUnfreeze && (
+        <p className="notice info tiny" role="status">
+          An unfreeze operation is pending for this guard
+          {pendingUnfreeze.owner === localWriteOwner
+            ? " in this tab."
+            : " in another dashboard tab."}
+        </p>
+      )}
+
       {phase !== "confirming" && (
         <div className="row" style={{ marginTop: 12 }}>
           <button
@@ -586,15 +647,16 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
               loadBalance();
             }}
           >
-            Freeze this account
+            {pendingFreeze ? "Freeze pending…" : "Freeze this account"}
           </button>
           <button
             className="secondary"
+            ref={unfreezeRef}
             disabled={unfreezeControl.disabled}
             title={unfreezeControl.title}
             onClick={() => void run("unfreeze")}
           >
-            Unfreeze
+            {pendingUnfreeze ? "Unfreeze pending…" : "Unfreeze"}
           </button>
           <button
             className="secondary"
@@ -709,10 +771,10 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
             <div className="row">
               <button
                 className="danger"
-                disabled={!acknowledged || !challengeSatisfied}
+                disabled={!acknowledged || !challengeSatisfied || pendingFreeze !== null}
                 onClick={() => void run("freeze")}
               >
-                Sign freeze
+                {pendingFreeze ? "Freeze pending…" : "Sign freeze"}
               </button>
               <button
                 className="secondary"
