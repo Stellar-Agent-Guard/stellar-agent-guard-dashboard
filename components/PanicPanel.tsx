@@ -6,6 +6,7 @@ import { freezeGuard, unfreezeGuard } from "../lib/guard/guardOps.ts";
 import { refusedEventsFromDiagnostics } from "../lib/guard/telemetry.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, starLink } from "./bits.tsx";
+import { compileIncidentSummary, formatIncidentSummary } from "../lib/guard/printReport.ts";
 
 /**
  * The emergency panic button.
@@ -35,6 +36,9 @@ export function PanicPanel() {
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
+  const [showIncidentSummary, setShowIncidentSummary] = useState(false);
+  const [lastReadError, setLastReadError] = useState<string | null>(null);
+  const [lastSuccessfulRead, setLastSuccessfulRead] = useState<string | null>(null);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -215,6 +219,12 @@ export function PanicPanel() {
           >
             Export Unfreeze XDR
           </button>
+          <button
+            className="secondary"
+            onClick={() => setShowIncidentSummary(true)}
+          >
+            Incident Summary
+          </button>
         </div>
       )}
 
@@ -348,6 +358,66 @@ export function PanicPanel() {
           )}
         </div>
       )}
+
+      {/* Incident Summary Modal */}
+      {showIncidentSummary && (() => {
+        const networkName = wallet?.networkPassphrase?.includes("Public") ? "Public" : 
+                           wallet?.networkPassphrase?.includes("Test") ? "Testnet" : "Unknown";
+        const summary = compileIncidentSummary(snapshot ?? null, networkName, {
+          txHash: report?.result.kind === "submitted" ? report.result.hash : undefined,
+          lastReadError: lastReadError ?? undefined,
+          lastSuccessfulRead: lastSuccessfulRead ?? undefined,
+        });
+        const formatted = formatIncidentSummary(summary);
+
+        return (
+          <div className="modal-backdrop" onClick={() => setShowIncidentSummary(false)}>
+            <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "600px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                <h2 style={{ margin: 0 }}>Incident Handoff Summary</h2>
+                <button className="secondary" onClick={() => setShowIncidentSummary(false)}>Close</button>
+              </div>
+              <p className="tiny" style={{ marginBottom: "16px" }}>
+                This snapshot contains only non-sensitive operational state. It excludes private keys,
+                wallet sessions, and signed envelopes. Labelled as client-generated to clarify it is
+                not an audit record.
+              </p>
+              <textarea
+                readOnly
+                value={formatted}
+                style={{ 
+                  width: "100%", 
+                  height: "300px", 
+                  marginBottom: "16px", 
+                  fontSize: "12px", 
+                  fontFamily: "monospace",
+                  whiteSpace: "pre-wrap"
+                }}
+              />
+              <div className="row">
+                <button 
+                  onClick={() => navigator.clipboard.writeText(formatted)}
+                >
+                  Copy to Clipboard
+                </button>
+                <button
+                  onClick={() => {
+                    const blob = new Blob([formatted], { type: "text/plain" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `incident-summary-${Date.now()}.txt`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  Download .txt
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
