@@ -264,76 +264,96 @@ export function TxHistoryTable() {
                 </tr>
               </thead>
               <tbody>
-                {paged.rows.map((entry) => (
-                  <tr key={entry.hash}>
-                    <td className="mono tiny" data-label="Timestamp" title={entry.recordedAt}>
-                      {formatTimestamp(entry.recordedAt)}
-                    </td>
-                    <td className="mono tiny" data-label="Operation">
-                      {entry.operation}
-                    </td>
-                    <td data-label="Status">
-                      {entry.status === "confirmed" ? (
-                        <span className="pill ok">Confirmed</span>
-                      ) : entry.status === "submitted" ? (
-                        <span className="pill info">Submitted</span>
-                      ) : entry.status === "cancelled" ? (
-                        <span className="pill warn">Cancelled</span>
-                      ) : entry.status === "pre-submit-failure" ? (
-                        <span className="pill danger">Pre-submit failure</span>
-                      ) : (
-                        <span className="pill danger">Failed</span>
-                      )}
-                    </td>
-                    <td
-                      className="tiny"
-                      data-label="Network"
-                      title={entry.networkPassphrase ?? "Network not recorded"}
-                    >
-                      <div>{entry.networkName ?? "Unknown network"}</div>
-                      <div className="muted">{entry.networkPassphrase ?? "Legacy history"}</div>
-                    </td>
-                    <td data-label="Tx Hash">
-                      <TxHashCell hash={entry.hash} />
-                    </td>
-                    <td className="mono tiny" data-label="Gas Fee">
-                      {entry.feeStroops !== null ? `${entry.feeStroops} stroops` : "—"}
-                    </td>
-                    <td className="tiny" data-label="Chain verification">
-                      {txHistoryMatchesNetwork(entry, NETWORK.passphrase) ? (
-                        <button
-                          type="button"
-                          className="secondary"
-                          onClick={() => void verifyEntry(entry)}
-                          disabled={verifications[entry.hash]?.status === "checking"}
-                          aria-label={`Verify transaction ${entry.hash} on ${entry.networkName ?? "recorded network"}`}
-                        >
-                          {verifications[entry.hash]?.status === "checking"
-                            ? "Checking…"
-                            : "Verify"}
-                        </button>
-                      ) : (
-                        <span title="Verification is limited to the exact recorded network passphrase">
-                          Unavailable
-                        </span>
-                      )}
-                      {entry.hash && verifications[entry.hash] && (
-                        <div style={{ marginTop: 4 }}>
-                          <div>Chain: {verificationLabel(verifications[entry.hash]!.status)}</div>
-                          {verifications[entry.hash]!.detail && (
-                            <div className="muted">{verifications[entry.hash]!.detail}</div>
-                          )}
-                          {verifications[entry.hash]!.verifiedAt && (
-                            <div className="muted">
-                              Checked {formatTimestamp(verifications[entry.hash]!.verifiedAt!)} via{" "}
-                              {NETWORK.rpcUrl}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {paged.rows.map((entry) => {
+                  const hash = entry.hash;
+                  const verification = hash ? verifications[hash] : undefined;
+                  return (
+                    <tr key={hash ?? entry.id ?? entry.recordedAt}>
+                      <td className="mono tiny" data-label="Timestamp" title={entry.recordedAt}>
+                        {formatTimestamp(entry.recordedAt)}
+                      </td>
+                      <td className="mono tiny" data-label="Operation">
+                        {entry.operation}
+                      </td>
+                      <td data-label="Status">
+                        {entry.status === "confirmed" ? (
+                          <span className="pill ok">Confirmed</span>
+                        ) : entry.status === "submitted" ? (
+                          <span className="pill info">Submitted</span>
+                        ) : entry.status === "cancelled" ? (
+                          <span className="pill warn">Cancelled</span>
+                        ) : entry.status === "pre-submit-failure" ? (
+                          <span className="pill danger">Pre-submit failure</span>
+                        ) : (
+                          <span className="pill danger">Failed</span>
+                        )}
+                      </td>
+                      <td
+                        className="tiny"
+                        data-label="Network"
+                        title={entry.networkPassphrase ?? "Network not recorded"}
+                      >
+                        <div>{entry.networkName ?? "Unknown network"}</div>
+                        <div className="muted">{entry.networkPassphrase ?? "Legacy history"}</div>
+                      </td>
+                      <td data-label="Tx Hash">
+                        {hash ? (
+                          <TxHashCell hash={hash} />
+                        ) : (
+                          <span
+                            className="muted tiny mono"
+                            title={entry.detail ?? "Transaction not broadcast"}
+                          >
+                            — (not broadcast)
+                          </span>
+                        )}
+                      </td>
+                      <td className="mono tiny" data-label="Gas Fee">
+                        {entry.feeStroops !== null ? `${entry.feeStroops} stroops` : "—"}
+                      </td>
+                      <td className="tiny" data-label="Chain verification">
+                        {!hash ||
+                        entry.status === "cancelled" ||
+                        entry.status === "pre-submit-failure" ? (
+                          <span
+                            className="muted"
+                            title="Transaction was not broadcast to the network"
+                          >
+                            Not broadcast
+                          </span>
+                        ) : txHistoryMatchesNetwork(entry, NETWORK.passphrase) ? (
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() => void verifyEntry(entry)}
+                            disabled={verification?.status === "checking"}
+                            aria-label={`Verify transaction ${hash} on ${entry.networkName ?? "recorded network"}`}
+                          >
+                            {verification?.status === "checking" ? "Checking…" : "Verify"}
+                          </button>
+                        ) : (
+                          <span title="Verification is limited to the exact recorded network passphrase">
+                            Unavailable
+                          </span>
+                        )}
+                        {verification && (
+                          <div style={{ marginTop: 4 }}>
+                            <div>Chain: {verificationLabel(verification.status)}</div>
+                            {verification.detail && (
+                              <div className="muted">{verification.detail}</div>
+                            )}
+                            {verification.verifiedAt && (
+                              <div className="muted">
+                                Checked {formatTimestamp(verification.verifiedAt)} via{" "}
+                                {NETWORK.rpcUrl}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
