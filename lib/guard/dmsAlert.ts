@@ -200,7 +200,13 @@ export function projectDmsAlert(alert: DmsAlert, reference: ReferenceTime): Proj
   if (alert.remainingSecs === null || alert.fractionRemaining === null) {
     // No clock ran at read time (switch disabled, no heartbeat, no policy):
     // there is nothing to project and nothing exact to claim.
-    return { ...base, remainingSecs: null, fractionRemaining: null, level: alert.level, exact: false };
+    return {
+      ...base,
+      remainingSecs: null,
+      fractionRemaining: null,
+      level: alert.level,
+      exact: false,
+    };
   }
 
   if (reference.source === "ledger" && reference.authoritative) {

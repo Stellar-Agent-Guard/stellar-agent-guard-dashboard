@@ -18,10 +18,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { GuardStatus, PolicyConfig } from "stellar-agent-guard-sdk";
-import {
-  LEDGER_CLOCK_MAX_AGE_SECS,
-  resolveReferenceTime,
-} from "../../lib/guard/ledgerTime.ts";
+import { LEDGER_CLOCK_MAX_AGE_SECS, resolveReferenceTime } from "../../lib/guard/ledgerTime.ts";
 import { evaluateDmsAlert, projectDmsAlert } from "../../lib/guard/dmsAlert.ts";
 
 const LEDGER_NOW = 1_700_000_000; // chain clock at read time
@@ -180,7 +177,11 @@ test("the projected countdown escalates between polls, not only when the next po
     authoritative: true,
   });
   assert.equal(past.remainingSecs, -1);
-  assert.equal(past.level, "expired", "the deadline crossing is reported without waiting for a poll");
+  assert.equal(
+    past.level,
+    "expired",
+    "the deadline crossing is reported without waiting for a poll",
+  );
 });
 
 test("browser clock skew cannot pull an expiry closer: a stale reading freezes the countdown", () => {
@@ -250,6 +251,11 @@ test("with no clock running there is nothing to project and nothing exact to cla
 test("projection is deterministic in the reference alone — same reference, same countdown", () => {
   const { st, pol } = countdown(100_000, 100_000);
   const alert = evaluateDmsAlert(st, pol);
-  const reference = { unixSecs: LEDGER_NOW, source: "ledger" as const, ageSecs: 42, authoritative: true };
+  const reference = {
+    unixSecs: LEDGER_NOW,
+    source: "ledger" as const,
+    ageSecs: 42,
+    authoritative: true,
+  };
   assert.deepEqual(projectDmsAlert(alert, reference), projectDmsAlert(alert, reference));
 });

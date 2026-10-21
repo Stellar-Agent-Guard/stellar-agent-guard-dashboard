@@ -39,10 +39,7 @@ import {
   projectDmsAlert,
   type DmsAlert,
 } from "../lib/guard/dmsAlert.ts";
-import {
-  resolveReferenceTime,
-  type LedgerClockReading,
-} from "../lib/guard/ledgerTime.ts";
+import { resolveReferenceTime, type LedgerClockReading } from "../lib/guard/ledgerTime.ts";
 import { calculateVelocity } from "../lib/guard/velocity.ts";
 import { useStatusTransitionAnnouncer } from "../lib/guard/statusTransitions.ts";
 
