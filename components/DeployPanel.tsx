@@ -16,6 +16,8 @@ import { rememberDeployment } from "../lib/guard/setupChecklist.ts";
 import type { ArtifactCheck, DeployOutcome, DeployPlan } from "../lib/guard/guardOps.ts";
 import { deployCostBreakdown } from "../lib/guard/deployCostCalculator.ts";
 import type { InvokeResult } from "../lib/guard/submit.ts";
+import { previewAuthorizationSummary } from "../lib/guard/submit.ts";
+import { AuthorizationSummaryBlock } from "./AuthorizationSummary.tsx";
 import { NETWORK, PHASE1_ARTIFACT } from "../lib/guard/network.ts";
 import { fetchContractWasm, verifyWasmIdentity } from "../lib/guard/chain.ts";
 import { toHex } from "../lib/guard/scval.ts";
@@ -153,6 +155,23 @@ export function DeployPanel() {
   // both rather than replacing the app underneath them (#398).
   usePwaActivity(deploying, "write");
   usePwaActivity(saltText.trim() !== "" || agentPubkey.trim() !== "", "draft");
+
+  /**
+   * What "Sign and initialize" will ask the wallet to authorize (issue #343).
+   *
+   * Read back out of a transaction built the same way the write builds its own,
+   * so the four facts on screen are the four facts in the envelope rather than a
+   * restatement of what the panel believes it is submitting. Before a deploy there
+   * is no guard to initialize, so there is nothing to show and the button stays
+   * disabled — an initialization nobody can name is not one anybody can approve.
+   */
+  const initializeTarget = outcome?.guard ?? "";
+  const initializeAuthorization = previewAuthorizationSummary({
+    contract: initializeTarget,
+    fn: "initialize",
+    admin: wallet?.address ?? "",
+    passphrase: NETWORK.passphrase,
+  });
 
   const [balance, setBalance] = useState<string | null>(null);
   useEffect(() => {
@@ -471,6 +490,9 @@ export function DeployPanel() {
         signer: signer(),
         guard: target,
         agentPubkeyHex: agentPubkey,
+        // The copy the operator was shown, so the pipeline can check it against
+        // the transaction it is about to simulate.
+        authorization: initializeAuthorization,
       });
       setInitResult(result);
       await refresh();
@@ -1079,9 +1101,21 @@ export function DeployPanel() {
 
       <InitChecklist validation={initValidation} />
 
+      <div style={{ marginTop: 12 }}>
+        <AuthorizationSummaryBlock
+          authorization={initializeAuthorization}
+          purpose="this initialization"
+        />
+      </div>
+
       <div className="row">
         <button
-          disabled={!wallet || agentPubkey.trim().length === 0 || !initValidation.canDeploy}
+          disabled={
+            !wallet ||
+            agentPubkey.trim().length === 0 ||
+            !initValidation.canDeploy ||
+            initializeAuthorization === null
+          }
           onClick={() => void initialize(outcome?.guard ?? "")}
         >
           Sign and initialize
