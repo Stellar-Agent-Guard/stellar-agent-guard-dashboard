@@ -417,7 +417,7 @@ export function TelemetryFeed() {
           className="secondary"
           onClick={() => downloadExport("csv")}
           disabled={rows.length === 0}
-          title="Stable append-only schema (docs/export-schema.md): schema_version, guard, topic, kind, source, decision, reason, reason_label, ledger, ledger_closed_at, transaction_hash — BOM-prefixed for Excel"
+          title="Stable append-only schema (docs/export-schema.md): schema_version, guard, topic, kind, source, decision, reason, reason_label, ledger, ledger_closed_at, transaction_hash, observed_at — every time ISO-8601 UTC, BOM-prefixed for Excel"
         >
           Export CSV
         </button>
