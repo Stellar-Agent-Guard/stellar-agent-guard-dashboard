@@ -11,6 +11,12 @@ import {
   invokeWithWallet,
   type WalletSigner,
 } from "../../lib/guard/submit.ts";
+import { WalletUserRejectedError } from "../../lib/guard/walletConnector.ts";
+import {
+  loadTxHistory,
+  clearTxHistory,
+  TX_HISTORY_STORAGE_KEY,
+} from "../../lib/guard/txHistory.ts";
 import {
   Account,
   Address,
