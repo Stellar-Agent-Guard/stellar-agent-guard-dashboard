@@ -144,6 +144,8 @@ export class SorobanRpcMock {
   deliveredEvents = 0;
   /** Contracts created/frozen/… during the test, keyed by address. */
   readonly guards = new Map<string, GuardState>();
+  autoFreeze = true;
+  nextStatusError: string | null = null;
 
   private readonly capture: RpcCapture;
   private readonly wasm: Uint8Array;
@@ -368,6 +370,11 @@ export class SorobanRpcMock {
     const call = decodeCall(transactionXdr);
     let retval: xdr.ScVal = xdr.ScVal.scvVoid();
     if (call?.fn === "status") {
+      if (this.nextStatusError && this.requests.includes("sendTransaction")) {
+        const errorMsg = this.nextStatusError;
+        this.nextStatusError = null;
+        throw new Error(errorMsg);
+      }
       const state = this.guard(call.contract);
       const now = BigInt(Math.floor(Date.now() / 1000));
       retval = nativeToScVal({
