@@ -22,6 +22,8 @@ export function SubmitSignedXDRPanel() {
   // A pending write is work an app-shell update must not interrupt (#398).
   usePwaActivity(busy, "write");
 
+  const inspection = useMemo(() => inspectSignedEnvelope(xdr.trim(), NETWORK.passphrase), [xdr]);
+
   async function checkEnvelope() {
     setChecking(true);
     setError(null);
@@ -40,6 +42,10 @@ export function SubmitSignedXDRPanel() {
   }
 
   async function submit() {
+    if (!inspection.canSubmit) {
+      setError("Cannot submit: envelope validation or network check failed.");
+      return;
+    }
     if (!preflight || checkedEnvelope !== xdr.trim()) {
       setError("Check this envelope against the latest account and ledger before submitting.");
       return;
@@ -103,7 +109,10 @@ export function SubmitSignedXDRPanel() {
               </span>
             ) : (
               <span className="pill danger" data-testid="network-mismatch-badge">
-                Network mismatch: {inspection.detectedNetwork ? `Signed for ${inspection.detectedNetwork}` : "Does not match current network"}
+                Network mismatch:{" "}
+                {inspection.detectedNetwork
+                  ? `Signed for ${inspection.detectedNetwork}`
+                  : "Does not match current network"}
               </span>
             )}
 
@@ -172,7 +181,13 @@ export function SubmitSignedXDRPanel() {
           {checking ? "Checking latest ledger…" : "Check envelope"}
         </button>
         <button
-          disabled={busy || checking || !xdr.trim() || checkedEnvelope !== xdr.trim()}
+          disabled={
+            busy ||
+            checking ||
+            !xdr.trim() ||
+            checkedEnvelope !== xdr.trim() ||
+            !inspection.canSubmit
+          }
           onClick={() => void submit()}
         >
           {busy ? "Submitting..." : "Submit to Network"}

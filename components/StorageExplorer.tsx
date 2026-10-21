@@ -402,11 +402,15 @@ export function StorageExplorerButton() {
         Browser data inventory
       </button>
       {inventoryOpen && (
-        <section id="browser-storage-inventory" aria-label="Browser storage inventory" style={{ marginTop: 12 }}>
+        <section
+          id="browser-storage-inventory"
+          aria-label="Browser storage inventory"
+          style={{ marginTop: 12 }}
+        >
           <p className="tiny muted">
             Local browser records only. They are convenience inputs and never replace live chain
-            reads; secret keys are not stored. Clearing local data removes browser-stored records only
-            and does not change the chain.
+            reads; secret keys are not stored. Clearing local data removes browser-stored records
+            only and does not change the chain.
           </p>
 
           <div style={{ marginBottom: 16 }}>
@@ -429,7 +433,9 @@ export function StorageExplorerButton() {
                       </td>
                       <td className="tiny">{cat.description}</td>
                       <td>
-                        <span className="pill">{cat.itemCount} item{cat.itemCount === 1 ? "" : "s"}</span>
+                        <span className="pill">
+                          {cat.itemCount} item{cat.itemCount === 1 ? "" : "s"}
+                        </span>
                       </td>
                       <td>
                         <button
@@ -451,15 +457,20 @@ export function StorageExplorerButton() {
               <div
                 role="alert"
                 className="notice danger"
-                style={{ marginTop: 12, padding: 12, border: "1px solid var(--border-danger, #e53e3e)" }}
+                style={{
+                  marginTop: 12,
+                  padding: 12,
+                  border: "1px solid var(--border-danger, #e53e3e)",
+                }}
                 data-testid="clear-category-confirm"
               >
                 <p style={{ margin: 0 }}>
                   <strong>Clear {confirmCategory.name}?</strong>
                 </p>
                 <p className="tiny" style={{ margin: "6px 0 10px 0" }}>
-                  Clearing local records removes {confirmCategory.name.toLowerCase()} stored in this browser only.
-                  It does not change the chain or affect any on-chain accounts, contracts, or transactions.
+                  Clearing local records removes {confirmCategory.name.toLowerCase()} stored in this
+                  browser only. It does not change the chain or affect any on-chain accounts,
+                  contracts, or transactions.
                 </p>
                 <div className="row" style={{ gap: 8 }}>
                   <button
@@ -467,7 +478,9 @@ export function StorageExplorerButton() {
                     className="danger"
                     onClick={() => {
                       clearOperatorStorageCategory(confirmCategory.id);
-                      announce(`Cleared ${confirmCategory.name} from browser storage. On-chain state is unchanged.`);
+                      announce(
+                        `Cleared ${confirmCategory.name} from browser storage. On-chain state is unchanged.`,
+                      );
                       setConfirmCategory(null);
                       setCategories(getOperatorStorageCategories());
                     }}

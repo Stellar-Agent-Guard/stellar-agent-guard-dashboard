@@ -135,7 +135,8 @@ export function TxHistoryTable() {
       <div className="row" style={{ justifyContent: "space-between" }}>
         <h2 style={{ margin: 0 }}>Transaction history</h2>
         <span className="tiny muted">
-          {entries.length} of {TX_HISTORY_LIMIT} entries kept in this browser (max {TX_HISTORY_MAX_AGE_DAYS} days retention)
+          {entries.length} of {TX_HISTORY_LIMIT} entries kept in this browser (max{" "}
+          {TX_HISTORY_MAX_AGE_DAYS} days retention)
         </span>
       </div>
 
@@ -155,12 +156,18 @@ export function TxHistoryTable() {
       )}
 
       {confirmClear && (
-        <div role="alert" className="notice danger" style={{ marginTop: 12 }} data-testid="clear-history-confirm">
+        <div
+          role="alert"
+          className="notice danger"
+          style={{ marginTop: 12 }}
+          data-testid="clear-history-confirm"
+        >
           <p style={{ margin: 0 }}>
             <strong>Clear browser-local transaction history?</strong>
           </p>
           <p className="tiny" style={{ margin: "4px 0 8px 0" }}>
-            Clearing local records removes transaction history stored in this browser only. On-chain transactions and ledger state are completely unchanged.
+            Clearing local records removes transaction history stored in this browser only. On-chain
+            transactions and ledger state are completely unchanged.
           </p>
           <div className="row" style={{ gap: 8 }}>
             <button
@@ -175,11 +182,7 @@ export function TxHistoryTable() {
             >
               Confirm Clear
             </button>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => setConfirmClear(false)}
-            >
+            <button type="button" className="secondary" onClick={() => setConfirmClear(false)}>
               Cancel
             </button>
           </div>
@@ -288,7 +291,10 @@ export function TxHistoryTable() {
                       {entry.hash ? (
                         <TxHashCell hash={entry.hash} />
                       ) : (
-                        <span className="muted tiny mono" title={entry.detail ?? "Transaction not broadcast"}>
+                        <span
+                          className="muted tiny mono"
+                          title={entry.detail ?? "Transaction not broadcast"}
+                        >
                           — (not broadcast)
                         </span>
                       )}
@@ -297,8 +303,13 @@ export function TxHistoryTable() {
                       {entry.feeStroops !== null ? `${entry.feeStroops} stroops` : "—"}
                     </td>
                     <td className="tiny">
-                      {!entry.hash || entry.status === "cancelled" || entry.status === "pre-submit-failure" ? (
-                        <span className="muted" title="Transaction was not broadcast to the network">
+                      {!entry.hash ||
+                      entry.status === "cancelled" ||
+                      entry.status === "pre-submit-failure" ? (
+                        <span
+                          className="muted"
+                          title="Transaction was not broadcast to the network"
+                        >
                           Not broadcast
                         </span>
                       ) : txHistoryMatchesNetwork(entry, NETWORK.passphrase) ? (

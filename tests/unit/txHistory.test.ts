@@ -365,7 +365,10 @@ test("retention boundary: prunes records older than 30 days deterministically", 
   const entries: TxHistoryEntry[] = [
     entry({ hash: "recent", recordedAt: new Date(now - 1000).toISOString() }),
     entry({ hash: "boundary-ok", recordedAt: new Date(now - thirtyDaysMs + 5000).toISOString() }),
-    entry({ hash: "boundary-expired", recordedAt: new Date(now - thirtyDaysMs - 5000).toISOString() }),
+    entry({
+      hash: "boundary-expired",
+      recordedAt: new Date(now - thirtyDaysMs - 5000).toISOString(),
+    }),
     entry({ hash: "old", recordedAt: new Date(now - 40 * 24 * 60 * 60 * 1000).toISOString() }),
   ];
 
@@ -418,16 +421,22 @@ test("TxHistoryTable confirmation dialog warns that clearing local data does not
   assert.ok(div.textContent?.includes("tx-to-clear"));
 
   // Click clear button
-  const clearBtn = div.querySelector('button[data-testid="clear-history-button"]') as HTMLButtonElement;
+  const clearBtn = div.querySelector(
+    'button[data-testid="clear-history-button"]',
+  ) as HTMLButtonElement;
   assert.ok(clearBtn);
   await act(async () => clearBtn.click());
 
   // Confirm dialog should appear stating that on-chain records are unchanged
   assert.ok(div.textContent?.includes("Clear browser-local transaction history?"));
-  assert.ok(div.textContent?.includes("On-chain transactions and ledger state are completely unchanged"));
+  assert.ok(
+    div.textContent?.includes("On-chain transactions and ledger state are completely unchanged"),
+  );
 
   // Click confirm
-  const confirmBtn = div.querySelector('button[data-testid="confirm-clear-history-button"]') as HTMLButtonElement;
+  const confirmBtn = div.querySelector(
+    'button[data-testid="confirm-clear-history-button"]',
+  ) as HTMLButtonElement;
   assert.ok(confirmBtn);
   await act(async () => confirmBtn.click());
 

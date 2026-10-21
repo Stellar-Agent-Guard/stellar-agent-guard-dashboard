@@ -14,15 +14,16 @@
  * never to a crash), and tests inject their own storage.
  */
 
-import { classifyStorageError, storageErrorMessage, writeStoredValue, type StorageOutcome } from "./versionedStorage.ts";
+import {
+  classifyStorageError,
+  storageErrorMessage,
+  writeStoredValue,
+  type StorageOutcome,
+} from "./versionedStorage.ts";
 import { NETWORK } from "./network.ts";
 
 export type TxHistoryTerminalOutcome =
-  | "confirmed"
-  | "failed"
-  | "cancelled"
-  | "pre-submit-failure"
-  | "submitted";
+  "confirmed" | "failed" | "cancelled" | "pre-submit-failure" | "submitted";
 
 export type TxHistoryStatus = TxHistoryTerminalOutcome;
 
@@ -91,9 +92,7 @@ export function pruneTxHistory(
   const now = options?.now ?? Date.now();
   const cutoffIso = new Date(now - maxAgeMs).toISOString();
 
-  return entries
-    .filter((entry) => entry.recordedAt >= cutoffIso)
-    .slice(0, maxCount);
+  return entries.filter((entry) => entry.recordedAt >= cutoffIso).slice(0, maxCount);
 }
 
 export const TX_HISTORY_STORAGE_KEY = "stellar-agent-guard-dashboard.txHistory.v1";
@@ -145,9 +144,7 @@ function isEntry(value: unknown): value is TxHistoryEntry {
     (entry.feeStroops === null ||
       entry.feeStroops === undefined ||
       typeof entry.feeStroops === "string") &&
-    (entry.detail === undefined ||
-      entry.detail === null ||
-      typeof entry.detail === "string")
+    (entry.detail === undefined || entry.detail === null || typeof entry.detail === "string")
   );
 }
 
@@ -167,17 +164,15 @@ export function loadTxHistory(
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    const migrated = parsed
-      .filter(isEntry)
-      .map((entry) => ({
-        ...entry,
-        hash: entry.hash ?? null,
-        id: entry.id ?? (entry.hash ? entry.hash : `local-${entry.recordedAt}-${entry.operation}`),
-        feeStroops: entry.feeStroops ?? null,
-        networkName: entry.networkName ?? null,
-        networkPassphrase: entry.networkPassphrase ?? null,
-        detail: entry.detail ?? null,
-      }));
+    const migrated = parsed.filter(isEntry).map((entry) => ({
+      ...entry,
+      hash: entry.hash ?? null,
+      id: entry.id ?? (entry.hash ? entry.hash : `local-${entry.recordedAt}-${entry.operation}`),
+      feeStroops: entry.feeStroops ?? null,
+      networkName: entry.networkName ?? null,
+      networkPassphrase: entry.networkPassphrase ?? null,
+      detail: entry.detail ?? null,
+    }));
     const pruned = pruneTxHistory(migrated, options);
     memoryHistory = pruned;
     return pruned;

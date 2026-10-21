@@ -13,7 +13,11 @@ import {
   invokeWithWallet,
 } from "../../lib/guard/submit.ts";
 import { WalletUserRejectedError } from "../../lib/guard/walletConnector.ts";
-import { loadTxHistory, clearTxHistory, TX_HISTORY_STORAGE_KEY } from "../../lib/guard/txHistory.ts";
+import {
+  loadTxHistory,
+  clearTxHistory,
+  TX_HISTORY_STORAGE_KEY,
+} from "../../lib/guard/txHistory.ts";
 import {
   Account,
   Address,
@@ -390,9 +394,18 @@ describe("describeRejectedResult", () => {
 
 describe("wallet cancellation handling (#325)", () => {
   it("classifies connector-specific rejection and cancellation errors correctly", () => {
-    assert.equal(isWalletCancellation(new WalletUserRejectedError("freighter", "sign transaction")), true);
-    assert.equal(isWalletCancellation(new WalletUserRejectedError("albedo", "sign transaction")), true);
-    assert.equal(isWalletCancellation(new WalletUserRejectedError("xbull", "sign transaction")), true);
+    assert.equal(
+      isWalletCancellation(new WalletUserRejectedError("freighter", "sign transaction")),
+      true,
+    );
+    assert.equal(
+      isWalletCancellation(new WalletUserRejectedError("albedo", "sign transaction")),
+      true,
+    );
+    assert.equal(
+      isWalletCancellation(new WalletUserRejectedError("xbull", "sign transaction")),
+      true,
+    );
 
     // Connector messages
     assert.equal(isWalletCancellation(new Error("User declined access")), true);
@@ -413,7 +426,9 @@ describe("wallet cancellation handling (#325)", () => {
     assert.match(msg, /nothing was sent/i);
     assert.match(msg, /retry/i);
 
-    const typedMsg = actionableCancellationMessage(new WalletUserRejectedError("freighter", "sign"));
+    const typedMsg = actionableCancellationMessage(
+      new WalletUserRejectedError("freighter", "sign"),
+    );
     assert.match(typedMsg, /declined to sign in Freighter/i);
   });
 
@@ -456,7 +471,11 @@ describe("wallet cancellation handling (#325)", () => {
     assert.equal(history.length, 1);
     const entry = history[0]!;
     assert.equal(entry.status, "cancelled");
-    assert.equal(entry.hash, null, "Never assign a transaction hash for a request cancelled before submission");
+    assert.equal(
+      entry.hash,
+      null,
+      "Never assign a transaction hash for a request cancelled before submission",
+    );
     assert.equal(entry.operation, "freeze");
     assert.ok(entry.detail);
     assert.match(entry.detail!, /declined/i);

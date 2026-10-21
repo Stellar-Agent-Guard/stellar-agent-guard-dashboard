@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { Account, Asset, Keypair, Networks, Operation, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import {
+  Account,
+  Asset,
+  Keypair,
+  Networks,
+  Operation,
+  TransactionBuilder,
+  xdr,
+} from "@stellar/stellar-sdk";
 import { assembleFromSimulation, inspectSignedEnvelope } from "../../lib/guard/submit.ts";
 
 test("assembleFromSimulation correctly builds transaction without prompting for signature", async () => {

@@ -510,11 +510,19 @@ describe("operator browser-local storage controls and category isolation (#332)"
 
   test("getOperatorStorageCategories lists every supported category with descriptions and counts", () => {
     const store = makeFakeStore();
-    store.setItem(TX_HISTORY_STORAGE_KEY, JSON.stringify([{ hash: "h1", operation: "freeze", status: "confirmed", recordedAt: "2026-10-20" }]));
+    store.setItem(
+      TX_HISTORY_STORAGE_KEY,
+      JSON.stringify([
+        { hash: "h1", operation: "freeze", status: "confirmed", recordedAt: "2026-10-20" },
+      ]),
+    );
     store.setItem(ADDRESS_BOOK_STORAGE_KEY, JSON.stringify([{ address: "GA...", alias: "Alice" }]));
     store.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(["status", "txhistory"]));
     store.setItem(THEME_STORAGE_KEY, "dark");
-    store.setItem(`${INSTANCE_STORAGE_PREFIX}.testnet`, JSON.stringify([{ address: "CA...", label: "My Guard" }]));
+    store.setItem(
+      `${INSTANCE_STORAGE_PREFIX}.testnet`,
+      JSON.stringify([{ address: "CA...", label: "My Guard" }]),
+    );
 
     const categories = getOperatorStorageCategories(store);
     assert.equal(categories.length, 4);
@@ -609,7 +617,9 @@ describe("operator browser-local storage controls and category isolation (#332)"
 
     localStorage.setItem(
       TX_HISTORY_STORAGE_KEY,
-      JSON.stringify([{ hash: "h1", operation: "freeze", status: "confirmed", recordedAt: "2026-10-20" }]),
+      JSON.stringify([
+        { hash: "h1", operation: "freeze", status: "confirmed", recordedAt: "2026-10-20" },
+      ]),
     );
 
     const div = document.createElement("div");
@@ -627,7 +637,9 @@ describe("operator browser-local storage controls and category isolation (#332)"
     });
 
     // Toggle inventory open
-    const toggleBtn = div.querySelector('button[data-testid="storage-inventory-toggle"]') as HTMLButtonElement;
+    const toggleBtn = div.querySelector(
+      'button[data-testid="storage-inventory-toggle"]',
+    ) as HTMLButtonElement;
     assert.ok(toggleBtn);
     await act(async () => toggleBtn.click());
 
@@ -635,7 +647,9 @@ describe("operator browser-local storage controls and category isolation (#332)"
     assert.ok(div.textContent?.includes("Transaction History"));
 
     // Click clear for history
-    const clearHistoryBtn = div.querySelector('button[data-testid="clear-category-history"]') as HTMLButtonElement;
+    const clearHistoryBtn = div.querySelector(
+      'button[data-testid="clear-category-history"]',
+    ) as HTMLButtonElement;
     assert.ok(clearHistoryBtn);
     await act(async () => clearHistoryBtn.click());
 
@@ -644,7 +658,9 @@ describe("operator browser-local storage controls and category isolation (#332)"
     assert.ok(div.textContent?.includes("It does not change the chain"));
 
     // Confirm clear
-    const confirmClearBtn = div.querySelector('button[data-testid="confirm-clear-history"]') as HTMLButtonElement;
+    const confirmClearBtn = div.querySelector(
+      'button[data-testid="confirm-clear-history"]',
+    ) as HTMLButtonElement;
     assert.ok(confirmClearBtn);
     await act(async () => confirmClearBtn.click());
 

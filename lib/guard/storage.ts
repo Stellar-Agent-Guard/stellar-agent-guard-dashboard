@@ -577,11 +577,7 @@ export function summarizeEntries(entries: readonly StorageEntryView[]): string {
 // Browser-local operator data controls (issue #332)
 // ---------------------------------------------------------------------------
 
-export type OperatorStorageCategory =
-  | "history"
-  | "address-book"
-  | "layouts"
-  | "guard-registry";
+export type OperatorStorageCategory = "history" | "address-book" | "layouts" | "guard-registry";
 
 export interface OperatorStorageCategoryInfo {
   id: OperatorStorageCategory;
@@ -620,7 +616,8 @@ function getAllStorageKeys(storage: StorageLike): string[] {
 export function getOperatorStorageCategories(
   storage?: StorageLike | null,
 ): OperatorStorageCategoryInfo[] {
-  const store = storage === undefined ? (typeof window !== "undefined" ? window.localStorage : null) : storage;
+  const store =
+    storage === undefined ? (typeof window !== "undefined" ? window.localStorage : null) : storage;
 
   let historyCount = 0;
   if (store) {
@@ -638,7 +635,8 @@ export function getOperatorStorageCategories(
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) addressBookCount = parsed.length;
-        else if (parsed && Array.isArray((parsed as any).contacts)) addressBookCount = (parsed as any).contacts.length;
+        else if (parsed && Array.isArray((parsed as any).contacts))
+          addressBookCount = (parsed as any).contacts.length;
       }
     } catch {
       addressBookCount = 0;
@@ -713,7 +711,8 @@ export function clearOperatorStorageCategory(
   category: OperatorStorageCategory,
   storage?: StorageLike | null,
 ): void {
-  const store = storage === undefined ? (typeof window !== "undefined" ? window.localStorage : null) : storage;
+  const store =
+    storage === undefined ? (typeof window !== "undefined" ? window.localStorage : null) : storage;
   if (!store) return;
 
   const removeKey = (key: string) => {
