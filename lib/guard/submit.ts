@@ -37,6 +37,12 @@ import { stringifyError } from "./chain.ts";
 import { announce } from "./useAnnounce.ts";
 import { recordTx } from "./txHistory.ts";
 import { hardwareGuide } from "./hardwareGuide.ts";
+import {
+  checkPresignAuthorization,
+  contextFromTransaction,
+  type AuthorizationCheck,
+  type AuthorizationContext,
+} from "./authorizationSummary.ts";
 
 /** Inclusion fee floor, in stroops, for a single-operation transaction. */
 // `FeePreset` is imported as a type on purpose: `scripts/prove-phase3.ts` runs
@@ -142,7 +148,62 @@ export interface InvokeRequest {
   maxFeeCap?: bigint;
   minTimeOffset?: number;
   maxTimeOffset?: number;
+  /**
+   * What the operator was shown and confirmed before this write, in the four
+   * facts that identify it (issue #343).
+   *
+   * Required rather than optional on purpose: a caller has to state where the
+   * summary came from, and the pipeline re-derives the same four facts from the
+   * transaction it is about to simulate and refuses before raising any prompt
+   * when they disagree. A panel passes the context it rendered and acknowledged;
+   * `null` says plainly that no summary exists — a caller that has no admin
+   * address to show has no authorization to confirm, and `null` is refused rather
+   * than quietly allowed.
+   */
+  authorization: AuthorizationContext | null;
 }
+
+/**
+ * The authorization summary for a write, read back out of a built transaction.
+ *
+ * This is the same builder, the same encoding and the same reader the pipeline
+ * uses, so the four facts a panel prints are the four facts the envelope carries.
+ * The sequence number is a placeholder and the transaction is never signed or
+ * submitted: a preview exists to be read, and only `runInvocation`'s own probe
+ * becomes a simulation. A caller with an unusable admin address gets `null`
+ * rather than an exception — an empty address means no wallet is connected, which
+ * is a summary the panel must show as missing, not a crash.
+ */
+export function previewAuthorizationSummary(params: {
+  contract: string;
+  fn: string;
+  admin: string;
+  passphrase?: string;
+  guardForFootprint?: string | null;
+}): AuthorizationContext | null {
+  const passphrase = params.passphrase ?? NETWORK.passphrase;
+  try {
+    const transaction = buildInitialEnvelope({
+      source: new Account(params.admin, PREVIEW_SEQUENCE),
+      operation: Operation.invokeContractFunction({
+        contract: params.contract,
+        function: params.fn,
+        args: [],
+      }),
+      passphrase,
+      guard: params.guardForFootprint ?? null,
+    });
+    return contextFromTransaction(transaction, passphrase);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The sequence number a preview is built on. Any valid one works — the number is
+ * not part of the authorization, and the preview never reaches a network.
+ */
+const PREVIEW_SEQUENCE = "1";
 
 /**
  * Build the initial (footprint-declaring) envelope for a probe or enforce pass.
@@ -521,6 +582,28 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     passphrase,
     guard: request.guardForFootprint ?? null,
   });
+
+  // ── Step 0: the confirmed authorization, checked against this transaction ─
+  //
+  // The check reads the probe that was just built, before the first RPC call and
+  // long before the first signature request, so a summary that is missing or no
+  // longer true costs nothing and raises no popup (issue #343). The transaction
+  // is the authority: what a panel printed is honoured only while the envelope
+  // says the same thing, which is what turns "the guard changed underneath the
+  // dialog" from a wrong signature into a refusal.
+  const authorization: AuthorizationCheck = checkPresignAuthorization({
+    derived: contextFromTransaction(probe, passphrase),
+    confirmed: request.authorization,
+  });
+  if (!authorization.ok) {
+    return {
+      kind: "refused",
+      stage: "discovery",
+      detail: authorization.detail,
+      diagnosticEvents: [],
+    };
+  }
+
   announce("Transaction simulation started");
   const discovery = await server.simulateTransaction(probe);
   if (rpc.Api.isSimulationError(discovery)) {
