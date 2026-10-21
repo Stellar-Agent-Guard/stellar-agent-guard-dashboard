@@ -26,6 +26,8 @@ jobs:
     # The official Playwright image pins the browser build *and* the font set.
     # Baselines are generated in this exact image, so a diff here means the
     # interface changed — not that the runner happens to have different fonts.
+    # Keep the tag in step with devDependencies' @playwright/test: a mismatch
+    # reports "Executable doesn't exist" instead of comparing any pixels.
     container:
       image: mcr.microsoft.com/playwright:v1.64.0-noble
 

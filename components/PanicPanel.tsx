@@ -22,6 +22,7 @@ import { formatStroops, formatStroopsWithUnit } from "../lib/guard/formatters.ts
 import { refusedEventsFromDiagnostics } from "../lib/guard/telemetry.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { WRITE_DISABLED_HINT, writeControlState } from "../lib/guard/observerMode.ts";
+import { evaluateOffline, useOnlineStatus } from "../lib/guard/online.ts";
 import { ErrorBlock, starLink } from "./bits.tsx";
 import {
   freezeConfirmed,
@@ -32,6 +33,7 @@ import {
 import { useModalFocus } from "../lib/guard/useModalFocus.ts";
 import { noteVerifiedOutcome } from "../lib/guard/statusTransitions.ts";
 import { announce } from "../lib/guard/useAnnounce.ts";
+import { usePwaActivity } from "../lib/guard/usePwaActivity.ts";
 import { CopyButton } from "./CopyButton.tsx";
 import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 
@@ -256,7 +258,19 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
   // confirmation's shape, and the operator's typed answer.
   const [balance, setBalance] = useState<BalanceState>({ status: "unread" });
   const [challengeInput, setChallengeInput] = useState("");
+  // A freeze that is signing or awaiting the post-write read is a pending
+  // write: an update must not replace the app underneath it (#398).
+  usePwaActivity(phase === "signing" || phase === "verifying", "write");
   const demoMode = useDemoMode();
+  // An emergency write is still a write: when the live status read it depends
+  // on failed, or the browser is offline, the control says why instead of
+  // offering an action that cannot be prepared safely (issue #348).
+  const online = useOnlineStatus();
+  const offlineView = evaluateOffline({
+    online,
+    liveReadFailed: snapshot !== null && !snapshot.status.ok,
+  });
+  const preflightUnavailable = offlineView.writesDisabled ? offlineView.detail : null;
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -339,10 +353,12 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
   // inert one has to say why in the same words as every other control (#101).
   const freezeControl = writeControlState(wallet, {
     extraDisabled: alreadyFrozen === true,
+    preflightUnavailable,
     label: "freeze this account",
   });
   const unfreezeControl = writeControlState(wallet, {
     extraDisabled: alreadyFrozen === false,
+    preflightUnavailable,
     label: "unfreeze this account",
   });
 
