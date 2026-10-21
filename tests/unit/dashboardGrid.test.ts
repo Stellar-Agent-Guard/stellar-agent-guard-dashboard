@@ -50,6 +50,17 @@ test("a saved layout round-trips through storage", () => {
   assert.deepEqual(ids(loaded), ids(layout));
 });
 
+test("a quota failure is returned while the layout remains available in memory", () => {
+  const storage: StorageLike = {
+    getItem: () => null,
+    setItem: () => {
+      throw Object.assign(new Error("full"), { name: "QuotaExceededError" });
+    },
+  };
+  const result = saveLayout(setCollapsed(defaultLayout(), "panic", true), storage);
+  assert.deepEqual(result, { ok: false, error: "quota" });
+});
+
 test("loadLayout reads from the versioned storage key", () => {
   const storage = fakeStorage();
   storage.data.set(LAYOUT_STORAGE_KEY, JSON.stringify([{ id: "telemetry", collapsed: false }]));
@@ -63,6 +74,14 @@ test("a corrupted or non-array payload degrades to the default layout", () => {
   assert.deepEqual(ids(loadLayout(storage)), [...DEFAULT_LAYOUT]);
   storage.data.set(LAYOUT_STORAGE_KEY, JSON.stringify({ not: "an array" }));
   assert.deepEqual(ids(loadLayout(storage)), [...DEFAULT_LAYOUT]);
+});
+
+test("a partial legacy layout remains unchanged for recovery", () => {
+  const storage = fakeStorage();
+  const raw = JSON.stringify([{ id: "status", collapsed: false }, { id: "panic" }]);
+  storage.data.set(LAYOUT_STORAGE_KEY, raw);
+  loadLayout(storage);
+  assert.equal(storage.data.get(LAYOUT_STORAGE_KEY), raw);
 });
 
 test("an unknown panel id in storage is dropped, not rendered", () => {
@@ -152,5 +171,5 @@ test("resetLayout restores the default arrangement regardless of current state",
 
 test("loadLayout with no storage returns the default (server render, private mode)", () => {
   assert.deepEqual(ids(loadLayout(null)), [...DEFAULT_LAYOUT]);
-  assert.deepEqual(saveLayout(defaultLayout(), null), undefined);
+  assert.deepEqual(saveLayout(defaultLayout(), null), { ok: false, error: "unavailable" });
 });

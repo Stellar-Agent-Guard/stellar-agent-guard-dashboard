@@ -16,6 +16,7 @@ import {
   loadTxHistory,
   paginateTxHistory,
   subscribeTxHistory,
+  txHistorySaveWarning,
   txHistoryToCsv,
   type TxHistoryEntry,
 } from "../lib/guard/txHistory.ts";
@@ -31,11 +32,15 @@ export function TxHistoryTable() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [page, setPage] = useState(1);
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
 
   // Read the store only in the browser, and follow later records (another
   // panel submitting, another tab) through the store's subscription.
   useEffect(() => {
-    const sync = () => setEntries(loadTxHistory());
+    const sync = () => {
+      setEntries(loadTxHistory());
+      setSaveWarning(txHistorySaveWarning());
+    };
     sync();
     return subscribeTxHistory(sync);
   }, []);
@@ -60,6 +65,17 @@ export function TxHistoryTable() {
     announce(`Exported ${filtered.length} transaction${filtered.length === 1 ? "" : "s"} as CSV`);
   }
 
+  function downloadHistoryBackup() {
+    const csv = txHistoryToCsv(entries);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `guard-tx-history-backup-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="panel">
       <div className="row" style={{ justifyContent: "space-between" }}>
@@ -74,6 +90,15 @@ export function TxHistoryTable() {
         deployments — recorded with the hash the network accepted. Refused calls never became
         transactions, so they have no place here.
       </p>
+
+      {saveWarning !== null && (
+        <div role="alert" className="tiny" data-testid="history-save-warning">
+          {saveWarning}
+          <button type="button" className="secondary" onClick={downloadHistoryBackup}>
+            Download history backup
+          </button>
+        </div>
+      )}
 
       <div className="split" style={{ marginTop: 12 }}>
         <label className="field" style={{ marginBottom: 0 }}>

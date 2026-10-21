@@ -14,6 +14,8 @@
  * never to a crash), and tests inject their own storage.
  */
 
+import { storageErrorMessage, writeStoredValue, type StorageOutcome } from "./versionedStorage.ts";
+
 export interface TxHistoryEntry {
   /** The hash the network accepted. Identity for de-duplication. */
   hash: string;
@@ -30,6 +32,10 @@ export interface TxHistoryEntry {
 export const TX_HISTORY_LIMIT = 200;
 
 export const TX_HISTORY_STORAGE_KEY = "stellar-agent-guard-dashboard.txHistory.v1";
+
+let lastSaveOutcome: StorageOutcome<void> = { ok: true, value: undefined };
+let memoryHistory: TxHistoryEntry[] = [];
+const failedStores = new WeakSet<object>();
 
 /** The subset of `Storage` the store needs, so tests can inject a fake. */
 export interface StorageLike {
@@ -65,17 +71,21 @@ function isEntry(value: unknown): value is TxHistoryEntry {
  * The stored history, newest first, validated and capped. A corrupted
  * payload yields an empty history rather than a broken dashboard.
  */
-export function loadTxHistory(storage: StorageLike | null = defaultStorage()): TxHistoryEntry[] {
-  if (!storage) return [];
+export function loadTxHistory(storage?: StorageLike | null): TxHistoryEntry[] {
+  const store = storage === undefined ? defaultStorage() : storage;
+  if (!store) return [...memoryHistory];
+  if (failedStores.has(store)) return [...memoryHistory];
   try {
-    const raw = storage.getItem(TX_HISTORY_STORAGE_KEY);
+    const raw = store.getItem(TX_HISTORY_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed
+    const history = parsed
       .filter(isEntry)
       .map((entry) => ({ ...entry, feeStroops: entry.feeStroops ?? null }))
       .slice(0, TX_HISTORY_LIMIT);
+    memoryHistory = history;
+    return history;
   } catch {
     return [];
   }
@@ -89,6 +99,15 @@ export function subscribeTxHistory(listener: () => void): () => void {
   return () => {
     listeners.delete(listener);
   };
+}
+
+/** Persistence result for the latest history write, for a concise UI warning. */
+export function txHistorySaveOutcome(): StorageOutcome<void> {
+  return lastSaveOutcome;
+}
+
+export function txHistorySaveWarning(): string | null {
+  return lastSaveOutcome.ok ? null : storageErrorMessage(lastSaveOutcome.error);
 }
 
 function notify(): void {
@@ -119,13 +138,10 @@ export function recordTx(
     0,
     TX_HISTORY_LIMIT,
   );
-  if (storage) {
-    try {
-      storage.setItem(TX_HISTORY_STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // A private-mode write failure must not interrupt the submission path.
-    }
-  }
+  memoryHistory = next;
+  lastSaveOutcome = writeStoredValue(storage, TX_HISTORY_STORAGE_KEY, JSON.stringify(next));
+  if (storage && !lastSaveOutcome.ok) failedStores.add(storage);
+  else if (storage) failedStores.delete(storage);
   notify();
   return next;
 }

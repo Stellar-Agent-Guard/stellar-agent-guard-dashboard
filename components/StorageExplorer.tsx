@@ -25,7 +25,7 @@
  * `lib/guard/chain.ts` and `lib/guard/storage.ts`; this file is the view.
  */
 
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { Dispatch } from "react";
 import { useGuard } from "./GuardProvider.tsx";
 import { CopyButton } from "./CopyButton.tsx";
@@ -43,6 +43,7 @@ import {
   type StorageEntryView,
 } from "../lib/guard/storage.ts";
 import { announce } from "../lib/guard/useAnnounce.ts";
+import { STORAGE_INVENTORY } from "../lib/guard/storageInventory.ts";
 
 /** The badge class for a TTL tier — the tokens the rest of the interface uses. */
 const TIER_CLASS: Record<StorageEntryView["ttlTier"], string> = {
@@ -358,6 +359,7 @@ export function StorageExplorer({
  */
 export function StorageExplorerButton() {
   const [state, dispatch] = useReducer(explorerReducer, INITIAL_EXPLORER_STATE);
+  const [inventoryOpen, setInventoryOpen] = useState(false);
 
   return (
     <>
@@ -376,6 +378,46 @@ export function StorageExplorerButton() {
       >
         Inspect contract storage
       </button>
+      <button
+        type="button"
+        className="secondary no-print"
+        onClick={() => setInventoryOpen((open) => !open)}
+        aria-expanded={inventoryOpen}
+        aria-controls="browser-storage-inventory"
+        data-testid="storage-inventory-toggle"
+      >
+        Browser data inventory
+      </button>
+      {inventoryOpen && (
+        <section id="browser-storage-inventory" aria-label="Browser storage inventory">
+          <p className="tiny muted">
+            Local browser records only. They are convenience inputs and never replace live chain reads;
+            secret keys are not stored.
+          </p>
+          <div className="scrolly">
+            <table className="events">
+              <thead>
+                <tr>
+                  <th>Storage key</th>
+                  <th>Purpose</th>
+                  <th>Data category</th>
+                  <th>Public metadata</th>
+                </tr>
+              </thead>
+              <tbody>
+                {STORAGE_INVENTORY.map((entry) => (
+                  <tr key={`${entry.area}:${entry.key}`}>
+                    <td className="mono tiny">{entry.key} ({entry.area})</td>
+                    <td className="tiny">{entry.purpose}</td>
+                    <td className="tiny">{entry.category}</td>
+                    <td className="tiny">{entry.containsPublicMetadata ? "Yes" : "No"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
       <StorageExplorer open={state.open} state={state} dispatch={dispatch} />
     </>
   );

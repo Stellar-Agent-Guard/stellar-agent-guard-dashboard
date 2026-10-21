@@ -235,7 +235,7 @@ with its source, its refresh trigger, and whether it is allowed to be wrong.
 | Balance                                              | chain (SAC `balance` via simulation)                                                     | mount + poll                                                 | no                                                                                                           |
 | Artifact identity / verification                     | chain (`getContractInstance` + `getContractWasmByContractId`) + local hash               | on demand, before deploy and in the integrity inspector      | no — a mismatch aborts the deploy                                                                            |
 | Telemetry events                                     | chain (`getEvents`, cursor-based)                                                        | continuous polling; cursor carried forward, never re-derived | no — an empty or gapped page is labelled, not smoothed over                                                  |
-| Registered guard instances (the fleet)               | **`localStorage`** (`stellar-agent-guard-dashboard.instances.v1`)                        | user action (add/remove/select)                              | yes, by design — it is an address list, not chain state; every row's live numbers are re-read from the chain |
+| Registered guard instances (the fleet)               | **`localStorage`** (`stellar-agent-guard-dashboard.instances.v2.<network>`)               | user action (add/remove/select)                              | yes, by design — it is an address list, not chain state; every row's live numbers are re-read from the chain |
 | Policy form draft                                    | component-local until submit                                                             | user input                                                   | yes, while editing — never treated as installed until the chain re-read confirms it                          |
 | Address book                                         | **`localStorage`** (`…addressBook.v1`)                                                   | user action                                                  | yes — convenience data, carries no fund authority                                                            |
 | Transaction history                                  | **`localStorage`** (`…txHistory.v1`)                                                     | after each submission                                        | yes — it records what this browser submitted; the chain is authoritative                                     |
@@ -250,6 +250,17 @@ read, never a substitute for one.** The instance registry and the address book s
 status, policy and balance displayed for those addresses are always re-read. Test coverage for the
 persisted helpers lives beside them (`tests/unit/tabSync.test.ts`, `tests/unit/txHistory.test.ts`,
 `tests/unit/addressBook.test.ts`, `tests/unit/dashboardGrid.test.ts`, `tests/unit/useIdleTimer.test.ts`).
+
+### Browser persistence inventory
+
+The console exposes **Browser data inventory** beside the contract storage explorer. It lists every
+browser persistence key family, its purpose, whether it may contain public operational metadata,
+and whether its contents are chain-derived, operator-entered, or presentation-only. The inventory
+is backed by the helpers' exported key constants and checked by
+`tests/unit/storageInventory.test.ts`; the short-lived bytecode cache and cross-tab transport are
+included as well. Registry, address-book, and layout records use explicit schema versions. A
+malformed, partial, unknown-future, or unsuccessfully migrated record is left in place for recovery;
+it is never used as a substitute for live chain state. Browser storage contains no secret keys.
 
 ### Complete write surface
 

@@ -8,6 +8,7 @@ import {
   paginateTxHistory,
   recordTx,
   subscribeTxHistory,
+  txHistorySaveOutcome,
   txHistoryToCsv,
   type StorageLike,
   type TxHistoryEntry,
@@ -104,6 +105,21 @@ test("a corrupt or non-array storage payload yields an empty history", () => {
     JSON.stringify([entry(), { hash: "broken", status: "weird" }]),
   );
   assert.equal(loadTxHistory(storage).length, 1);
+});
+
+test("a quota failure is reported without interrupting the in-memory history result", () => {
+  const storage: StorageLike = {
+    getItem: () => null,
+    setItem: () => {
+      throw Object.assign(new Error("full"), { name: "QuotaExceededError" });
+    },
+  };
+  const result = recordTx(
+    { hash: "still-recorded", operation: "freeze", status: "confirmed", feeStroops: null },
+    storage,
+  );
+  assert.equal(result[0]?.hash, "still-recorded");
+  assert.deepEqual(txHistorySaveOutcome(), { ok: false, error: "quota" });
 });
 
 test("search matches operation, hash and status, case-insensitively", () => {
