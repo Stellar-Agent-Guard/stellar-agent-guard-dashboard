@@ -820,6 +820,13 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
               <span className="mono">{report.result.detail}</span>
             </p>
           )}
+          {report.result.kind === "ambiguous" && (
+            <p className="tiny" style={{ marginTop: 6 }}>
+              Transaction {starLink(report.result.hash)} was broadcast and never answered:{" "}
+              <span className="mono">{report.result.detail}</span> The status read below is the
+              authority on whether the account changed — this console does not claim either way.
+            </p>
+          )}
 
           {!report.confirmed && !afterOk(report) && report.txHash && (
             <p className="tiny muted" style={{ marginTop: 6 }}>
@@ -829,7 +836,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
             </p>
           )}
 
-          {report.result.kind !== "submitted" && (
+          {report.result.kind === "refused" && (
             <p className="tiny muted" style={{ marginTop: 6 }}>
               A refused call has no transaction hash by construction — it was never broadcast. That
               is the pre-flight path working, not a missing receipt.
