@@ -101,10 +101,11 @@ function speakFreezeOutcome(
   confirmed: boolean,
   note: string,
   result?: InvokeResult,
+  guard?: string,
 ): void {
   const spoken = confirmed
-    ? freezeConfirmed(action)
-    : freezeFailed(action, result ? writeFailureReason(result, note) : note);
+    ? freezeConfirmed(action, guard)
+    : freezeFailed(action, result ? writeFailureReason(result, note) : note, guard);
   announce(spoken.message, spoken.priority);
 }
 
@@ -466,7 +467,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
       // is already in the shell's queue when the dialog is torn down and focus
       // moves back to the trigger. A write that was included but did not take
       // effect is announced as the failure it is, with the reason.
-      speakFreezeOutcome(action, confirmed, note, result);
+      speakFreezeOutcome(action, confirmed, note, result, guard);
       if (confirmed) {
         // The effect is now on chain and has been announced. Recorded so the
         // next poll does not repeat the same fact back at the operator — and
@@ -486,7 +487,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
       setError(detail);
       // The dialog is about to reopen in its idle state, so the failure has to be
       // spoken now: nothing else on screen will change once focus is restored.
-      speakFreezeOutcome(action, false, detail);
+      speakFreezeOutcome(action, false, detail, undefined, guard);
       setPhase("idle");
       setAcknowledged(false);
     } finally {
