@@ -101,11 +101,6 @@ export interface GuardDeepLink {
    * the page would render a guard the operator cannot see the name of.
    */
   addToRegistry: boolean;
-  /**
-   * Validation details for the deep link. Present when the link carried a
-   * `guard` parameter so the UI can report the outcome.
-   */
-  validation: GuardParamValidation;
 }
 
 /**
@@ -119,11 +114,17 @@ export function resolveGuardFromSearch(params: {
   registry: readonly { guard: string }[];
   current: string;
 }): GuardDeepLink | null {
-  const validation = validateGuardParam(params.search, params.current);
+  // Validation here deliberately ignores the current selection: a link that
+  // names a different guard is the whole point of the hop (the configure page
+  // mounts its own provider, which falls back to the first known instance).
+  // A *conflict* would reject exactly the links this function exists to adopt.
+  // Callers that need a reason for a rejected parameter can use
+  // `validateGuardParam` directly.
+  const validation = validateGuardParam(params.search);
   if (validation.status !== "valid") return null;
+  if (validation.guard === params.current) return null;
   return {
     guard: validation.guard,
     addToRegistry: !params.registry.some((instance) => instance.guard === validation.guard),
-    validation,
   };
 }

@@ -912,7 +912,7 @@ export function DeployPanel() {
           </span>
         </div>
         {inspecting && inspectProgress && (
-          <div className="stack" style={{ marginTop: 8 }} role="status" aria-live="polite">
+          <div className="stack" style={{ marginTop: 8 }} role="status">
             <div className="tiny mono">
               {(() => {
                 const p = inspectProgress as WasmParseProgress | WasmHashProgress;
