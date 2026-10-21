@@ -26,6 +26,7 @@ import {
   type DashboardLayout,
   type PanelId,
 } from "../lib/guard/layoutStore.ts";
+import { storageErrorMessage } from "../lib/guard/versionedStorage.ts";
 import { useAnnounce } from "../lib/guard/useAnnounce.ts";
 
 export interface GridPanel {
@@ -40,6 +41,7 @@ const PANEL_TITLE_ID = (id: PanelId): string => `panel-title-${id}`;
 export function DashboardGrid({ panels }: { panels: GridPanel[] }) {
   const [layout, setLayout] = useState<DashboardLayout | null>(null);
   const [dragging, setDragging] = useState<PanelId | null>(null);
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
   const announce = useAnnounce();
 
   // Load the persisted layout after mount (never during render), so server and
@@ -66,7 +68,19 @@ export function DashboardGrid({ panels }: { panels: GridPanel[] }) {
 
   const persist = (next: DashboardLayout) => {
     setLayout(next);
-    saveLayout(next);
+    const result = saveLayout(next);
+    setSaveWarning(result.ok ? null : storageErrorMessage(result.error));
+  };
+
+  const exportLayout = () => {
+    if (layout === null) return;
+    const blob = new Blob([JSON.stringify(layout, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "dashboard-layout-backup.json";
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const byId = useMemo(() => new Map(panels.map((panel) => [panel.id, panel])), [panels]);
@@ -116,6 +130,14 @@ export function DashboardGrid({ panels }: { panels: GridPanel[] }) {
 
   return (
     <div>
+      {saveWarning !== null && (
+        <div role="alert" className="tiny" data-testid="layout-save-warning">
+          {saveWarning}
+          <button type="button" className="secondary" onClick={exportLayout}>
+            Download layout backup
+          </button>
+        </div>
+      )}
       {layout.order
         .filter((placement) => byId.has(placement.id))
         .map((placement, index, visible) => {

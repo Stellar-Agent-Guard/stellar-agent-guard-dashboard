@@ -76,6 +76,17 @@ test("a saved layout round-trips through storage", () => {
   assert.deepEqual(ids(loaded), ids(layout));
 });
 
+test("a quota failure is returned while the layout remains available in memory", () => {
+  const storage: StorageLike = {
+    getItem: () => null,
+    setItem: () => {
+      throw Object.assign(new Error("full"), { name: "QuotaExceededError" });
+    },
+  };
+  const result = saveLayout(setCollapsed(defaultLayout(), "panic", true), storage);
+  assert.deepEqual(result, { ok: false, error: "quota" });
+});
+
 test("loadLayout reads from the versioned storage key", () => {
   const storage = fakeStorage();
   storage.data.set(LAYOUT_STORAGE_KEY, JSON.stringify([{ id: "telemetry", collapsed: false }]));
@@ -89,6 +100,14 @@ test("a corrupted or non-array payload degrades to the default layout", () => {
   assert.deepEqual(ids(loadLayout(storage)), [...DEFAULT_LAYOUT]);
   storage.data.set(LAYOUT_STORAGE_KEY, JSON.stringify({ not: "an array" }));
   assert.deepEqual(ids(loadLayout(storage)), [...DEFAULT_LAYOUT]);
+});
+
+test("a partial legacy layout remains unchanged for recovery", () => {
+  const storage = fakeStorage();
+  const raw = JSON.stringify([{ id: "status", collapsed: false }, { id: "panic" }]);
+  storage.data.set(LAYOUT_STORAGE_KEY, raw);
+  loadLayout(storage);
+  assert.equal(storage.data.get(LAYOUT_STORAGE_KEY), raw);
 });
 
 test("an unknown panel id in storage is dropped, not rendered", () => {
@@ -189,7 +208,7 @@ test("resetLayout restores the default arrangement regardless of current state",
 
 test("loadLayout with no storage returns the default (server render, private mode)", () => {
   assert.deepEqual(ids(loadLayout(null)), [...DEFAULT_LAYOUT]);
-  assert.deepEqual(saveLayout(defaultLayout(), null), undefined);
+  assert.deepEqual(saveLayout(defaultLayout(), null), { ok: false, error: "unavailable" });
 });
 
 test("keyboard move controls use rendered-panel boundaries and reset persisted order", async () => {
@@ -229,9 +248,11 @@ test("keyboard move controls use rendered-panel boundaries and reset persisted o
   assert.ok(
     pendingAnnouncements().some((item) => item.message === "Status panel moved to position 2 of 2"),
   );
-  const stored = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) ?? "[]") as { id: PanelId }[];
+  const stored = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) ?? "{}") as {
+    data: { order: { id: PanelId }[] };
+  };
   assert.deepEqual(
-    stored.map((placement) => placement.id),
+    stored.data.order.map((placement) => placement.id),
     ["telemetry", "txhistory", "panic", "status", "multisig", "xdr"],
   );
 
@@ -240,11 +261,11 @@ test("keyboard move controls use rendered-panel boundaries and reset persisted o
   );
   assert.ok(resetButton);
   await act(() => resetButton.click());
-  const resetOrder = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) ?? "[]") as {
-    id: PanelId;
-  }[];
+  const resetOrder = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) ?? "{}") as {
+    data: { order: { id: PanelId }[] };
+  };
   assert.deepEqual(
-    resetOrder.map((placement) => placement.id),
+    resetOrder.data.order.map((placement) => placement.id),
     [...DEFAULT_LAYOUT],
   );
 });
