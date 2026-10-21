@@ -43,6 +43,7 @@ import {
   type GuardWriteLockLease,
   type GuardWriteLockRecord,
 } from "../lib/guard/tabSync.ts";
+import { compileIncidentSummary, formatIncidentSummary } from "../lib/guard/printReport.ts";
 
 /**
  * The emergency panic button.
@@ -63,7 +64,15 @@ import {
  * produced it.
  */
 
-type Phase = "idle" | "confirming" | "signing" | "verifying" | "done";
+type Phase =
+  | "idle"
+  | "confirming"
+  | "prepared" // Transaction constructed, ready for wallet signature
+  | "awaiting-signature" // Wallet prompt shown, waiting for user action
+  | "signing" // Wallet is processing the signature
+  | "submitted" // Transaction broadcast, awaiting inclusion
+  | "verifying" // Re-reading status() to confirm effect
+  | "done"; // Final state (verified or unverified)
 
 /**
  * The live XLM balance the freeze-challenge threshold is compared against
@@ -83,6 +92,18 @@ interface Report {
   /** True only when the re-read confirms the intended effect. */
   confirmed: boolean;
   note: string;
+  /** Transaction hash retained even when verification is delayed */
+  txHash?: string;
+}
+
+/** Helper: did status() succeed on the re-read? */
+function afterOk(report: Report): boolean {
+  // If we got a confirmed result, status() definitely succeeded
+  if (report.confirmed) return true;
+  // If adminFrozenAfter is non-null, we read something (even if it didn't match expectations)
+  if (report.adminFrozenAfter !== null) return true;
+  // Otherwise the read failed entirely
+  return false;
 }
 
 /**
@@ -270,6 +291,10 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
   const [pendingUnfreeze, setPendingUnfreeze] = useState<GuardWriteLockRecord | null>(null);
   const [localWriteOwner, setLocalWriteOwner] = useState<string | null>(null);
   const activeWriteLease = useRef<GuardWriteLockLease | null>(null);
+  // Incident summary modal state (issue #321)
+  const [showIncidentSummary, setShowIncidentSummary] = useState(false);
+  const [lastReadError, setLastReadError] = useState<string | null>(null);
+  const [lastSuccessfulRead, setLastSuccessfulRead] = useState<string | null>(null);
   // A freeze that is signing or awaiting the post-write read is a pending
   // write: an update must not replace the app underneath it (#398).
   usePwaActivity(phase === "signing" || phase === "verifying", "write");
@@ -424,9 +449,19 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
     const renewal = lease ? setInterval(() => void lease.renew(), 30_000) : null;
     setError(null);
     setReport(null);
-    setPhase("signing");
+
     try {
       const walletSigner = signer();
+
+      // Phase: prepared - transaction constructed, ready for wallet signature
+      setPhase("prepared");
+
+      // Phase: awaiting-signature - wallet prompt shown, waiting for user action
+      setPhase("awaiting-signature");
+
+      // Phase: signing - wallet is processing the signature
+      setPhase("signing");
+
       const result =
         action === "freeze"
           ? await freeze({ server, signer: walletSigner, guard, exportOnly })
@@ -450,8 +485,13 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
         return;
       }
 
-      // Re-read the contract's own view. This is the step that makes the claim
-      // real: the UI is not the source of truth, `status()` is.
+      // Phase: submitted - transaction broadcast, awaiting inclusion
+      setPhase("submitted");
+
+      // Retain transaction hash even if verification fails or is delayed
+      const txHash = result.kind === "submitted" ? result.hash : undefined;
+
+      // Phase: verifying - re-reading status() to confirm effect
       setPhase("verifying");
       const after = await readStatusAfter(server, guard, wallet?.address);
       const adminFrozenAfter = after.ok ? after.value.admin_frozen : null;
@@ -479,6 +519,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
       }
 
       setPhase("done");
+
       // Only a broadcast write can have moved the chain. Tell the other tabs so
       // they re-read instead of showing the pre-freeze world for up to a poll
       // interval — the one delay that matters when the agent is misbehaving.
@@ -703,13 +744,33 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
         </div>
       )}
 
-      {(phase === "signing" || phase === "verifying") && (
+      {(phase === "prepared" ||
+        phase === "awaiting-signature" ||
+        phase === "signing" ||
+        phase === "submitted" ||
+        phase === "verifying") && (
         <div className="notice info">
-          <strong>{phase === "signing" ? "Waiting for the wallet…" : "Verifying on chain…"}</strong>
+          <strong>
+            {phase === "prepared"
+              ? "Preparing transaction…"
+              : phase === "awaiting-signature"
+                ? "Awaiting wallet signature…"
+                : phase === "signing"
+                  ? "Signing in progress…"
+                  : phase === "submitted"
+                    ? "Transaction submitted, awaiting inclusion…"
+                    : "Verifying on chain…"}
+          </strong>
           <span className="tiny">
-            {phase === "signing"
-              ? "Two signatures may be requested: one for the authorization entry, one for the transaction envelope."
-              : "Re-reading status() to confirm the account's own view changed."}
+            {phase === "prepared"
+              ? "Constructing the transaction for your review."
+              : phase === "awaiting-signature"
+                ? "Wallet prompt shown — waiting for you to approve."
+                : phase === "signing"
+                  ? "Two signatures may be requested: one for the authorization entry, one for the transaction envelope."
+                  : phase === "submitted"
+                    ? "Broadcast complete — waiting for the network to include it in a ledger."
+                    : "Re-reading status() to confirm the account's own view changed."}
           </span>
         </div>
       )}
@@ -796,7 +857,9 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
           <strong>
             {report.confirmed
               ? `${report.action === "freeze" ? "Freeze" : "Unfreeze"} confirmed on chain`
-              : `${report.action === "freeze" ? "Freeze" : "Unfreeze"} NOT confirmed`}
+              : !afterOk(report)
+                ? `${report.action === "freeze" ? "Freeze" : "Unfreeze"} submitted — verification delayed`
+                : `${report.action === "freeze" ? "Freeze" : "Unfreeze"} NOT confirmed`}
           </strong>
           <span className="tiny">{report.note}</span>
 
@@ -820,6 +883,14 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
             </p>
           )}
 
+          {!report.confirmed && !afterOk(report) && report.txHash && (
+            <p className="tiny muted" style={{ marginTop: 6 }}>
+              The transaction was submitted ({starLink(report.txHash)}) but status() could not be
+              re-read yet. Check back shortly — the freeze may still take effect even though we
+              cannot confirm it right now.
+            </p>
+          )}
+
           {report.result.kind !== "submitted" && (
             <p className="tiny muted" style={{ marginTop: 6 }}>
               A refused call has no transaction hash by construction — it was never broadcast. That
@@ -828,6 +899,88 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
           )}
         </div>
       )}
+
+      {/* Incident Summary Modal */}
+      {showIncidentSummary &&
+        (() => {
+          const networkName = wallet?.networkPassphrase?.includes("Public")
+            ? "Public"
+            : wallet?.networkPassphrase?.includes("Test")
+              ? "Testnet"
+              : "Unknown";
+          const options: { txHash?: string; lastReadError?: string; lastSuccessfulRead?: string } =
+            {};
+          if (report?.result.kind === "submitted") {
+            options.txHash = report.result.hash;
+          }
+          if (lastReadError) {
+            options.lastReadError = lastReadError;
+          }
+          if (lastSuccessfulRead) {
+            options.lastSuccessfulRead = lastSuccessfulRead;
+          }
+          const summary = compileIncidentSummary(snapshot ?? null, networkName, options);
+          const formatted = formatIncidentSummary(summary);
+
+          return (
+            <div className="modal-backdrop" onClick={() => setShowIncidentSummary(false)}>
+              <div
+                className="modal"
+                onClick={(e) => e.stopPropagation()}
+                style={{ maxWidth: "600px" }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: "16px",
+                  }}
+                >
+                  <h2 style={{ margin: 0 }}>Incident Handoff Summary</h2>
+                  <button className="secondary" onClick={() => setShowIncidentSummary(false)}>
+                    Close
+                  </button>
+                </div>
+                <p className="tiny" style={{ marginBottom: "16px" }}>
+                  This snapshot contains only non-sensitive operational state. It excludes private
+                  keys, wallet sessions, and signed envelopes. Labelled as client-generated to
+                  clarify it is not an audit record.
+                </p>
+                <textarea
+                  readOnly
+                  value={formatted}
+                  style={{
+                    width: "100%",
+                    height: "300px",
+                    marginBottom: "16px",
+                    fontSize: "12px",
+                    fontFamily: "monospace",
+                    whiteSpace: "pre-wrap",
+                  }}
+                />
+                <div className="row">
+                  <button onClick={() => navigator.clipboard.writeText(formatted)}>
+                    Copy to Clipboard
+                  </button>
+                  <button
+                    onClick={() => {
+                      const blob = new Blob([formatted], { type: "text/plain" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `incident-summary-${Date.now()}.txt`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                  >
+                    Download .txt
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
     </div>
   );
 }
