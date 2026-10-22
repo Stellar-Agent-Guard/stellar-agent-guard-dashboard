@@ -52,42 +52,6 @@ function event(contractId: string, ledger: number | null, blocked: boolean): Gua
 const FEED_EVENTS = [event(GUARD_A, 100, false), event(GUARD_B, null, true)];
 
 describe("telemetry feed gap and coverage warnings", () => {
-  it("renders loading skeleton and header values correctly", async () => {
-    const { container, unmount } = await renderFeed({
-      feed: {
-        watching: true,
-        latestLedger: 101,
-        error: null,
-        lastPolledAt: new Date().toISOString(),
-        guards: [
-          { guard: GUARD_A, label: "Guard A" },
-          { guard: GUARD_B, label: "Guard B" },
-        ],
-        capped: 0,
-        cappedLabels: [],
-        gaps: { lost: [], unsettled: null },
-      },
-    });
-    assert.ok(container.querySelector("header"));
-    assert.ok(container.textContent?.includes("Guard A"));
-    await unmount();
-  });
-
-  it("filters events by guard chip", async () => {
-    const { container, unmount } = await renderFeed();
-    const chip = container.querySelector("button.chip");
-    assert.ok(chip);
-    await act(async () => {
-      (chip as HTMLButtonElement).click();
-    });
-    assert.ok(rows(container).length <= FEED_EVENTS.length);
-    await unmount();
-  });
-
-  it("caps displayed guards at FEED_GUARD_CAP", () => {
-    assert.equal(FEED_GUARD_CAP, 5);
-  });
-
   it("describes feed gap reasons correctly", () => {
     const gap = {
       reason: "history_pruned" as const,
@@ -131,12 +95,67 @@ describe("telemetry feed gap and coverage warnings", () => {
       },
     };
     assert.ok(discontinuityState.unsettled !== null);
-    // Recovery clears unsettled gap on next clean poll
     const recoveredState = {
       lost: [],
       unsettled: null,
     };
     assert.equal(recoveredState.unsettled, null);
+  });
+
+  it("renders per-guard gap notices when gaps are present", () => {
+    const notices = [
+      {
+        guard: GUARD_A,
+        label: "Guard A",
+        lost: [
+          {
+            reason: "history_pruned" as const,
+            fromLedger: 10,
+            toLedger: 20,
+            detectedAtLedger: 25,
+          },
+        ],
+        unsettled: null,
+      },
+    ];
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0]!.lost.length, 1);
+  });
+
+  it("renders loading skeleton and header values correctly", async () => {
+    const { container, unmount } = await renderFeed({
+      feed: {
+        watching: true,
+        latestLedger: 101,
+        error: null,
+        lastPolledAt: new Date().toISOString(),
+        guards: [
+          { guard: GUARD_A, label: "Guard A" },
+          { guard: GUARD_B, label: "Guard B" },
+        ],
+        capped: 0,
+        cappedLabels: [],
+        gaps: { lost: [], unsettled: null },
+      },
+    });
+    assert.ok(container.querySelector("header"));
+    assert.ok(container.textContent?.includes("Guard A"));
+    await unmount();
+  });
+
+  it("filters events by guard chip", async () => {
+    const { container, unmount } = await renderFeed();
+    const chip = container.querySelector("button.chip");
+    assert.ok(chip);
+    await act(async () => {
+      (chip as HTMLButtonElement).click();
+    });
+    assert.ok(rows(container).length <= FEED_EVENTS.length);
+    await unmount();
+  });
+
+  it("caps displayed guards at FEED_GUARD_CAP", () => {
+    assert.equal(FEED_GUARD_CAP, 5);
   });
 
   it("covers per-guard notices, multiple guards and history pruning", async () => {
