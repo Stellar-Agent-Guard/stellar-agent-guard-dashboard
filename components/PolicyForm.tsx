@@ -1,13 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useFormValidation } from "../lib/guard/useFormValidation.ts";
 import type { PolicyDraft } from "../lib/guard/policyForm.ts";
 import {
   EMPTY_DRAFT,
   buildPolicyConfig,
   describeDraft,
   draftFromConfig,
+  policyDraftsEqual,
+  validatePolicyDraftFields,
 } from "../lib/guard/policyForm.ts";
+import { useUnsavedChangesWarning } from "../lib/guard/useUnsavedChangesWarning.ts";
 import {
   POLICY_PRESETS,
   SECURITY_PROFILES,
@@ -291,6 +295,12 @@ export function PolicyForm() {
 
   const validation = buildPolicyConfig(effective);
   const issues = validation.ok ? [] : validation.issues;
+  const fieldErrors = useFormValidation(effective, validatePolicyDraftFields);
+  // A draft that has been typed back to exactly what is installed loses
+  // nothing on navigation, so it is not unsaved work. Held drafts for another
+  // guard always are: they are not shown here and would not be re-created.
+  const isDirty = draft !== null && !policyDraftsEqual(draft, installedDraft);
+  useUnsavedChangesWarning(isDirty);
 
   // Nothing installed is default-deny, not a blank slate: the form is where that
   // state gets named before the operator is asked to fill anything in.
@@ -540,6 +550,23 @@ export function PolicyForm() {
     else redoEdit();
   }
 
+  function validationAttributes(field: keyof PolicyDraft) {
+    const error = fieldErrors[field];
+    return {
+      "aria-invalid": error ? true : undefined,
+      "aria-describedby": error ? `policy-error-${field}` : undefined,
+    };
+  }
+
+  function fieldError(field: keyof PolicyDraft) {
+    const error = fieldErrors[field];
+    return error ? (
+      <span className="field-error tiny" id={`policy-error-${field}`} role="status">
+        {error}
+      </span>
+    ) : null;
+  }
+
   return (
     <div className="panel" id="policy" onKeyDown={onKeyDown}>
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
@@ -682,22 +709,26 @@ export function PolicyForm() {
             <label className="field">
               <span className="lbl">Per-transaction cap (blank = off)</span>
               <input
+                {...validationAttributes("perTxCap")}
                 value={effective.perTxCap}
                 inputMode="numeric"
                 onChange={(event) => set("perTxCap", event.target.value, "text")}
                 placeholder="1000"
               />
+              {fieldError("perTxCap")}
               <span className="hint">Largest single SAC transfer the account will authorize.</span>
             </label>
 
             <label className="field">
               <span className="lbl">Rolling-window cap (blank = off)</span>
               <input
+                {...validationAttributes("windowCap")}
                 value={effective.windowCap}
                 inputMode="numeric"
                 onChange={(event) => set("windowCap", event.target.value, "text")}
                 placeholder="150"
               />
+              {fieldError("windowCap")}
               <span className="hint">
                 Total spend allowed inside a genuinely rolling window — not a fixed bucket that
                 resets.
@@ -707,22 +738,26 @@ export function PolicyForm() {
             <label className="field">
               <span className="lbl">Rolling-window length (seconds)</span>
               <input
+                {...validationAttributes("windowSecs")}
                 value={effective.windowSecs}
                 inputMode="numeric"
                 onChange={(event) => set("windowSecs", event.target.value, "text")}
                 placeholder="86400"
               />
+              {fieldError("windowSecs")}
               <span className="hint">How far back the rolling sum looks.</span>
             </label>
 
             <label className="field">
               <span className="lbl">Dead-man grace (seconds, blank = off)</span>
               <input
+                {...validationAttributes("dmsGraceSecs")}
                 value={effective.dmsGraceSecs}
                 inputMode="numeric"
                 onChange={(event) => set("dmsGraceSecs", event.target.value, "text")}
                 placeholder="skip"
               />
+              {fieldError("dmsGraceSecs")}
               <span className="hint">
                 Freeze the account automatically if the agent has not heartbeated within this many
                 seconds.
@@ -732,6 +767,7 @@ export function PolicyForm() {
             <span className="lbl">Active from / until (unix seconds, blank = unrestricted)</span>
             <div className="row form-inline-row" style={{ marginBottom: 12 }}>
               <input
+                {...validationAttributes("activeFrom")}
                 value={effective.activeFrom}
                 inputMode="numeric"
                 onChange={(event) => set("activeFrom", event.target.value, "text")}
@@ -739,6 +775,7 @@ export function PolicyForm() {
                 aria-label="Active from"
               />
               <input
+                {...validationAttributes("activeUntil")}
                 value={effective.activeUntil}
                 inputMode="numeric"
                 onChange={(event) => set("activeUntil", event.target.value, "text")}
@@ -746,17 +783,21 @@ export function PolicyForm() {
                 aria-label="Active until"
               />
             </div>
+            {fieldError("activeFrom")}
+            {fieldError("activeUntil")}
           </div>
 
           <div>
             <label className="field">
               <span className="lbl">Assets — SAC token contracts (one per line)</span>
               <textarea
+                {...validationAttributes("assets")}
                 rows={3}
                 value={effective.assets}
                 onChange={(event) => set("assets", event.target.value, "text")}
                 placeholder="CDCYDGBGS5AZ5BZS6XY2SK2PHJHSOEGTN3N4INCK34KF6GU2BGC7Z6MB"
               />
+              {fieldError("assets")}
               <span className="hint">
                 Transfers of these tokens get full recipient and amount enforcement.
               </span>
@@ -849,6 +890,7 @@ export function PolicyForm() {
                       <tr key={row.assetContractAddress}>
                         <td>
                           <input
+                            {...validationAttributes("assetCaps")}
                             aria-label={`Asset contract ${index + 1}`}
                             value={row.assetContractAddress}
                             onChange={(event) => {
@@ -865,6 +907,7 @@ export function PolicyForm() {
                         </td>
                         <td>
                           <input
+                            {...validationAttributes("assetCaps")}
                             aria-label={`Maximum cap ${index + 1}`}
                             inputMode="numeric"
                             value={row.maxCapStroops}
@@ -877,6 +920,7 @@ export function PolicyForm() {
                         </td>
                         <td>
                           <input
+                            {...validationAttributes("assetCaps")}
                             aria-label={`Symbol ${index + 1}`}
                             value={row.symbol}
                             onChange={(event) => {
@@ -905,16 +949,19 @@ export function PolicyForm() {
                   </tbody>
                 </table>
               )}
+              {fieldError("assetCaps")}
             </div>
 
             <label className="field">
               <span className="lbl">Recipients (one per line)</span>
               <textarea
+                {...validationAttributes("recipients")}
                 rows={3}
                 value={effective.recipients}
                 onChange={(event) => set("recipients", event.target.value, "text")}
                 placeholder="GAOBCRXTCO4ZCBNHALJUMJJ5JDXNOUZ7U6VZJX4UBTXAHQEO66IPU6PH"
               />
+              {fieldError("recipients")}
             </label>
 
             <div className="checkline">
@@ -935,11 +982,13 @@ export function PolicyForm() {
             <label className="field">
               <span className="lbl">Protocols — allowlisted contracts (one per line)</span>
               <textarea
+                {...validationAttributes("protocols")}
                 rows={3}
                 value={effective.protocols}
                 onChange={(event) => set("protocols", event.target.value, "text")}
                 placeholder="C…  or  C…:swap,deposit   (no colon = any function)"
               />
+              {fieldError("protocols")}
               <span className="hint">
                 Calls to contracts outside this list are refused. Window and pause state still apply
                 to these calls; per-call amount and recipient limits do not.
