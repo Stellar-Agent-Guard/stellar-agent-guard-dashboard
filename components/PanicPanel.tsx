@@ -757,8 +757,15 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
               <span className="mono">{report.result.detail}</span>
             </p>
           )}
+          {report.result.kind === "unknown" && (
+            <p className="tiny" style={{ marginTop: 6 }}>
+              Transaction {starLink(report.result.hash)} was broadcast but never confirmed:{" "}
+              <span className="mono">{report.result.detail}</span> Verify the hash on chain before
+              signing this action again — do not resubmit blind.
+            </p>
+          )}
 
-          {report.result.kind !== "submitted" && (
+          {report.result.kind === "refused" && (
             <p className="tiny muted" style={{ marginTop: 6 }}>
               A refused call has no transaction hash by construction — it was never broadcast. That
               is the pre-flight path working, not a missing receipt.

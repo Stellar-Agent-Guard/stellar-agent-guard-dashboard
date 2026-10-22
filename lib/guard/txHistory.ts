@@ -3,8 +3,9 @@
  *
  * Every admin transaction this dashboard broadcasts — policy installs,
  * freezes, unfreezes, deploys — is recorded here with the facts the
- * submission path actually knew: the hash the network accepted, the
- * operation, the outcome, and the fee the envelope paid. It is a local
+ * submission path actually knew: the hash, the operation, the outcome
+ * (`confirmed`, `failed`, or `unknown` when the submission was never
+ * confirmed), and the fee the envelope paid. It is a local
  * record of *this console's own* writes, capped and stored in
  * `localStorage`; nothing is fetched and nothing is claimed about
  * transactions this console did not make.
@@ -22,7 +23,22 @@ export interface TxHistoryEntry {
   hash: string;
   /** The contract function or host operation that was submitted. */
   operation: string;
-  status: "confirmed" | "failed";
+  /**
+   * The outcome *as this console last knew it*:
+   *
+   * - `confirmed` — the network reported the transaction included and
+   *   successful.
+   * - `failed` — the network included the transaction and rejected it.
+   * - `unknown` — the write was handed to the network but no confirmation was
+   *   observed before the submission response timed out. The chain, not this
+   *   record, decides whether it landed; the row exists so the ambiguity (and
+   *   the hash to verify) stays visible instead of being flattened into a
+   *   failure that might invite a replay.
+   *
+   * A local record only: it supplies inputs for verification and never stands
+   * in for a live read of chain state.
+   */
+  status: "confirmed" | "failed" | "unknown";
   /** Total fee paid, in stroops (inclusion + resource), as a decimal string. */
   feeStroops: string | null;
   /** Network identity captured when this console recorded the write. */
@@ -86,7 +102,7 @@ function isEntry(value: unknown): value is TxHistoryEntry {
   return (
     typeof entry.hash === "string" &&
     typeof entry.operation === "string" &&
-    (entry.status === "confirmed" || entry.status === "failed") &&
+    (entry.status === "confirmed" || entry.status === "failed" || entry.status === "unknown") &&
     typeof entry.recordedAt === "string" &&
     (entry.networkName === undefined ||
       entry.networkName === null ||

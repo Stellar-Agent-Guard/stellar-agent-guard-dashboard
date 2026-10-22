@@ -325,6 +325,74 @@ test("an empty list paginates to a single empty page", () => {
   assert.deepEqual(page, { rows: [], page: 1, pages: 1, total: 0 });
 });
 
+test("an unconfirmed submission is recorded as unknown, distinct from failed", () => {
+  const storage = fakeStorage();
+  recordTx(
+    { hash: "ambiguous", operation: "set_policy", status: "unknown", feeStroops: "100" },
+    storage,
+  );
+
+  const rows = loadTxHistory(storage);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.status, "unknown", "the third outcome survives the round trip");
+  // It is a stored status, so it passes entry validation instead of being
+  // dropped as corrupt — the row must stay visible to the operator.
+  assert.equal(rows[0]?.hash, "ambiguous");
+});
+
+test("search matches rows by their unconfirmed status", () => {
+  const entries = [
+    entry({ hash: "AMB123", status: "unknown" }),
+    entry({ hash: "OK456", status: "confirmed" }),
+  ];
+  assert.equal(filterTxHistory(entries, { query: "unknown" }).length, 1);
+  assert.equal(filterTxHistory(entries, { query: "AMB" }).length, 1);
+});
+
+test("CSV export carries the unconfirmed status verbatim", () => {
+  const csv = txHistoryToCsv([entry({ hash: "h-unknown", status: "unknown" })]);
+  const lines = csv.trimEnd().split("\n");
+  assert.match(lines[1] ?? "", /"unknown"/);
+});
+
+test("the table separates confirmed, failed and unconfirmed rows visually", async () => {
+  localStorage.setItem(
+    TX_HISTORY_STORAGE_KEY,
+    JSON.stringify([
+      entry({ hash: "row-unknown", status: "unknown" }),
+      entry({ hash: "row-confirmed", status: "confirmed" }),
+      entry({ hash: "row-failed", status: "failed" }),
+    ]),
+  );
+  const div = document.createElement("div");
+  document.body.appendChild(div);
+  root = createRoot(div);
+  await act(async () => {
+    root!.render(
+      React.createElement(
+        GuardContext.Provider,
+        { value: { server: {} } as unknown as GuardContextValue },
+        React.createElement(TxHistoryTable),
+      ),
+    );
+  });
+
+  const pillFor = (hash: string): Element | null => {
+    const row = [...div.querySelectorAll("tbody tr")].find((tr) => tr.textContent?.includes(hash));
+    return row?.querySelector(".pill") ?? null;
+  };
+  const unknownPill = pillFor("row-unknown");
+  assert.ok(unknownPill?.classList.contains("warn"), "an unconfirmed row wears the warning pill");
+  assert.equal(unknownPill?.textContent, "Unconfirmed");
+  assert.match(unknownPill?.getAttribute("title") ?? "", /verify this hash on chain/i);
+
+  assert.ok(pillFor("row-confirmed")?.classList.contains("ok"));
+  assert.ok(pillFor("row-failed")?.classList.contains("danger"));
+
+  // The panel states the no-replay rule where the operator will read it.
+  assert.ok(div.textContent?.includes("never resubmit blind"));
+});
+
 test("CSV export has a fixed header and one quoted row per entry", () => {
   const entries = [
     entry({ hash: "h1", operation: "set_policy", feeStroops: "310" }),

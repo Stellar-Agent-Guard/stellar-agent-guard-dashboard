@@ -138,7 +138,9 @@ export function TxHistoryTable() {
       <p className="tiny muted" style={{ marginTop: 8 }}>
         Every admin transaction signed from this console — policy changes, freezes, unfreezes,
         deployments — recorded with the hash the network accepted. Refused calls never became
-        transactions, so they have no place here.
+        transactions, so they have no place here. A row marked <strong>Unconfirmed</strong> was
+        handed to the network but never observed as included: verify it on chain (its row&apos;s
+        Verify button, or an explorer) before signing the same action again — never resubmit blind.
       </p>
 
       {saveWarning !== null && (
@@ -224,8 +226,15 @@ export function TxHistoryTable() {
                     <td>
                       {entry.status === "confirmed" ? (
                         <span className="pill ok">Confirmed</span>
-                      ) : (
+                      ) : entry.status === "failed" ? (
                         <span className="pill danger">Failed</span>
+                      ) : (
+                        <span
+                          className="pill warn"
+                          title="Broadcast but never confirmed — verify this hash on chain before retrying"
+                        >
+                          Unconfirmed
+                        </span>
                       )}
                     </td>
                     <td className="tiny" title={entry.networkPassphrase ?? "Network not recorded"}>

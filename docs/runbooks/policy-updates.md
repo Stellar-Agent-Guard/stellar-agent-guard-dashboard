@@ -6,7 +6,8 @@
 state, dead-man switch.
 **Related:** [Policy configurator](../screens/policy-configurator.md) ·
 [Enforcement scope](../enforcement-scope.md) ·
-[Emergency freeze runbook](./emergency-freeze.md)
+[Emergency freeze runbook](./emergency-freeze.md) ·
+[Submission timeout: verifying an ambiguous transaction](./submission-timeout.md)
 
 > A policy update is a **live change to the rules that gate real funds**. Treat it
 > with the same discipline as the emergency freeze: decide, stage, validate,

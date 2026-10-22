@@ -1049,6 +1049,16 @@ export function OutcomeBlock({
       </div>
     );
   }
+  if (result.kind === "unknown") {
+    return (
+      <div className="notice">
+        <strong>Submission unconfirmed — {starLink(result.hash)}</strong>
+        <span className="tiny mono">
+          {result.detail} Verify this hash on chain before submitting the change again.
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="error">
       <span className="t">Broadcast but rejected on chain — {starLink(result.hash)}</span>
