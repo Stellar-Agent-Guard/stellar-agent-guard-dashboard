@@ -498,9 +498,8 @@ export function TelemetryFeed() {
 
       <p className="tiny muted" style={{ marginTop: 8 }}>
         Tailed from Soroban RPC&apos;s <code>getEvents</code> with a cursor, so no event is
-        delivered twice and none is skipped between polls — unless a coverage warning below says the
-        RPC lost or reordered part of the stream. Soroban has no push stream — the floor on latency
-        is the ledger close interval (roughly 5s), not the 5s poll.
+        delivered twice and none is skipped between polls. Soroban has no push stream — the floor on
+        latency is the ledger close interval (roughly 5s), not the 5s poll.
         {feed.lastPolledAt && (
           <>
             {" "}
