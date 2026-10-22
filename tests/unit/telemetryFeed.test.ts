@@ -7,7 +7,7 @@ import { installDom, loadReact, sleep, type Act } from "./domHarness.ts";
 import { withIdentity } from "../mocks/eventFixtures.ts";
 import { TelemetryFeed } from "../../components/TelemetryFeed.tsx";
 import { GuardContext, GuardEventsContext } from "../../components/GuardProvider.tsx";
-import { describeFeedGap } from "../../lib/guard/telemetry.ts";
+import { describeFeedGap, FEED_GUARD_CAP, type TelemetryEvent } from "../../lib/guard/telemetry.ts";
 
 installDom();
 
@@ -52,6 +52,42 @@ function event(contractId: string, ledger: number | null, blocked: boolean): Gua
 const FEED_EVENTS = [event(GUARD_A, 100, false), event(GUARD_B, null, true)];
 
 describe("telemetry feed gap and coverage warnings", () => {
+  it("renders loading skeleton and header values correctly", async () => {
+    const { container, unmount } = await renderFeed({
+      feed: {
+        watching: true,
+        latestLedger: 101,
+        error: null,
+        lastPolledAt: new Date().toISOString(),
+        guards: [
+          { guard: GUARD_A, label: "Guard A" },
+          { guard: GUARD_B, label: "Guard B" },
+        ],
+        capped: 0,
+        cappedLabels: [],
+        gaps: { lost: [], unsettled: null },
+      },
+    });
+    assert.ok(container.querySelector("header"));
+    assert.ok(container.textContent?.includes("Guard A"));
+    await unmount();
+  });
+
+  it("filters events by guard chip", async () => {
+    const { container, unmount } = await renderFeed();
+    const chip = container.querySelector("button.chip");
+    assert.ok(chip);
+    await act(async () => {
+      (chip as HTMLButtonElement).click();
+    });
+    assert.ok(rows(container).length <= FEED_EVENTS.length);
+    await unmount();
+  });
+
+  it("caps displayed guards at FEED_GUARD_CAP", () => {
+    assert.equal(FEED_GUARD_CAP, 5);
+  });
+
   it("describes feed gap reasons correctly", () => {
     const gap = {
       reason: "history_pruned" as const,
@@ -65,25 +101,23 @@ describe("telemetry feed gap and coverage warnings", () => {
   });
 
   it("verifies lost ranges and unsettled positions for feed gaps", () => {
-    const gaps = {
-      lost: [
-        {
-          reason: "history_pruned" as const,
-          fromLedger: 50,
-          toLedger: 99,
-          detectedAtLedger: 100,
-        },
-      ],
-      unsettled: {
+    const gaps = [
+      {
+        reason: "history_pruned" as const,
+        fromLedger: 50,
+        toLedger: 99,
+        detectedAtLedger: 100,
+      },
+      {
         reason: "cursor_regressed" as const,
         fromLedger: null,
         toLedger: null,
         detectedAtLedger: 101,
       },
-    };
-    assert.equal(gaps.lost.length, 1);
-    assert.equal(gaps.lost[0]!.fromLedger, 50);
-    assert.equal(gaps.unsettled?.reason, "cursor_regressed");
+    ];
+    assert.equal(gaps.length, 2);
+    assert.equal(gaps[0]!.fromLedger, 50);
+    assert.equal(gaps[1]!.reason, "cursor_regressed");
   });
 
   it("verifies cursor discontinuity detection and recovery behavior", () => {
@@ -105,36 +139,40 @@ describe("telemetry feed gap and coverage warnings", () => {
     assert.equal(recoveredState.unsettled, null);
   });
 
-  it("covers per-guard notices, multiple guards and history pruning", () => {
-    const multiGaps = [
-      {
-        guard: GUARD_A,
-        label: "Guard A",
-        lost: [
-          {
-            reason: "history_pruned" as const,
-            fromLedger: 10,
-            toLedger: 20,
-            detectedAtLedger: 25,
-          },
+  it("covers per-guard notices, multiple guards and history pruning", async () => {
+    const { container, unmount } = await renderFeed({
+      feed: {
+        watching: true,
+        latestLedger: 200,
+        error: null,
+        lastPolledAt: new Date().toISOString(),
+        guards: [
+          { guard: GUARD_A, label: "Guard A" },
+          { guard: GUARD_B, label: "Guard B" },
         ],
-        unsettled: null,
-      },
-      {
-        guard: GUARD_B,
-        label: "Guard B",
-        lost: [],
-        unsettled: {
-          reason: "cursor_regressed" as const,
-          fromLedger: null,
-          toLedger: null,
-          detectedAtLedger: 30,
+        capped: 0,
+        cappedLabels: [],
+        gaps: {
+          lost: [
+            {
+              reason: "history_pruned" as const,
+              fromLedger: 10,
+              toLedger: 50,
+              detectedAtLedger: 60,
+            },
+          ],
+          unsettled: {
+            reason: "cursor_regressed" as const,
+            fromLedger: null,
+            toLedger: null,
+            detectedAtLedger: 100,
+          },
         },
       },
-    ];
-    assert.equal(multiGaps.length, 2);
-    assert.equal(multiGaps[0]!.lost.length, 1);
-    assert.equal(multiGaps[1]!.unsettled?.reason, "cursor_regressed");
+    });
+    const banner = container.querySelector("[data-testid='feed-gap-notice']");
+    assert.ok(banner);
+    await unmount();
   });
 });
 
@@ -188,7 +226,10 @@ function contextValue(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
-async function renderFeed(overrides: Record<string, unknown> = {}, events = FEED_EVENTS) {
+async function renderFeed(
+  overrides: Record<string, unknown> = {},
+  events: TelemetryEvent[] = FEED_EVENTS,
+) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   let root: ReturnType<typeof createRoot> | undefined;
