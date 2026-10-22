@@ -135,7 +135,7 @@ describe("telemetry feed gap and coverage warnings", () => {
         ],
         capped: 0,
         cappedLabels: [],
-        gaps: { lost: [], unsettled: null },
+        gaps: [],
       },
     });
     assert.ok(container.querySelector("header"));
