@@ -1,3 +1,6 @@
+import { Keypair, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import { NETWORK } from "./network.ts";
+
 /**
  * Multi-signature approval tracking for admin transactions.
  *
@@ -354,4 +357,366 @@ export function remainingWeightSummary(state: MultisigApprovalState): string {
 export function approvalPercent(state: MultisigApprovalState): number {
   if (state.requiredWeight <= 0) return 100;
   return Math.min(100, Math.round((state.collectedWeight / state.requiredWeight) * 100));
+}
+
+/* ────────────────────────── partial-envelope merging ─────────────────────── */
+
+/** One externally signed envelope offered to a merge. */
+export interface SignedEnvelopeInput {
+  xdr: string;
+  /** A display label; defaults to `Envelope N`. */
+  label?: string;
+}
+
+/** The immutable transaction body, as extracted from an envelope. */
+export interface SignedEnvelopeFacts {
+  source: string;
+  sequence: string;
+  fee: string;
+  timeBounds: { minTime: string; maxTime: string } | null;
+  /** The signed transaction body without signatures, base64 XDR. */
+  bodyXdr: string;
+  /** Transaction hash for the merge network, hex. */
+  hash: string;
+}
+
+/** One unique signature in the merged envelope. */
+export interface MergedSignature {
+  /** 4-byte signer hint, hex. */
+  hint: string;
+  /** 64-byte signature, base64. */
+  signature: string;
+  /** Labels of the input envelopes that carried this exact signature. */
+  sources: string[];
+  /**
+   * `verified` only when `signers` were supplied, exactly one matched the hint,
+   * and the signature verified against this network's transaction hash.
+   */
+  verification: "verified" | "unchecked";
+}
+
+/** The same signature repeated across inputs; counted once. */
+export interface DuplicateSignature {
+  hint: string;
+  signature: string;
+  sources: string[];
+}
+
+/**
+ * Two different signatures sharing a 4-byte hint. They are both preserved —
+ * distinct keys can collide on the hint — but the collision is reported so it is
+ * never silently read as one signer.
+ */
+export interface SignatureConflict {
+  hint: string;
+  signatures: string[];
+  sources: string[];
+}
+
+/** One input that is not the same transaction as the reference envelope. */
+export interface EnvelopeMismatch {
+  label: string;
+  /** The parts that differ: source, sequence, time bounds, fee, body. */
+  fields: string[];
+}
+
+export interface MergeSignedEnvelopesParams {
+  envelopes: readonly SignedEnvelopeInput[];
+  /**
+   * The one network every envelope is decoded for. An envelope does not carry a
+   * network id, so this is the network the merged envelope is built for; when
+   * `signers` are supplied, signatures are also verified against its hash. A
+   * signature made on another network therefore fails verification rather than
+   * being merged.
+   */
+  networkPassphrase?: string;
+  /**
+   * The source account's Ed25519 signers (`G…`), when known. Supplying them
+   * turns on cryptographic verification; without them signatures are merged but
+   * labelled `unchecked`.
+   */
+  signers?: readonly string[];
+}
+
+export type MergeSignedEnvelopesResult =
+  | {
+      ok: true;
+      mergedXdr: string;
+      networkPassphrase: string;
+      facts: SignedEnvelopeFacts;
+      signatures: MergedSignature[];
+      duplicates: DuplicateSignature[];
+      conflicts: SignatureConflict[];
+    }
+  | {
+      ok: false;
+      error: string;
+      mismatches: EnvelopeMismatch[];
+    };
+
+interface ParsedEnvelope {
+  label: string;
+  tx: Transaction;
+  facts: SignedEnvelopeFacts;
+  signatures: Array<{ hint: string; signature: string }>;
+}
+
+/**
+ * Merge externally signed versions of one transaction envelope.
+ *
+ * Safety rules, in order:
+ *  1. Every input must decode as a v1 transaction envelope under the single
+ *     `networkPassphrase`.
+ *  2. Every input must describe the same transaction: source, sequence, time
+ *     bounds, fee, memo, operations and Soroban auth payload. The body is
+ *     compared as serialized XDR, not field-by-field guesses, so an envelope
+ *     that differs anywhere in intent is refused rather than merged.
+ *  3. Identical signatures are included once; different signatures sharing a
+ *     hint are preserved and reported as a conflict.
+ *  4. When `signers` are supplied, any signature whose hint matches exactly one
+ *     known signer must verify against the network's transaction hash. A
+ *     failure is a hard error: it is the signature-level evidence that the
+ *     envelope was signed for another network or another transaction.
+ *
+ * The returned XDR is deterministic for a given set of signatures: they are
+ * sorted by hint and then signature bytes, independent of input order.
+ */
+export function mergeSignedEnvelopes(
+  params: MergeSignedEnvelopesParams,
+): MergeSignedEnvelopesResult {
+  const networkPassphrase = params.networkPassphrase ?? NETWORK.passphrase;
+  if (params.envelopes.length === 0) {
+    return { ok: false, error: "Add at least one signed envelope to merge.", mismatches: [] };
+  }
+
+  const parsed: ParsedEnvelope[] = [];
+  for (const [index, input] of params.envelopes.entries()) {
+    const label = input.label?.trim() || `Envelope ${index + 1}`;
+    const decoded = decodeEnvelope(input.xdr, networkPassphrase, label);
+    if (!decoded.ok) return { ok: false, error: decoded.error, mismatches: [] };
+    parsed.push({ label, ...decoded.value });
+  }
+
+  const reference = parsed[0]!;
+  const mismatches: EnvelopeMismatch[] = [];
+  for (const candidate of parsed.slice(1)) {
+    const fields: string[] = [];
+    if (candidate.facts.source !== reference.facts.source) fields.push("source account");
+    if (candidate.facts.sequence !== reference.facts.sequence) fields.push("sequence number");
+    if (JSON.stringify(candidate.facts.timeBounds) !== JSON.stringify(reference.facts.timeBounds)) {
+      fields.push("time bounds");
+    }
+    if (candidate.facts.fee !== reference.facts.fee) fields.push("fee");
+    if (candidate.facts.bodyXdr !== reference.facts.bodyXdr) {
+      fields.push("memo, operations, or authorization payload");
+    }
+    if (fields.length > 0) mismatches.push({ label: candidate.label, fields });
+  }
+  if (mismatches.length > 0) {
+    const detail = mismatches
+      .map((mismatch) => `${mismatch.label} differs in ${mismatch.fields.join(", ")}`)
+      .join("; ");
+    return {
+      ok: false,
+      error: `Refusing to merge incompatible envelopes: ${detail}. No signatures were combined.`,
+      mismatches,
+    };
+  }
+
+  const knownHints = knownSignersByHint(params.signers ?? []);
+  const unique = new Map<string, MergedSignature>();
+  const byHint = new Map<string, Set<string>>();
+
+  for (const envelope of parsed) {
+    for (const signature of envelope.signatures) {
+      const key = `${signature.hint}:${signature.signature}`;
+      const existing = unique.get(key);
+      if (existing) {
+        if (!existing.sources.includes(envelope.label)) existing.sources.push(envelope.label);
+      } else {
+        unique.set(key, {
+          hint: signature.hint,
+          signature: signature.signature,
+          sources: [envelope.label],
+          verification: "unchecked",
+        });
+      }
+      const hintSet = byHint.get(signature.hint) ?? new Set<string>();
+      hintSet.add(signature.signature);
+      byHint.set(signature.hint, hintSet);
+    }
+  }
+
+  // Verify only where the hint identifies exactly one known signer. A hint with
+  // no match may be a signer added since the last account read; attributing it
+  // to the wrong key would be worse than leaving it unchecked.
+  if (params.signers && params.signers.length > 0) {
+    const hashBytes = reference.tx.hash();
+    for (const signature of unique.values()) {
+      const candidates = knownHints.get(signature.hint) ?? [];
+      if (candidates.length !== 1) continue;
+      const key = candidates[0]!;
+      let valid = false;
+      try {
+        valid = Keypair.fromPublicKey(key).verify(hashBytes, base64ToBytes(signature.signature));
+      } catch {
+        valid = false;
+      }
+      if (!valid) {
+        return {
+          ok: false,
+          error:
+            `${signature.sources[0]} carries a signature for ${key} that does not verify on this network. ` +
+            "It was likely produced for another network or a different transaction; no signatures were combined.",
+          mismatches: [],
+        };
+      }
+      signature.verification = "verified";
+    }
+  }
+
+  const signatures = [...unique.values()].sort((left, right) =>
+    left.hint === right.hint
+      ? left.signature.localeCompare(right.signature)
+      : left.hint.localeCompare(right.hint),
+  );
+  const duplicates: DuplicateSignature[] = signatures
+    .filter((signature) => signature.sources.length > 1)
+    .map((signature) => ({
+      hint: signature.hint,
+      signature: signature.signature,
+      sources: [...signature.sources],
+    }));
+  const conflicts: SignatureConflict[] = [...byHint.entries()]
+    .filter(([, values]) => values.size > 1)
+    .map(([hint, values]) => {
+      const conflicting = [...values].sort();
+      return {
+        hint,
+        signatures: conflicting,
+        sources: [
+          ...new Set(
+            conflicting.flatMap((signature) => unique.get(`${hint}:${signature}`)?.sources ?? []),
+          ),
+        ].sort(),
+      };
+    })
+    .sort((left, right) => left.hint.localeCompare(right.hint));
+
+  const referenceEnvelope = (
+    reference.tx.toEnvelope() as unknown as { v1: xdr.TransactionV1Envelope }
+  ).v1;
+  const merged = xdr.TransactionEnvelope.envelopeTypeTx(
+    new xdr.TransactionV1Envelope({
+      tx: referenceEnvelope.tx,
+      signatures: signatures.map(
+        (signature) =>
+          new xdr.DecoratedSignature({
+            hint: hexToBytes(signature.hint),
+            signature: base64ToBytes(signature.signature),
+          }),
+      ),
+    }),
+  );
+
+  return {
+    ok: true,
+    mergedXdr: merged.toXDR("base64"),
+    networkPassphrase,
+    facts: reference.facts,
+    signatures,
+    duplicates,
+    conflicts,
+  };
+}
+
+function decodeEnvelope(
+  xdrString: string,
+  networkPassphrase: string,
+  label: string,
+): { ok: true; value: Omit<ParsedEnvelope, "label"> } | { ok: false; error: string } {
+  let tx: Transaction;
+  try {
+    const decoded = TransactionBuilder.fromXDR(xdrString.trim(), networkPassphrase);
+    if (!(decoded instanceof Transaction)) {
+      return { ok: false, error: `${label} is a fee-bump envelope, which cannot be merged here.` };
+    }
+    tx = decoded;
+  } catch (error) {
+    return {
+      ok: false,
+      error: `${label} could not be decoded: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  const envelope = tx.toEnvelope();
+  if (envelope.type !== "envelopeTypeTx") {
+    return { ok: false, error: `${label} is a legacy (v0) envelope and cannot be merged here.` };
+  }
+
+  const timeBounds = tx.timeBounds
+    ? {
+        minTime: String(tx.timeBounds.minTime ?? "0"),
+        maxTime: String(tx.timeBounds.maxTime ?? "0"),
+      }
+    : null;
+
+  return {
+    ok: true,
+    value: {
+      tx,
+      facts: {
+        source: tx.source,
+        sequence: tx.sequence,
+        fee: String(tx.fee),
+        timeBounds,
+        bodyXdr: envelope.v1.tx.toXDR("base64"),
+        hash: bytesToHex(tx.hash()),
+      },
+      signatures: envelope.v1.signatures.map((decorated) => ({
+        hint: bytesToHex(decorated.hint.value),
+        signature: bytesToBase64(decorated.signature.value),
+      })),
+    },
+  };
+}
+
+function knownSignersByHint(signers: readonly string[]): Map<string, string[]> {
+  const byHint = new Map<string, string[]>();
+  for (const signer of signers) {
+    let hint: string;
+    try {
+      hint = bytesToHex(StrKey.decodeEd25519PublicKey(signer).subarray(-4));
+    } catch {
+      continue;
+    }
+    byHint.set(hint, [...(byHint.get(hint) ?? []), signer]);
+  }
+  return byHint;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function hexToBytes(value: string): Uint8Array {
+  if (value.length % 2 !== 0 || /[^0-9a-f]/i.test(value)) {
+    throw new Error(`Invalid hex value: ${value}`);
+  }
+  const bytes = new Uint8Array(value.length / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }

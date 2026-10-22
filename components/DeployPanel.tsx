@@ -498,7 +498,9 @@ export function DeployPanel() {
         )}
       </div>
 
-      {artifact && !artifact.ok && <ErrorBlock title="Deploy refused" detail={artifact.detail} />}
+      {artifact && !artifact.ok && (
+        <ErrorBlock title="Deploy refused" detail={artifact.detail} context="write" />
+      )}
       {artifact && artifact.ok && (
         <p className="tiny muted" style={{ marginTop: 8 }}>
           {artifact.detail}
@@ -762,7 +764,9 @@ export function DeployPanel() {
         </div>
       )}
 
-      {error && <ErrorBlock title="The deploy could not be completed" detail={error} />}
+      {error && (
+        <ErrorBlock title="The deploy could not be completed" detail={error} context="write" />
+      )}
 
       {outcome && (
         <div className={outcome.verified ? "notice info" : "error"}>
