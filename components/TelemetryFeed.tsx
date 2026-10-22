@@ -530,6 +530,18 @@ export function TelemetryFeed() {
         </div>
       )}
 
+{feed.discontinuity && (
+        <div className="notice warn" role="status">
+          <strong>Cursor discontinuity detected — possible event gap</strong>
+          <span className="tiny">
+            Telemetry polling encountered a discontinuity or provider gap. Retaining the last
+            known-good cursor; events in the affected or unknown range (ledgers{" "}
+            {feed.affectedLedgers?.start ?? "?"}–{feed.affectedLedgers?.end ?? "?"}) are uncertain
+            rather than filled with fabricated events.
+          </span>
+        </div>
+      )}
+
       {/* Coverage warnings. An empty list means no discontinuity has been detected,
           not that the feed is known to be complete. Nothing here fills a hole with
           invented events: the rows above are only what the RPC returned. */}
@@ -557,7 +569,6 @@ export function TelemetryFeed() {
           )}
         </div>
       ))}
-
       <div className="notice info">
         <strong>Refused decisions cannot reach this feed from the ledger</strong>
         <span className="tiny">
