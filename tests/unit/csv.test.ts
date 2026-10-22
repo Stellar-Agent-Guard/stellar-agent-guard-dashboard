@@ -52,5 +52,3 @@ test("neutralizeFormulaCell escapes formula-leading cells", () => {
   assert.equal(neutralizeFormulaCell("  =  "), "'" + "  =  ");
   assert.equal(neutralizeFormulaCell(""), "");
 });
-
-

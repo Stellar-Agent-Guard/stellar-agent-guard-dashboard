@@ -476,20 +476,14 @@ test("validateContactAddress rejects blank and malformed addresses with actionab
   // Too short
   const shortResult = validateContactAddress("GAAAAAA");
   assert.equal(shortResult.ok, false, "too short should be rejected");
-  assert.match(
-    shortResult.reason,
-    /56 characters/,
-    "reason should mention correct length",
-  );
+  assert.match(shortResult.reason, /56 characters/, "reason should mention correct length");
 
   // Too long
-  const longResult = validateContactAddress("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"); // 60 chars
+  const longResult = validateContactAddress(
+    "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  ); // 60 chars
   assert.equal(longResult.ok, false, "too long should be rejected");
-  assert.match(
-    longResult.reason,
-    /56 characters/,
-    "reason should mention correct length",
-  );
+  assert.match(longResult.reason, /56 characters/, "reason should mention correct length");
 });
 
 test("mergeAddressBook remains additive and reports its tally", () => {

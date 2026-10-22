@@ -84,13 +84,15 @@ export function isValidAddress(value: string): boolean {
 }
 
 /** Validate a contact address and return a helpful reason if it is invalid. */
-export function validateContactAddress(value: string): {
-  ok: true;
-  address: string;
-} | {
-  ok: false;
-  reason: string;
-} {
+export function validateContactAddress(value: string):
+  | {
+      ok: true;
+      address: string;
+    }
+  | {
+      ok: false;
+      reason: string;
+    } {
   const trimmed = value.trim();
   if (trimmed === "") {
     return { ok: false, reason: "A contact needs an address." };
@@ -102,7 +104,8 @@ export function validateContactAddress(value: string): {
     if (!/^G[A-Z2-7]{55}$/.test(trimmed) && !/^C[A-Z2-7]{55}$/.test(trimmed)) {
       return {
         ok: false,
-        reason: "Stellar addresses start with G (account) or C (contract) and are 56 characters long.",
+        reason:
+          "Stellar addresses start with G (account) or C (contract) and are 56 characters long.",
       };
     }
     if (trimmed.length !== 56) {
@@ -111,7 +114,10 @@ export function validateContactAddress(value: string): {
         reason: `A Stellar address must be 56 characters; this one has ${trimmed.length}.`,
       };
     }
-    return { ok: false, reason: "That doesn't look like a valid Stellar address; check for typos." };
+    return {
+      ok: false,
+      reason: "That doesn't look like a valid Stellar address; check for typos.",
+    };
   }
 }
 
