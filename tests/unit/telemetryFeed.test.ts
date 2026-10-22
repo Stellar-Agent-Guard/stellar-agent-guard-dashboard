@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { before, describe, it } from "node:test";
-import { Contract, rpc, xdr } from "@stellar/stellar-sdk";
 import type { ReactElement } from "react";
 import { installDom, loadReact, sleep, type Act } from "./domHarness.ts";
 import { TelemetryFeed } from "../../components/TelemetryFeed.tsx";
