@@ -299,36 +299,7 @@ export class GuardFeed {
         params.startLedger = this.latestLedger;
       }
       this.lastRawEvents = [];
-      let decoded;
-      let discontinuity = false;
-      let affectedLedgers: { start: number; end: number } | undefined;
-      try {
-        decoded = await this.listener.poll(params);
-      } catch (err: unknown) {
-        const errMessage = err instanceof Error ? err.message : String(err);
-        if (
-          errMessage.includes("cursor") ||
-          errMessage.includes("ledger") ||
-          errMessage.includes("not found") ||
-          errMessage.includes("gap") ||
-          errMessage.includes("discontinuity")
-        ) {
-          discontinuity = true;
-          const prevLedger = this.latestLedger ?? 0;
-          const fallbackLedger = Math.max(1, prevLedger - 50);
-          affectedLedgers = { start: fallbackLedger, end: prevLedger };
-          // Recover by falling back to last known good cursor or resetting to latest ledger
-          if (this.lastKnownGoodCursor) {
-            params.cursor = this.lastKnownGoodCursor;
-          } else {
-            delete params.cursor;
-            params.startLedger = fallbackLedger;
-          }
-          decoded = await this.listener.poll(params);
-        } else {
-          throw err;
-        }
-      }
+      let decoded = await this.listener.poll(params);
       const page = { ...decoded, events: attachLedgerXdr(decoded.events, this.lastRawEvents) };
 const found = detectFeedGaps({
         expectedFrom: this.expectedFrom,
@@ -352,8 +323,6 @@ if (page.cursor && !found.some((gap) => gap.reason === "cursor_regressed")) {
       return {
         ...page,
         gaps: this.gapState(),
-        discontinuity,
-        affectedLedgers,
       };
     });
   }
