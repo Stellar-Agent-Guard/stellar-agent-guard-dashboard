@@ -4,7 +4,7 @@ import { BYTECODE_CACHE_STORAGE_KEY } from "./bytecodeCache.ts";
 import { DENSITY_STORAGE_KEY } from "./densityStore.ts";
 import { SCOPED_STORAGE_BASES, SCOPED_STORAGE_PREFIX } from "./guardScoped.ts";
 import { INSTANCE_STORAGE_PREFIX, LEGACY_INSTANCE_STORAGE_KEY } from "./instance.ts";
-import { LAYOUT_STORAGE_KEY } from "./layoutStore.ts";
+import { LAYOUT_STORAGE_KEY, NAMED_LAYOUTS_STORAGE_KEY } from "./layoutStore.ts";
 import { SETUP_STORAGE_KEY } from "./setupChecklist.ts";
 import { TAB_SYNC_STORAGE_KEY } from "./tabSync.ts";
 import { TX_HISTORY_STORAGE_KEY } from "./txHistory.ts";
@@ -57,6 +57,13 @@ export const STORAGE_INVENTORY: readonly StorageInventoryEntry[] = [
     key: LAYOUT_STORAGE_KEY,
     area: "localStorage",
     purpose: "Dashboard panel order and collapsed state",
+    category: "presentation-only",
+    containsPublicMetadata: false,
+  },
+  {
+    key: NAMED_LAYOUTS_STORAGE_KEY,
+    area: "localStorage",
+    purpose: "Named dashboard panel arrangements",
     category: "presentation-only",
     containsPublicMetadata: false,
   },

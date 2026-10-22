@@ -297,6 +297,14 @@ function receiptTransaction(label: string, result: InvokeResult): DeploymentRece
         ledger: null,
         detail: redactDiagnostics(`${result.stage}: ${result.detail}`),
       };
+    case "cancelled":
+      return {
+        operation: label,
+        outcome: "cancelled",
+        hash: null,
+        ledger: null,
+        detail: redactDiagnostics(result.detail),
+      };
     case "exported":
       return {
         operation: label,

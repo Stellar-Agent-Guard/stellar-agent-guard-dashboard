@@ -1089,16 +1089,11 @@ export function OutcomeBlock({
       </div>
     );
   }
-  if (result.kind === "ambiguous") {
+  if (result.kind === "cancelled") {
     return (
-      <div className="error">
-        <span className="t">
-          Broadcast with no answer — the policy may or may not have changed: {starLink(result.hash)}
-        </span>
-        <span className="mono tiny">
-          {result.detail} — re-read the contract, or look this hash up on the explorer, before
-          sending anything again.
-        </span>
+      <div className="warn notice" data-testid="policy-form-cancelled">
+        <span className="t">Transaction signing cancelled — nothing was broadcast</span>
+        <span className="mono tiny">{result.detail}</span>
       </div>
     );
   }
