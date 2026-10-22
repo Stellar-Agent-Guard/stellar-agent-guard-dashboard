@@ -545,7 +545,7 @@ export function TelemetryFeed() {
       {/* Coverage warnings. An empty list means no discontinuity has been detected,
           not that the feed is known to be complete. Nothing here fills a hole with
           invented events: the rows above are only what the RPC returned. */}
-      {feed.gaps.map((notice) => (
+      {(feed.gaps ?? []).map((notice) => (
         <div
           key={notice.guard}
           className={notice.lost.length > 0 ? "notice danger" : "notice"}
