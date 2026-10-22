@@ -3,7 +3,11 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { describeGuardEvent, explainReason, GUARD_EVENT_TOPICS } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
-import { STREAM_BUFFER_LIMIT, type TelemetryEvent } from "../lib/guard/telemetry.ts";
+import {
+  STREAM_BUFFER_LIMIT,
+  describeFeedGap,
+  type TelemetryEvent,
+} from "../lib/guard/telemetry.ts";
 import { useGuard, useGuardEvents } from "./GuardProvider.tsx";
 import { TelemetryAlerts } from "./TelemetryAlerts.tsx";
 import { TelemetryChart } from "./TelemetryChart.tsx";
@@ -494,8 +498,9 @@ export function TelemetryFeed() {
 
       <p className="tiny muted" style={{ marginTop: 8 }}>
         Tailed from Soroban RPC&apos;s <code>getEvents</code> with a cursor, so no event is
-        delivered twice and none is skipped between polls. Soroban has no push stream — the floor on
-        latency is the ledger close interval (roughly 5s), not the 5s poll.
+        delivered twice and none is skipped between polls — unless a coverage warning below says the
+        RPC lost or reordered part of the stream. Soroban has no push stream — the floor on latency
+        is the ledger close interval (roughly 5s), not the 5s poll.
         {feed.lastPolledAt && (
           <>
             {" "}
@@ -525,6 +530,34 @@ export function TelemetryFeed() {
           </span>
         </div>
       )}
+
+      {/* Coverage warnings. An empty list means no discontinuity has been detected,
+          not that the feed is known to be complete. Nothing here fills a hole with
+          invented events: the rows above are only what the RPC returned. */}
+      {feed.gaps.map((notice) => (
+        <div
+          key={notice.guard}
+          className={notice.lost.length > 0 ? "notice danger" : "notice"}
+          role={notice.lost.length > 0 ? "alert" : "status"}
+          data-testid="feed-gap-notice"
+        >
+          <strong>Possible gaps in the feed for {notice.label}</strong>
+          {notice.lost.map((gap) => {
+            const text = describeFeedGap(gap);
+            return (
+              <span className="tiny" key={`${gap.fromLedger}-${gap.toLedger}`}>
+                {text.headline}. {text.range}
+              </span>
+            );
+          })}
+          {notice.unsettled && (
+            <span className="tiny">
+              {describeFeedGap(notice.unsettled).headline}.{" "}
+              {describeFeedGap(notice.unsettled).range} This clears once a later poll is consistent.
+            </span>
+          )}
+        </div>
+      ))}
 
       <div className="notice info">
         <strong>Refused decisions cannot reach this feed from the ledger</strong>
