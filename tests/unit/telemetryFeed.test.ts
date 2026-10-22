@@ -192,26 +192,6 @@ describe("telemetry feed gap and coverage warnings", () => {
     assert.equal(recoveredState.unsettled, null);
   });
 
-  it("renders per-guard gap notices when gaps are present", () => {
-    const notices = [
-      {
-        guard: GUARD_A,
-        label: "Guard A",
-        lost: [
-          {
-            reason: "history_pruned" as const,
-            fromLedger: 10,
-            toLedger: 20,
-            detectedAtLedger: 25,
-          },
-        ],
-        unsettled: null,
-      },
-    ];
-    assert.equal(notices.length, 1);
-    assert.equal(notices[0]!.lost.length, 1);
-  });
-
   it("renders loading skeleton and header values correctly", async () => {
     const { container, unmount } = await renderFeed({
       feed: {
