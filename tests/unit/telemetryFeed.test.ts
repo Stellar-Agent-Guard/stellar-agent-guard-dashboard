@@ -185,6 +185,40 @@ describe("TelemetryFeed component unit tests", () => {
     await unmount();
   });
 
+  it("handles multi-guard gap notices correctly", async () => {
+    const { container, unmount } = await renderFeed({
+      feed: {
+        watching: true,
+        latestLedger: 250,
+        error: null,
+        lastPolledAt: new Date().toISOString(),
+        guards: [
+          { guard: GUARD_A, label: "Guard A" },
+          { guard: GUARD_B, label: "Guard B" },
+        ],
+        capped: 0,
+        cappedLabels: [],
+        gaps: [
+          {
+            guard: GUARD_A,
+            label: "Guard A",
+            lost: [{ reason: "history_pruned", fromLedger: 10, toLedger: 30, latestLedger: 250 }],
+            unsettled: null,
+          },
+          {
+            guard: GUARD_B,
+            label: "Guard B",
+            lost: [],
+            unsettled: { reason: "cursor_regressed", fromLedger: 40, toLedger: 35, latestLedger: 250 },
+          },
+        ],
+      },
+    });
+    const notices = container.querySelectorAll("[data-testid=\"feed-gap-notice\"]");
+    assert.ok(notices.length >= 2);
+    await unmount();
+  });
+
   it("displays cursor discontinuity warning when feed discontinuity is detected", async () => {
     const { container, unmount } = await renderFeed({
       feed: {
