@@ -143,7 +143,50 @@ function event(contractId: string, ledger: number | null, blocked: boolean): Gua
   });
 }
 
-const FEED_EVENTS = [event(GUARD_A, 100, false), event(GUARD_B, null, true)];
+const FEED_EVENTS = [
+  event(GUARD_A, 100, false),
+  event(GUARD_B, 101, true),
+  event(GUARD_A, 102, false),
+];
+
+describe("TelemetryFeed component unit tests", () => {
+  it("renders event rows and guard attribution chips", async () => {
+    const { container, unmount } = await renderFeed();
+    const trs = rows(container);
+    assert.equal(trs.length, 3);
+    await unmount();
+  });
+
+  it("displays coverage warning notices for lost ranges and unsettled positions", async () => {
+    const { container, unmount } = await renderFeed({
+      feed: {
+        watching: true,
+        latestLedger: 200,
+        error: null,
+        lastPolledAt: new Date().toISOString(),
+        guards: [
+          { guard: GUARD_A, label: "Guard A" },
+        ],
+        capped: 0,
+        cappedLabels: [],
+        gaps: [
+          {
+            guard: GUARD_A,
+            label: "Guard A",
+            lost: [{ reason: "history_pruned", fromLedger: 50, toLedger: 80, latestLedger: 200 }],
+            unsettled: { reason: "cursor_regressed", fromLedger: null, toLedger: null, latestLedger: 200 },
+          },
+        ],
+      },
+    });
+    const notice = container.querySelector("[data-tier]");
+    assert.ok(notice);
+    assert.match(notice.textContent ?? "", /coverage gap/i);
+    await unmount();
+  });
+});
+
+const _FEED_EVENTS_ORIG = [event(GUARD_A, 100, false), event(GUARD_B, null, true)];
 
 const cursorAt = (ledger: number, index = 0) =>
   `${String(ledger).padStart(19, "0")}-${String(index).padStart(10, "0")}`;
