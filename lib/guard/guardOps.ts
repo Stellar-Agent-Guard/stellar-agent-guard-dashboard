@@ -201,7 +201,14 @@ export async function submitOperation(params: {
     if (!result) continue;
     if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
       const ledger = (result as { ledger?: number }).ledger ?? null;
-      recordTx({ hash: sent.hash, operation: label, status: "confirmed", feeStroops });
+      recordTx({
+        hash: sent.hash,
+        operation: label,
+        status: "confirmed",
+        feeStroops,
+        networkName: NETWORK.name,
+        networkPassphrase: passphrase,
+      });
       announce(
         ledger !== null
           ? `Transaction confirmed on ledger ${ledger}`
@@ -217,7 +224,14 @@ export async function submitOperation(params: {
       };
     }
     if (result.status === rpc.Api.GetTransactionStatus.FAILED) {
-      recordTx({ hash: sent.hash, operation: label, status: "failed", feeStroops });
+      recordTx({
+        hash: sent.hash,
+        operation: label,
+        status: "failed",
+        feeStroops,
+        networkName: NETWORK.name,
+        networkPassphrase: passphrase,
+      });
       announce("Transaction failed on chain");
       return {
         kind: "failed",
@@ -230,7 +244,14 @@ export async function submitOperation(params: {
       };
     }
   }
-  recordTx({ hash: sent.hash, operation: label, status: "failed", feeStroops });
+  recordTx({
+    hash: sent.hash,
+    operation: label,
+    status: "failed",
+    feeStroops,
+    networkName: NETWORK.name,
+    networkPassphrase: passphrase,
+  });
   announce("Transaction failed on chain");
   return {
     kind: "failed",
@@ -281,6 +302,13 @@ export interface DeployOutcome {
   steps: DeployStep[];
   /** The deployed instance's identity, re-read from the chain after the create. */
   identity: WasmIdentity | null;
+  /**
+   * Why the post-deploy read produced no identity, or null when it was never
+   * reached, or when it succeeded. Kept separate from `identity` so a transport
+   * failure is reported as an unavailable read rather than as a wrong artifact —
+   * and so the deployment receipt can record a failed read explicitly.
+   */
+  readError: string | null;
   /** True only when the created instance runs the pinned artifact. */
   verified: boolean;
 }
@@ -345,7 +373,7 @@ export async function deployGuard(params: {
     });
     record(`upload_contract_wasm (${PHASE1_ARTIFACT.wasmBytes} bytes)`, upload);
     if (upload.kind !== "submitted") {
-      return { guard: predicted, steps, identity: null, verified: false };
+      return { guard: predicted, steps, identity: null, readError: null, verified: false };
     }
   }
 
@@ -366,15 +394,27 @@ export async function deployGuard(params: {
     create,
   );
   if (create.kind !== "submitted") {
-    return { guard: predicted, steps, identity: null, verified: false };
+    return { guard: predicted, steps, identity: null, readError: null, verified: false };
   }
 
-  const identity = await verifyWasmIdentity(server, predicted);
+  // A read failure after a submitted create is not the same fact as a wrong
+  // artifact. Catch it so the operator keeps the transaction references and the
+  // receipt can say "unavailable" instead of losing the whole outcome when the
+  // RPC hiccups at the last step.
+  let identity: WasmIdentity | null = null;
+  let readError: string | null = null;
+  try {
+    identity = await verifyWasmIdentity(server, predicted);
+  } catch (error) {
+    readError = error instanceof Error ? error.message : String(error);
+  }
   return {
     guard: predicted,
     steps,
     identity,
+    readError,
     verified:
+      identity !== null &&
       identity.fetchedSha256 === PHASE1_ARTIFACT.wasmHash &&
       identity.bytes === PHASE1_ARTIFACT.wasmBytes,
   };
