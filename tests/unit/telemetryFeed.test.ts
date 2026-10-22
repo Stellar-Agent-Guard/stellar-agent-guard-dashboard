@@ -7,7 +7,11 @@ import { installDom, loadReact, sleep, type Act } from "./domHarness.ts";
 import { withIdentity } from "../mocks/eventFixtures.ts";
 import { TelemetryFeed } from "../../components/TelemetryFeed.tsx";
 import { GuardContext, GuardEventsContext } from "../../components/GuardProvider.tsx";
-import { describeFeedGap, FEED_GUARD_CAP, type TelemetryEvent } from "../../lib/guard/telemetry.ts";
+import {
+  describeFeedGap,
+  FEED_GUARD_CAP,
+  type TelemetryEvent,
+} from "../../lib/guard/telemetry.ts";
 
 installDom();
 
