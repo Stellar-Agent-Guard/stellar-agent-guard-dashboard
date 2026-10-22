@@ -42,6 +42,12 @@ import { announce } from "./useAnnounce.ts";
 import { recordTx } from "./txHistory.ts";
 import { hardwareGuide } from "./hardwareGuide.ts";
 import {
+  checkPresignAuthorization,
+  contextFromTransaction,
+  type AuthorizationCheck,
+  type AuthorizationContext,
+} from "./authorizationSummary.ts";
+import {
   PHASE_LABEL,
   interruptionFromSignerFailure,
   recordWriteInterruption,
@@ -739,7 +745,7 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     promptWallet();
     let signedEntryXdr: string;
     try {
-      signedEntryXdr = await signer.signAuthEntry(entry.toXDR("base64"));
+      signedEntryXdr = await signWithWallet(() => signer.signAuthEntry(entry.toXDR("base64")));
     } catch (error) {
       const interruption = interruptionFromSignerFailure(error, "authorization");
       if (!interruption) throw error;
@@ -830,7 +836,9 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   promptWallet();
   let signedEnvelope: string;
   try {
-    signedEnvelope = await signer.signTransaction(assembled.transaction.toXDR());
+    signedEnvelope = await signWithWallet(() =>
+      signer.signTransaction(assembled.transaction.toXDR()),
+    );
   } catch (error) {
     const interruption = interruptionFromSignerFailure(error, "envelope");
     if (!interruption) throw error;
@@ -1058,16 +1066,6 @@ export function createTransactionEnvelope(
 
 export function detectExpiration(currentTime: number, maxTime: number) {
   return currentTime >= maxTime;
-}
-
-export function isWalletCancellation(error: unknown): boolean {
-  if (!error) return false;
-  if (typeof error === "object" && (error as any).name === "WalletUserRejectedError") {
-    return true;
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  const normalised = message.toLowerCase();
-  return /reject|denied|declin|cancel|abort|user.*(close|dismiss)/.test(normalised);
 }
 
 export function actionableCancellationMessage(error: unknown): string {
