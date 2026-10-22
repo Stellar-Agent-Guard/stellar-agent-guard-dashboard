@@ -118,6 +118,9 @@ export const EMPTY_FEED_GAP_STATE: FeedGapState = { lost: [], unsettled: null };
 /** Cap on remembered lost ranges, so a long-running tab cannot grow without bound. */
 export const FEED_GAP_LIMIT = 20;
 
+/** Cap on displayed guards in the feed header. */
+export const FEED_GUARD_CAP = 5;
+
 /**
  * Compare two RPC event cursors. stellar-rpc ids are `<TOID>-<event index>`, both
  * decimal, so they compare numerically — not as strings, whose order differs once
@@ -301,7 +304,7 @@ export class GuardFeed {
       this.lastRawEvents = [];
       let decoded = await this.listener.poll(params);
       const page = { ...decoded, events: attachLedgerXdr(decoded.events, this.lastRawEvents) };
-const found = detectFeedGaps({
+      const found = detectFeedGaps({
         expectedFrom: this.expectedFrom,
         heldCursor: this.cursor,
         page: {
@@ -315,7 +318,7 @@ const found = detectFeedGaps({
       // A page with no events still advances the ledger pointer, so the next poll
       // does not re-scan a stretch of empty ledgers.
       this.latestLedger = Math.max(this.latestLedger ?? 0, page.latestLedger);
-if (page.cursor && !found.some((gap) => gap.reason === "cursor_regressed")) {
+      if (page.cursor && !found.some((gap) => gap.reason === "cursor_regressed")) {
         this.lastKnownGoodCursor = page.cursor;
         this.cursor = page.cursor;
       }
