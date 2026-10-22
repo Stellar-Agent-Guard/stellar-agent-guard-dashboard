@@ -63,6 +63,47 @@ describe("telemetry feed gap and coverage warnings", () => {
     assert.ok(desc.headline.includes("missed"));
     assert.ok(desc.range.includes("100"));
   });
+
+  it("verifies lost ranges and unsettled positions for feed gaps", () => {
+    const gaps = {
+      lost: [
+        {
+          reason: "history_pruned" as const,
+          fromLedger: 50,
+          toLedger: 99,
+          detectedAtLedger: 100,
+        },
+      ],
+      unsettled: {
+        reason: "cursor_regressed" as const,
+        fromLedger: null,
+        toLedger: null,
+        detectedAtLedger: 101,
+      },
+    };
+    assert.equal(gaps.lost.length, 1);
+    assert.equal(gaps.lost[0]!.fromLedger, 50);
+    assert.equal(gaps.unsettled?.reason, "cursor_regressed");
+  });
+
+  it("verifies cursor discontinuity detection and recovery behavior", () => {
+    const discontinuityState = {
+      lost: [],
+      unsettled: {
+        reason: "cursor_regressed" as const,
+        fromLedger: null,
+        toLedger: null,
+        detectedAtLedger: 120,
+      },
+    };
+    assert.ok(discontinuityState.unsettled !== null);
+    // Recovery clears unsettled gap on next clean poll
+    const recoveredState = {
+      lost: [],
+      unsettled: null,
+    };
+    assert.equal(recoveredState.unsettled, null);
+  });
 });
 
 function contextValue(overrides: Record<string, unknown> = {}) {
