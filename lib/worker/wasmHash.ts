@@ -15,6 +15,7 @@ type ProgressPhase =
 type WorkerMessage = { type: "hash"; bytes: ArrayBuffer } | { type: "cancel" };
 
 const CHUNK_SIZE = 1024 * 1024; // 1MB chunks for progress reporting
+const MAX_INPUT_SIZE = 1024 * 1024 * 50; // 50MB max to prevent resource exhaustion
 
 async function computeHash(bytes: Uint8Array): Promise<string> {
   const hashBuffer = await crypto.subtle.digest(

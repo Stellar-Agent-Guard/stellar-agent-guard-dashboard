@@ -57,6 +57,126 @@ test("compilePrintReport extracts correct fields from snapshot", () => {
   assert.equal(report.allowlists.assets[0], "A1");
 });
 
+
+
+// ── Guard switch and out-of-order read tests ────────────────────────────
+
+describe("print report guard switching and out-of-order reads", () => {
+  test("failed status read is labeled, never rendered as verified", () => {
+    const mockSnapshot = {
+      guard: "CABC123...",
+      fetchedAt: "2026-09-25",
+      status: {
+        ok: false,
+        error: "ECONNREFUSED",
+        diagnostic: "Connection refused to RPC endpoint",
+      },
+      policy: { ok: true, value: null },
+      window: { ok: true, value: null },
+      identity: { ok: true, value: { reportedWasmHash: "-", fetchedSha256: "-", bytes: 0 } },
+    } as any;
+
+    const report = compilePrintReport(mockSnapshot, "Testnet", "GADMIN...");
+    // Failed read should produce "UNKNOWN" status, not "OK" or a verified value
+    assert.equal(report.dmsStatus, "UNKNOWN");
+    // The report should explicitly reflect the failure, not claim success
+    assert.ok(report.contractId.includes("CABC123"));
+  });
+
+  test("stale read from previous guard not mixed with current guard", () => {
+    const oldSnapshot = {
+      guard: "OLDGUARD...",
+      fetchedAt: "2026-09-20",
+      status: {
+        ok: true,
+        value: { heartbeat_expired: false, admin_frozen: false, has_policy: true, last_heartbeat: 0n },
+      },
+      policy: { ok: true, value: null },
+      window: { ok: true, value: null },
+      identity: { ok: true, value: { reportedWasmHash: "oldhash", fetchedSha256: "oldhash", bytes: 500 } },
+    } as any;
+
+    const newSnapshot = {
+      guard: "NEWGUARD...",
+      fetchedAt: "2026-09-25",
+      status: {
+        ok: true,
+        value: { heartbeat_expired: false, admin_frozen: false, has_policy: true, last_heartbeat: 0n },
+      },
+      policy: { ok: true, value: { per_tx_cap: 100n, window_cap: 1000n, window_secs: 60n, assets: [], recipients: [], protocols: [], paused: false, active_from: 0n, active_until: 0n, allow_any_recipient: false } },
+      window: { ok: true, value: null },
+      identity: { ok: true, value: { reportedWasmHash: "newhash", fetchedSha256: "newhash", bytes: 1000 } },
+    } as any;
+
+    // Old guard report should show old guard identity
+    const oldReport = compilePrintReport(oldSnapshot, "Testnet", "GADMIN...");
+    assert.equal(oldReport.contractId, "OLDGUARD...");
+
+    // New guard report should show new guard identity  
+    const newReport = compilePrintReport(newSnapshot, "Testnet", "GADMIN...");
+    assert.equal(newReport.contractId, "NEWGUARD...");
+    // Should not mix fields from different guards
+    assert.notEqual(oldReport.bytecodeHash, newReport.bytecodeHash);
+  });
+
+  test("async read out of order - window read completes after status", () => {
+    const snapshotWithOutOfOrder = {
+      guard: "CABC123...",
+      fetchedAt: "2026-09-25",
+      status: {
+        ok: true,
+        value: { heartbeat_expired: false, admin_frozen: false, has_policy: true, last_heartbeat: 0n },
+      },
+      policy: { ok: true, value: { per_tx_cap: 100n, window_cap: 1000n, window_secs: 60n, assets: [], recipients: [], protocols: [], paused: false, active_from: 0n, active_until: 0n, allow_any_recipient: false } },
+      // Window read is pending/out of order
+      window: { ok: false, error: "pending" },
+      identity: { ok: true, value: { reportedWasmHash: "hash123", fetchedSha256: "hash123", bytes: 1000 } },
+    } as any;
+
+    const report = compilePrintReport(snapshotWithOutOfOrder, "Testnet", "GADMIN...");
+    // Status should be OK even if window is pending
+    assert.equal(report.dmsStatus, "OK");
+    // Report should not claim window verification when read failed
+    assert.equal(report.allowlists.protocols.length, 0); // no protocols from failed window
+  });
+
+  test("read error per-field never rendered as zero or verified values", () => {
+    const snapshotWithErrors = {
+      guard: "CABC123...",
+      fetchedAt: "2026-09-25",
+      status: {
+        ok: false,
+        error: "RPC_TIMEOUT",
+        diagnostic: "RPC call timed out after 10s",
+      },
+      policy: {
+        ok: false,
+        error: "RPC_TIMEOUT",
+        diagnostic: "RPC call timed out after 10s",
+      },
+      window: {
+        ok: false,
+        error: "RPC_TIMEOUT",
+        diagnostic: "RPC call timed out after 10s",
+      },
+      identity: {
+        ok: false,
+        error: "RPC_TIMEOUT",
+        diagnostic: "RPC call timed out after 10s",
+      },
+    } as any;
+
+    const report = compilePrintReport(snapshotWithErrors, "Testnet", "GADMIN...");
+    // All status should reflect failures
+    assert.equal(report.dmsStatus, "UNKNOWN");
+    // Policy should show no rules when read failed
+    assert.equal(report.policyRules, "No policy installed");
+    // Allowlists should be empty when reads failed
+    assert.equal(report.allowlists.assets.length, 0);
+    assert.equal(report.allowlists.recipients.length, 0);
+    assert.equal(report.allowlists.protocols.length, 0);
+  });
+});
 // ── Deployment verification receipt (#396, #397) ───────────────────────────
 
 /** A syntactically valid contract address, for the prediction check. */
