@@ -545,15 +545,15 @@ export function TelemetryFeed() {
       {/* Coverage warnings. An empty list means no discontinuity has been detected,
           not that the feed is known to be complete. Nothing here fills a hole with
           invented events: the rows above are only what the RPC returned. */}
-      {(feed.gaps ?? []).map((notice) => (
+      {(Array.isArray(feed.gaps) ? feed.gaps : feed.gaps ? [feed.gaps] : []).map((notice: any) => (
         <div
-          key={notice.guard}
-          className={notice.lost.length > 0 ? "notice danger" : "notice"}
-          role={notice.lost.length > 0 ? "alert" : "status"}
+          key={notice.guard ?? "single"}
+          className={notice.lost && notice.lost.length > 0 ? "notice danger" : "notice"}
+          role={notice.lost && notice.lost.length > 0 ? "alert" : "status"}
           data-testid="feed-gap-notice"
         >
-          <strong>Possible gaps in the feed for {notice.label}</strong>
-          {notice.lost.map((gap) => {
+          <strong>Possible gaps in the feed {notice.label ? `for ${notice.label}` : ""}</strong>
+          {(notice.lost ?? []).map((gap: any) => {
             const text = describeFeedGap(gap);
             return (
               <span className="tiny" key={`${gap.fromLedger}-${gap.toLedger}`}>
