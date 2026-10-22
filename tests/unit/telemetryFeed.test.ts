@@ -150,6 +150,14 @@ const FEED_EVENTS = [
 ];
 
 describe("TelemetryFeed component unit tests", () => {
+  it("renders events and filter controls", async () => {
+    const { container, unmount } = await renderFeed();
+    const trs = rows(container);
+    assert.equal(trs.length, 3);
+    assert.match(trs[0]!.textContent ?? "", /Guard A/);
+    await unmount();
+  });
+
   it("renders event rows and guard attribution chips", async () => {
     const { container, unmount } = await renderFeed();
     const trs = rows(container);
