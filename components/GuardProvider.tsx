@@ -44,7 +44,13 @@ import {
   type StreamBuffer,
   type TelemetryEvent,
 } from "../lib/guard/telemetry.ts";
-import { FEED_GUARD_CAP, MultiGuardFeed, type FeedSource } from "../lib/guard/feedSubscriptions.ts";
+import {
+  FEED_GUARD_CAP,
+  MultiGuardFeed,
+  feedGapNotices,
+  type FeedGapNotice,
+  type FeedSource,
+} from "../lib/guard/feedSubscriptions.ts";
 import {
   createRegistryAnnouncer,
   createRegistryChangeFilter,
@@ -184,6 +190,11 @@ export interface GuardContextValue {
     capped: number;
     /** Labels of the excluded guards, so the cap can be named, not just counted. */
     cappedLabels: string[];
+    /**
+     * Guards whose feed has a known hole or an unsettled position. Empty does
+     * not mean complete — only that no discontinuity has been detected.
+     */
+    gaps: FeedGapNotice[];
   };
   startWatching: () => void;
   stopWatching: () => void;
@@ -313,6 +324,7 @@ export function GuardProvider({
     guards: [],
     capped: 0,
     cappedLabels: [],
+    gaps: [],
   });
 
   /**
@@ -1022,6 +1034,7 @@ export function GuardProvider({
       guards: [],
       capped: 0,
       cappedLabels: [],
+      gaps: [],
     }));
   }, []);
 
@@ -1182,6 +1195,7 @@ export function GuardProvider({
           latestLedger: page.latestLedger ?? current.latestLedger,
           lastPolledAt: new Date().toISOString(),
           guards: supervisor.guards(),
+          gaps: feedGapNotices(page.watch),
           error: failed ? `${failed.label}: ${failed.error}` : null,
         }));
       } catch (error) {
