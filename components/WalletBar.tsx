@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useGuard } from "./GuardProvider.tsx";
 import { AddressText, ErrorBlock, Stat, short, useAddressLabel } from "./bits.tsx";
 import { AddressBookModal } from "./AddressBookModal.tsx";
@@ -221,6 +221,18 @@ export function WalletBar() {
                 {!connecting && <span className="tiny muted">Reading stays available.</span>}
               </>
             )}
+          </div>
+
+          <div className="row" style={{ marginTop: 8 }}>
+            {/* Available whether or not a wallet is connected: the operator who
+                cannot connect is exactly the one who needs to see what this
+                browser reported. */}
+            <button className="secondary" onClick={() => setDiagnosticsOpen(true)}>
+              Wallet diagnostics
+            </button>
+            <span className="tiny muted">
+              Provider, account and capabilities — read without asking your wallet to sign.
+            </span>
           </div>
 
           {interruptionGuidance && (
