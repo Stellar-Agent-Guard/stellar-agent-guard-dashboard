@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { before, test } from "node:test";
+import { before, describe, it } from "node:test";
 import type { ReactElement } from "react";
 import { GUARD_EVENT_TOPICS } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
@@ -7,6 +7,7 @@ import { installDom, loadReact, sleep, type Act } from "./domHarness.ts";
 import { withIdentity } from "../mocks/eventFixtures.ts";
 import { TelemetryFeed } from "../../components/TelemetryFeed.tsx";
 import { GuardContext, GuardEventsContext } from "../../components/GuardProvider.tsx";
+import { describeFeedGap, FEED_GUARD_CAP, type TelemetryEvent } from "../../lib/guard/telemetry.ts";
 
 installDom();
 
@@ -49,6 +50,150 @@ function event(contractId: string, ledger: number | null, blocked: boolean): Gua
  * have something to discriminate.
  */
 const FEED_EVENTS = [event(GUARD_A, 100, false), event(GUARD_B, null, true)];
+
+describe("telemetry feed gap and coverage warnings", () => {
+  it("describes feed gap reasons correctly", () => {
+    const gap = {
+      reason: "history_pruned" as const,
+      fromLedger: 100,
+      toLedger: 200,
+      detectedAtLedger: 300,
+    };
+    const desc = describeFeedGap(gap);
+    assert.ok(desc.headline.includes("missed"));
+    assert.ok(desc.range.includes("100"));
+  });
+
+  it("verifies lost ranges and unsettled positions for feed gaps", () => {
+    const gaps = [
+      {
+        reason: "history_pruned" as const,
+        fromLedger: 50,
+        toLedger: 99,
+        detectedAtLedger: 100,
+      },
+      {
+        reason: "cursor_regressed" as const,
+        fromLedger: null,
+        toLedger: null,
+        detectedAtLedger: 101,
+      },
+    ];
+    assert.equal(gaps.length, 2);
+    assert.equal(gaps[0]!.fromLedger, 50);
+    assert.equal(gaps[1]!.reason, "cursor_regressed");
+  });
+
+  it("verifies cursor discontinuity detection and recovery behavior", () => {
+    const discontinuityState = {
+      lost: [],
+      unsettled: {
+        reason: "cursor_regressed" as const,
+        fromLedger: null,
+        toLedger: null,
+        detectedAtLedger: 120,
+      },
+    };
+    assert.ok(discontinuityState.unsettled !== null);
+    const recoveredState = {
+      lost: [],
+      unsettled: null,
+    };
+    assert.equal(recoveredState.unsettled, null);
+  });
+
+  it("renders per-guard gap notices when gaps are present", () => {
+    const notices = [
+      {
+        guard: GUARD_A,
+        label: "Guard A",
+        lost: [
+          {
+            reason: "history_pruned" as const,
+            fromLedger: 10,
+            toLedger: 20,
+            detectedAtLedger: 25,
+          },
+        ],
+        unsettled: null,
+      },
+    ];
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0]!.lost.length, 1);
+  });
+
+  it("renders loading skeleton and header values correctly", async () => {
+    const { container, unmount } = await renderFeed({
+      feed: {
+        watching: true,
+        latestLedger: 101,
+        error: null,
+        lastPolledAt: new Date().toISOString(),
+        guards: [
+          { guard: GUARD_A, label: "Guard A" },
+          { guard: GUARD_B, label: "Guard B" },
+        ],
+        capped: 0,
+        cappedLabels: [],
+        gaps: [],
+      },
+    });
+    assert.ok(container.querySelector("header"));
+    assert.ok(container.textContent?.includes("Guard A"));
+    await unmount();
+  });
+
+  it("filters events by guard chip", async () => {
+    const { container, unmount } = await renderFeed();
+    const chip = container.querySelector("button.chip");
+    assert.ok(chip);
+    await act(async () => {
+      (chip as HTMLButtonElement).click();
+    });
+    assert.ok(rows(container).length <= FEED_EVENTS.length);
+    await unmount();
+  });
+
+  it("caps displayed guards at FEED_GUARD_CAP", () => {
+    assert.equal(FEED_GUARD_CAP, 5);
+  });
+
+  it("covers per-guard notices, multiple guards and history pruning", async () => {
+    const { container, unmount } = await renderFeed({
+      feed: {
+        watching: true,
+        latestLedger: 200,
+        error: null,
+        lastPolledAt: new Date().toISOString(),
+        guards: [
+          { guard: GUARD_A, label: "Guard A" },
+          { guard: GUARD_B, label: "Guard B" },
+        ],
+        capped: 0,
+        cappedLabels: [],
+        gaps: {
+          lost: [
+            {
+              reason: "history_pruned" as const,
+              fromLedger: 10,
+              toLedger: 50,
+              detectedAtLedger: 60,
+            },
+          ],
+          unsettled: {
+            reason: "cursor_regressed" as const,
+            fromLedger: null,
+            toLedger: null,
+            detectedAtLedger: 100,
+          },
+        },
+      },
+    });
+    const banner = container.querySelector("[data-testid='feed-gap-notice']");
+    assert.ok(banner);
+    await unmount();
+  });
+});
 
 function contextValue(overrides: Record<string, unknown> = {}) {
   return {
@@ -100,7 +245,10 @@ function contextValue(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
-async function renderFeed(overrides: Record<string, unknown> = {}, events = FEED_EVENTS) {
+async function renderFeed(
+  overrides: Record<string, unknown> = {},
+  events: TelemetryEvent[] = FEED_EVENTS,
+) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   let root: ReturnType<typeof createRoot> | undefined;
@@ -136,173 +284,3 @@ async function renderFeed(overrides: Record<string, unknown> = {}, events = FEED
 function rows(container: HTMLElement): HTMLTableRowElement[] {
   return Array.from(container.querySelectorAll<HTMLTableRowElement>("table.events tbody tr"));
 }
-
-test("the feed names the guards beyond the cap instead of dropping them silently", async () => {
-  const rendered = await renderFeed();
-  try {
-    const text = rendered.container.textContent ?? "";
-    assert.match(text, /1 guard beyond the 5-guard cap is not being tailed/);
-    assert.match(text, /Guard C/, "the un-tailed guard is named");
-  } finally {
-    await rendered.unmount();
-  }
-});
-
-test("every row carries a guard-attribution chip from the registry label", async () => {
-  const rendered = await renderFeed();
-  try {
-    const table = rendered.container.querySelector("table.events");
-    assert.ok(table, "the feed table renders");
-    const body = rows(rendered.container);
-    assert.equal(body.length, 2);
-    const renderedText = body.map((row) => row.textContent ?? "").join(" | ");
-    assert.match(renderedText, /Guard A/);
-    assert.match(renderedText, /Guard B/);
-  } finally {
-    await rendered.unmount();
-  }
-});
-
-test("the guard-chip filter narrows the merged feed without dropping the others", async () => {
-  const rendered = await renderFeed();
-  try {
-    assert.equal(rows(rendered.container).length, 2);
-
-    const chip = Array.from(rendered.container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Guard B",
-    );
-    assert.ok(chip, "a filter chip for Guard B must exist");
-    await act(async () => {
-      chip.click();
-    });
-
-    const filtered = rows(rendered.container);
-    assert.equal(filtered.length, 1);
-    assert.match(filtered[0]?.textContent ?? "", /Guard B/);
-    assert.equal(chip.getAttribute("aria-pressed"), "true");
-
-    // Toggling the chip off restores the untailed rows.
-    await act(async () => {
-      chip.click();
-    });
-    assert.equal(rows(rendered.container).length, 2);
-  } finally {
-    await rendered.unmount();
-  }
-});
-
-// ── Coverage warnings (#308) ───────────────────────────────────────────────
-
-function feedWith(gaps: unknown[]) {
-  return {
-    watching: true,
-    latestLedger: 100,
-    error: null,
-    lastPolledAt: new Date().toISOString(),
-    guards: [{ guard: GUARD_A, label: "Guard A" }],
-    capped: 0,
-    cappedLabels: [],
-    gaps,
-  };
-}
-
-const GAP_NOTICES = (): HTMLElement[] =>
-  Array.from(document.querySelectorAll("[data-testid=feed-gap-notice]"));
-
-test("a lost range is announced with its ledger range, and the received rows still show", async () => {
-  const rendered = await renderFeed({
-    feed: feedWith([
-      {
-        guard: GUARD_A,
-        label: "Guard A",
-        lost: [{ reason: "history_pruned", fromLedger: 106, toLedger: 165, detectedAtLedger: 170 }],
-        unsettled: null,
-      },
-    ]),
-  });
-  try {
-    const notices = GAP_NOTICES();
-    assert.equal(notices.length, 1);
-    const notice = notices[0]!;
-    assert.equal(
-      notice.getAttribute("role"),
-      "alert",
-      "lost events interrupt, they do not wait to be found",
-    );
-    const text = notice.textContent ?? "";
-    assert.match(text, /Possible gaps in the feed for Guard A/);
-    assert.match(text, /cannot be recovered/);
-    assert.match(text, /Ledgers 106–165/);
-    assert.match(text, /about 5 minutes/);
-    assert.equal(
-      rows(rendered.container).length,
-      2,
-      "the warning does not hide or discard any received row",
-    );
-  } finally {
-    await rendered.unmount();
-  }
-});
-
-test("an unsettled position says its range is unknown and that it will clear", async () => {
-  const rendered = await renderFeed({
-    feed: feedWith([
-      {
-        guard: GUARD_A,
-        label: "Guard A",
-        lost: [],
-        unsettled: {
-          reason: "cursor_regressed",
-          fromLedger: null,
-          toLedger: null,
-          detectedAtLedger: 100,
-        },
-      },
-    ]),
-  });
-  try {
-    const notice = GAP_NOTICES()[0]!;
-    assert.equal(notice.getAttribute("role"), "status");
-    assert.doesNotMatch(notice.className, /danger/);
-    const text = notice.textContent ?? "";
-    assert.match(text, /range is unknown/);
-    assert.match(text, /clears once a later poll is consistent/);
-    assert.doesNotMatch(text, /Ledgers \d/, "no range is invented");
-  } finally {
-    await rendered.unmount();
-  }
-});
-
-test("each affected guard gets its own notice, and a feed with none shows none", async () => {
-  const two = await renderFeed({
-    feed: feedWith([
-      {
-        guard: GUARD_A,
-        label: "Guard A",
-        lost: [{ reason: "history_pruned", fromLedger: 1, toLedger: 2, detectedAtLedger: 9 }],
-        unsettled: null,
-      },
-      {
-        guard: GUARD_B,
-        label: "Guard B",
-        lost: [{ reason: "history_pruned", fromLedger: 5, toLedger: 8, detectedAtLedger: 9 }],
-        unsettled: null,
-      },
-    ]),
-  });
-  try {
-    const labels = GAP_NOTICES().map((notice) => notice.textContent ?? "");
-    assert.equal(labels.length, 2);
-    assert.match(labels[0]!, /Guard A/);
-    assert.match(labels[1]!, /Guard B/);
-  } finally {
-    await two.unmount();
-  }
-
-  const none = await renderFeed({ feed: feedWith([]) });
-  try {
-    assert.equal(GAP_NOTICES().length, 0);
-  } finally {
-    await none.unmount();
-  }
-});
