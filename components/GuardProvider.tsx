@@ -227,7 +227,15 @@ export interface GuardContextValue {
    * Tell the other open tabs that this one changed something. The provider adds
    * the active guard, so callers only name the change.
    */
-  notifyTabs: (type: TabSyncEventType, options?: { payload?: Record<string, unknown> }) => void;
+  /**
+   * Tell the other tabs something changed. `guard` names the guard the change was
+   * made to; it defaults to the active one, which is wrong for a write that
+   * settled after the operator had moved on.
+   */
+  notifyTabs: (
+    type: TabSyncEventType,
+    options?: { guard?: string; payload?: Record<string, unknown> },
+  ) => void;
   /** Operator session auto-lock state and its configuration. */
   session: {
     state: IdleState;
@@ -666,9 +674,9 @@ export function GuardProvider({
   }, [tabSync]);
 
   const notifyTabs = useCallback(
-    (type: TabSyncEventType, options?: { payload?: Record<string, unknown> }) => {
+    (type: TabSyncEventType, options?: { guard?: string; payload?: Record<string, unknown> }) => {
       tabSync.broadcast(type, {
-        guard: guardRef.current,
+        guard: options?.guard ?? guardRef.current,
         ...(options?.payload === undefined ? {} : { payload: options.payload }),
       });
     },
