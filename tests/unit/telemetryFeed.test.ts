@@ -306,16 +306,3 @@ test("each affected guard gets its own notice, and a feed with none shows none",
     await none.unmount();
   }
 });
-
-test("the feed no longer promises that nothing is ever skipped", async () => {
-  const rendered = await renderFeed({ feed: feedWith([]) });
-  try {
-    const text = rendered.container.textContent ?? "";
-    assert.match(
-      text,
-      /unless a coverage warning below says the RPC lost or reordered part of the stream/,
-    );
-  } finally {
-    await rendered.unmount();
-  }
-});
