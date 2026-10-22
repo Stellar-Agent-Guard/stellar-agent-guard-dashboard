@@ -181,7 +181,7 @@ test("dark theme: danger text contrasts against panel background", () => {
   assert.match(sheet, /--panel:\s*#12161d/);
   // Basic contrast check using WCAG relative luminance
   const l1 = luminance(255, 92, 92); // #ff5c5c
-  const l2 = luminance(18, 22, 29);   // #12161d
+  const l2 = luminance(18, 22, 29); // #12161d
   const contrast = (l1 + 0.05) / (l2 + 0.05);
   assert.ok(contrast >= 4.5, `dark theme danger vs panel contrast ${contrast.toFixed(2)} < 4.5`);
 });
