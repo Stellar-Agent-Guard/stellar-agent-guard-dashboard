@@ -180,6 +180,8 @@ export interface GuardContextValue {
   /** The snapshot field currently re-reading, if any. */
   retryingField: SnapshotField | null;
   feed: {
+    discontinuity: boolean;
+    affectedLedgers: { start: number; end: number } | undefined;
     watching: boolean;
     latestLedger: number | null;
     error: string | null;
@@ -325,6 +327,8 @@ export function GuardProvider({
   const [buffer, setBuffer] = useState<StreamBuffer>(emptyStreamBuffer);
   const [rangeLabel, setRangeLabel] = useState<string | null>(null);
   const [feed, setFeed] = useState<GuardContextValue["feed"]>({
+    discontinuity: false,
+    affectedLedgers: undefined,
     watching: false,
     latestLedger: null,
     error: null,
