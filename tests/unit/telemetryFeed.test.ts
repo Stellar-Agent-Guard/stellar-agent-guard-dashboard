@@ -104,6 +104,38 @@ describe("telemetry feed gap and coverage warnings", () => {
     };
     assert.equal(recoveredState.unsettled, null);
   });
+
+  it("covers per-guard notices, multiple guards and history pruning", () => {
+    const multiGaps = [
+      {
+        guard: GUARD_A,
+        label: "Guard A",
+        lost: [
+          {
+            reason: "history_pruned" as const,
+            fromLedger: 10,
+            toLedger: 20,
+            detectedAtLedger: 25,
+          },
+        ],
+        unsettled: null,
+      },
+      {
+        guard: GUARD_B,
+        label: "Guard B",
+        lost: [],
+        unsettled: {
+          reason: "cursor_regressed" as const,
+          fromLedger: null,
+          toLedger: null,
+          detectedAtLedger: 30,
+        },
+      },
+    ];
+    assert.equal(multiGaps.length, 2);
+    assert.equal(multiGaps[0]!.lost.length, 1);
+    assert.equal(multiGaps[1]!.unsettled?.reason, "cursor_regressed");
+  });
 });
 
 function contextValue(overrides: Record<string, unknown> = {}) {
