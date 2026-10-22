@@ -213,3 +213,45 @@ test("telemetry feed displays discontinuity warning and retains known-good curso
     await rendered.unmount();
   }
 });
+
+test("telemetry feed renders coverage warnings for lost ranges, unsettled positions, and per-guard notices", async () => {
+  const rendered = await renderFeed({
+    feed: {
+      watching: true,
+      latestLedger: 100,
+      error: null,
+      lastPolledAt: new Date().toISOString(),
+      guards: [{ guard: GUARD_A, label: "Guard A" }],
+      capped: 0,
+      cappedLabels: [],
+      gaps: [
+        {
+          guard: GUARD_A,
+          label: "Guard A",
+          lost: [
+            {
+              reason: "history_pruned",
+              fromLedger: 10,
+              toLedger: 20,
+              detectedAtLedger: 100,
+            },
+          ],
+          unsettled: {
+            reason: "cursor_regressed",
+            fromLedger: null,
+            toLedger: null,
+            detectedAtLedger: 100,
+          },
+        },
+      ],
+    },
+  });
+  try {
+    const text = rendered.container.textContent ?? "";
+    assert.match(text, /Events were missed/i);
+    assert.match(text, /Ledgers 10–20/i);
+    assert.match(text, /The RPC returned an earlier position/i);
+  } finally {
+    await rendered.unmount();
+  }
+});
