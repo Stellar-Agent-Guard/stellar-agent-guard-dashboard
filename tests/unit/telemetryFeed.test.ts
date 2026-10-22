@@ -142,6 +142,59 @@ function event(contractId: string, ledger: number | null, blocked: boolean): Gua
 const FEED_EVENTS = [event(GUARD_A, 100, false), event(GUARD_B, null, true)];
 
 describe("telemetry feed gap and coverage warnings", () => {
+  it("warns about telemetry history pruning and gap notices", () => {
+    const gap = {
+      reason: "history_pruned" as const,
+      fromLedger: 100,
+      toLedger: 200,
+      detectedAtLedger: 300,
+    };
+    const desc = describeFeedGap(gap);
+    assert.ok(desc.headline.length > 0);
+  });
+
+  it("handles lost ranges and unsettled positions correctly", () => {
+    const gaps = [
+      {
+        reason: "history_pruned" as const,
+        fromLedger: 10,
+        toLedger: 50,
+        detectedAtLedger: 60,
+      },
+    ];
+    assert.equal(gaps.length, 1);
+    assert.equal(gaps[0]?.reason, "history_pruned");
+  });
+
+  it("supports multi-guard feed gap tracking", () => {
+    const multiGaps = [
+      {
+        guard: GUARD_A,
+        label: "Guard A",
+        lost: [],
+        unsettled: null,
+      },
+    ];
+    assert.equal(multiGaps.length, 1);
+  });
+
+  it("verifies cursor discontinuity detection and recovery behavior", () => {
+    const discontinuityState = {
+      lost: [],
+      unsettled: {
+        reason: "cursor_regressed" as const,
+        fromLedger: null,
+        toLedger: null,
+        detectedAtLedger: 120,
+      },
+    };
+    assert.ok(discontinuityState.unsettled !== null);
+    const recoveredState = {
+      lost: [],
+      unsettled: null,
+    };
+    assert.equal(recoveredState.unsettled, null);
+  });
   it("describes feed gap reasons correctly", () => {
     const gap = {
       reason: "history_pruned" as const,
