@@ -74,7 +74,7 @@ export type TelemetryEvent = GuardEvent & {
 /** One page of rows, carrying the SDK's own page fields (cursor, ledgers). */
 export type TelemetryPage = Omit<PollResult, "events"> & {
   events: TelemetryEvent[];
-discontinuity?: boolean;
+  discontinuity?: boolean;
   affectedLedgers?: { start: number; end: number } | undefined;
   /** What this feed currently knows about holes in its coverage. */
   gaps?: FeedGapState;
