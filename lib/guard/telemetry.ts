@@ -302,7 +302,7 @@ export class GuardFeed {
         params.startLedger = this.latestLedger;
       }
       this.lastRawEvents = [];
-      let decoded = await this.listener.poll(params);
+      const decoded = await this.listener.poll(params);
       const page = { ...decoded, events: attachLedgerXdr(decoded.events, this.lastRawEvents) };
       const found = detectFeedGaps({
         expectedFrom: this.expectedFrom,
