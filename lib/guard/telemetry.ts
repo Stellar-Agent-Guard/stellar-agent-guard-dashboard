@@ -74,6 +74,8 @@ export type TelemetryEvent = GuardEvent & {
 /** One page of rows, carrying the SDK's own page fields (cursor, ledgers). */
 export type TelemetryPage = Omit<PollResult, "events"> & {
   events: TelemetryEvent[];
+discontinuity?: boolean;
+  affectedLedgers?: { start: number; end: number } | undefined;
   /** What this feed currently knows about holes in its coverage. */
   gaps?: FeedGapState;
 };
@@ -242,6 +244,7 @@ export class GuardFeed {
   readonly guard: string;
   private readonly listener: GuardTelemetryListener;
   private cursor: string | null = null;
+  private lastKnownGoodCursor: string | null = null;
   private latestLedger: number | null = null;
   /** The earliest ledger not yet confirmed read; the boundary gap detection checks. */
   private expectedFrom: number | null = null;
@@ -296,13 +299,38 @@ export class GuardFeed {
         params.startLedger = this.latestLedger;
       }
       this.lastRawEvents = [];
-      const decoded = await this.listener.poll(params);
+      let decoded;
+      let discontinuity = false;
+      let affectedLedgers: { start: number; end: number } | undefined;
+      try {
+        decoded = await this.listener.poll(params);
+      } catch (err: unknown) {
+        const errMessage = err instanceof Error ? err.message : String(err);
+        if (
+          errMessage.includes("cursor") ||
+          errMessage.includes("ledger") ||
+          errMessage.includes("not found") ||
+          errMessage.includes("gap") ||
+          errMessage.includes("discontinuity")
+        ) {
+          discontinuity = true;
+          const prevLedger = this.latestLedger ?? 0;
+          const fallbackLedger = Math.max(1, prevLedger - 50);
+          affectedLedgers = { start: fallbackLedger, end: prevLedger };
+          // Recover by falling back to last known good cursor or resetting to latest ledger
+          if (this.lastKnownGoodCursor) {
+            params.cursor = this.lastKnownGoodCursor;
+          } else {
+            delete params.cursor;
+            params.startLedger = fallbackLedger;
+          }
+          decoded = await this.listener.poll(params);
+        } else {
+          throw err;
+        }
+      }
       const page = { ...decoded, events: attachLedgerXdr(decoded.events, this.lastRawEvents) };
-
-      // Look for discontinuities before moving any pointer, against where the
-      // feed was. Received events are never dropped for it: the page is returned
-      // whole and the stream buffer de-duplicates anything it already holds.
-      const found = detectFeedGaps({
+const found = detectFeedGaps({
         expectedFrom: this.expectedFrom,
         heldCursor: this.cursor,
         page: {
@@ -316,13 +344,17 @@ export class GuardFeed {
       // A page with no events still advances the ledger pointer, so the next poll
       // does not re-scan a stretch of empty ledgers.
       this.latestLedger = Math.max(this.latestLedger ?? 0, page.latestLedger);
-      // The cursor only ever moves forward. A regressed one is not adopted, so the
-      // next poll resumes from the last known-good position.
-      if (page.cursor && !found.some((gap) => gap.reason === "cursor_regressed")) {
+if (page.cursor && !found.some((gap) => gap.reason === "cursor_regressed")) {
+        this.lastKnownGoodCursor = page.cursor;
         this.cursor = page.cursor;
       }
       this.expectedFrom = Math.max(this.expectedFrom ?? 0, nextExpectedLedger(page, limit));
-      return { ...page, gaps: this.gapState() };
+      return {
+        ...page,
+        gaps: this.gapState(),
+        discontinuity,
+        affectedLedgers,
+      };
     });
   }
 
@@ -339,6 +371,7 @@ export class GuardFeed {
   /** Forget the cursor so the feed re-scans from a given ledger. */
   resetFrom(ledger: number | null): void {
     this.cursor = null;
+    this.lastKnownGoodCursor = null;
     this.latestLedger = ledger;
     // A new starting point is a new baseline: what is owed begins at `ledger`, and
     // notices about the old position no longer describe this feed.
