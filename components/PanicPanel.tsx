@@ -6,7 +6,6 @@ import type { rpc } from "@stellar/stellar-sdk";
 import type { InvokeResult } from "../lib/guard/submit.ts";
 import { previewAuthorizationSummary } from "../lib/guard/submit.ts";
 import { authorizationId } from "../lib/guard/authorizationSummary.ts";
-import { NETWORK } from "../lib/guard/network.ts";
 import { AuthorizationSummaryBlock } from "./AuthorizationSummary.tsx";
 import {
   freezeGuard,
@@ -575,7 +574,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
       // spoken now: nothing else on screen will change once focus is restored.
       speakFreezeOutcome(action, false, detail, undefined, guard);
       setPhase("idle");
-      setAcknowledged(false);
+      setAcknowledgedFor(null);
     } finally {
       if (renewal !== null) clearInterval(renewal);
       lease?.release();
