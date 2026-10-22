@@ -179,9 +179,30 @@ describe("TelemetryFeed component unit tests", () => {
         ],
       },
     });
-    const notice = container.querySelector("[data-tier]");
+    const notice = container.querySelector("[data-testid=\"feed-gap-notice\"]");
     assert.ok(notice);
-    assert.match(notice.textContent ?? "", /coverage gap/i);
+    assert.match(notice.textContent ?? "", /Possible gaps in the feed/i);
+    await unmount();
+  });
+
+  it("displays cursor discontinuity warning when feed discontinuity is detected", async () => {
+    const { container, unmount } = await renderFeed({
+      feed: {
+        watching: true,
+        latestLedger: 200,
+        error: null,
+        lastPolledAt: new Date().toISOString(),
+        guards: [{ guard: GUARD_A, label: "Guard A" }],
+        capped: 0,
+        cappedLabels: [],
+        gaps: [],
+        discontinuity: true,
+        affectedLedgers: { start: 100, end: 120 },
+      },
+    });
+    const notice = container.querySelector(".notice.warn");
+    assert.ok(notice);
+    assert.match(notice.textContent ?? "", /Cursor discontinuity detected/i);
     await unmount();
   });
 });
