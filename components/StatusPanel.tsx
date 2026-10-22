@@ -136,8 +136,17 @@ function ReadDiagnostics({ entries }: { entries: Array<{ label: string; text: st
  * across the panel, so no write path can be reached while it is active.
  */
 export function StatusPanel() {
-  const { snapshot, snapshotError, refreshing, refresh, guard, wallet, retryRead, retryingField } =
-    useGuard();
+  const {
+    snapshot,
+    snapshotError,
+    refreshing,
+    refresh,
+    guard,
+    wallet,
+    retryRead,
+    retryingField,
+    lastRefresh,
+  } = useGuard();
 
   useStatusTransitionAnnouncer(snapshot);
 
@@ -208,8 +217,17 @@ export function StatusPanel() {
             {snapshot && (
               <span className="tiny muted">
                 read <TimeAgo iso={snapshot.fetchedAt} />
+                {lastRefresh != null &&
+                  ` • refreshed ${new Date(lastRefresh).toLocaleTimeString()}`}
               </span>
             )}
+            {(!snapshot || snapshotError) && lastRefresh != null && (
+              <span className="tiny muted">
+                {snapshotError ? "error state" : "stale since "}
+                {lastRefresh != null && new Date(lastRefresh).toLocaleTimeString()}
+              </span>
+            )}
+            {refreshing && !snapshot && <span className="tiny muted">loading...</span>}
             <StorageExplorerButton />
             <WebhookSettingsButton />
             <WebhookAlertBridge />
