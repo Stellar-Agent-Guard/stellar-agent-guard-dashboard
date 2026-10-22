@@ -55,6 +55,8 @@ function event(contractId: string, ledger: number | null, blocked: boolean): Gua
  */
 const FEED_EVENTS = [event(GUARD_A, 100, false), event(GUARD_B, null, true)];
 
+
+
 describe("telemetry feed gap and coverage warnings", () => {
   it("describes feed gap reasons correctly", () => {
     const gap = {
