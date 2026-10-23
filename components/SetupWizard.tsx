@@ -58,6 +58,26 @@ export function SetupWizard() {
         : initializedRead,
     [demo, initializedRead],
   );
+  // Tracks whether the initialized read has been explicitly recovered after a refresh
+  const [initializedRecovered, setInitializedRecovered] = useState<boolean>(false);
+  // `recoverInitialized` forces a fresh read from the chain to recover the
+  // initialized state after a refresh, ensuring the operator explicitly
+  // confirms the guard's initialization status rather than relying on a
+  // potentially stale snapshot.
+  const recoverInitialized = useCallback(async () => {
+    setInitializedRead({ ok: false, error: "reading initialize state…" });
+    setInitializedRecovered(false);
+    try {
+      const value = await isInitialized(server, guard);
+      setInitializedRead({ ok: true, value });
+      setInitializedRecovered(true);
+    } catch (error) {
+      setInitializedRead({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [server, guard]);
 
   // Held in component state (keyed by guard), never persisted: the verify step
   // derives from a live read the operator asked for, and a reload re-asks.
@@ -93,12 +113,12 @@ export function SetupWizard() {
     () =>
       deriveSetupSteps({
         deployedMarker,
-        initialized,
+        initialized: initializedRecovered ? initialized : { ok: false, error: "initialize not yet recovered after refresh" },
         status: snapshot?.status ?? { ok: false, error: "Reading the chain…" },
         policy: snapshot?.policy ?? { ok: false, error: "Reading the chain…" },
         verified,
       }),
-    [deployedMarker, initialized, snapshot, verified],
+    [deployedMarker, initialized, snapshot, verified, initializedRecovered],
   );
 
   const verify = useCallback(async () => {
@@ -195,6 +215,15 @@ export function SetupWizard() {
           the only way to know it has run — <span className="mono">status()</span> does not expose
           it.
         </p>
+      )}
+      {!initializedRecovered && (
+        <button
+          className="secondary"
+          onClick={() => void recoverInitialized()}
+          style={{ marginTop: 8 }}
+        >
+          Recover initialize state after refresh
+        </button>
       )}
 
       {verified && !verified.ok && (

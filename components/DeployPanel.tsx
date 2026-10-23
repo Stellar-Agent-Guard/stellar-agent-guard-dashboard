@@ -739,7 +739,7 @@ export function DeployPanel() {
 
       {wallet && plan && deployCost && (
         <div className={deployCost.warning ? "error" : "notice info"} style={{ marginTop: 12 }}>
-          <strong>Deployment reserve check</strong>
+          <strong>Deployment reserve estimate</strong>
           <div
             className="tiny"
             style={{
@@ -750,24 +750,24 @@ export function DeployPanel() {
             }}
           >
             <div>
-              <div className="tiny muted">Base tx fee</div>
-              <div className="mono">{deployCost.baseFeeXlm} XLM</div>
+              <div className="tiny muted">Base tx fee (estimate)</div>
+              <div className="mono">{deployCost.baseFeeXlm} XLM ({deployCost.baseFeeXlmToStroops} stroops)</div>
             </div>
             <div>
-              <div className="tiny muted">WASM upload</div>
-              <div className="mono">{deployCost.wasmUploadFeeXlm} XLM</div>
+              <div className="tiny muted">WASM upload (estimate)</div>
+              <div className="mono">{deployCost.wasmUploadFeeXlm} XLM ({deployCost.wasmUploadFeeXlmToStroops} stroops)</div>
             </div>
             <div>
-              <div className="tiny muted">Contract instance</div>
-              <div className="mono">{deployCost.contractInstanceFeeXlm} XLM</div>
+              <div className="tiny muted">Contract instance (estimate)</div>
+              <div className="mono">{deployCost.contractInstanceFeeXlm} XLM ({deployCost.contractInstanceFeeXlmToStroops} stroops)</div>
             </div>
             <div>
-              <div className="tiny muted">Initial rent</div>
-              <div className="mono">{deployCost.initialRentDepositXlm} XLM</div>
+              <div className="tiny muted">Initial rent (estimate)</div>
+              <div className="mono">{deployCost.initialRentDepositXlm} XLM ({deployCost.initialRentDepositXlmToStroops} stroops)</div>
             </div>
             <div>
-              <div className="tiny muted">Required total</div>
-              <div className="mono">{deployCost.totalRequiredXlm} XLM</div>
+              <div className="tiny muted">Required total (estimate)</div>
+              <div className="mono">{deployCost.totalRequiredXlm} XLM ({deployCost.totalRequiredXlmToStroops} stroops)</div>
             </div>
             <div>
               <div className="tiny muted">Wallet balance</div>
@@ -786,6 +786,12 @@ export function DeployPanel() {
                 7,
               )}{" "}
               XLM before signing.
+            </div>
+          )}
+          {/* Source note: fees are estimates based on network conditions and may vary at signing time */}
+          {deployCost.sourceNote && (
+            <div className="tiny" style={{ marginTop: 8, color: "var(--warn)" }}>
+              {deployCost.sourceNote}
             </div>
           )}
         </div>
