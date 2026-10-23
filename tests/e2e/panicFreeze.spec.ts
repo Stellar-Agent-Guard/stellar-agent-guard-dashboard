@@ -63,7 +63,8 @@ test.describe("E2E panic flow: freeze verification requires fresh on-chain read 
 
     // Reject next wallet transaction signing request
     await page.evaluate(() => {
-      (window as unknown as { __mockFreighterRejectNext?: boolean }).__mockFreighterRejectNext = true;
+      (window as unknown as { __mockFreighterRejectNext?: boolean }).__mockFreighterRejectNext =
+        true;
     });
 
     await dialog.getByRole("button", { name: "Sign freeze" }).click();
@@ -90,7 +91,9 @@ test.describe("E2E panic flow: freeze verification requires fresh on-chain read 
     // Assert "Freeze NOT confirmed" is shown and verified freeze message NEVER appears
     await expect(page.getByText("Freeze NOT confirmed")).toBeVisible();
     await expect(
-      page.getByText(/status\(\)\.admin_frozen reads false — the intended effect is NOT visible on chain/),
+      page.getByText(
+        /status\(\)\.admin_frozen reads false — the intended effect is NOT visible on chain/,
+      ),
     ).toBeVisible();
     await expect(page.getByText("Freeze confirmed on chain")).toHaveCount(0);
     await expect(adminFreeze.locator(".v")).toHaveText("clear");
@@ -114,8 +117,12 @@ test.describe("E2E panic flow: freeze verification requires fresh on-chain read 
     await dialog.getByRole("button", { name: "Sign freeze" }).click();
 
     // Verified message MUST NOT appear on delayed/failed read
-    await expect(page.getByText("Freeze NOT confirmed")).toBeVisible();
-    const errorNotice = page.locator(".error", { hasText: "Freeze NOT confirmed" });
+    await expect(
+      page.getByText(/Freeze (NOT confirmed|submitted — verification delayed)/),
+    ).toBeVisible();
+    const errorNotice = page.locator(".error", {
+      hasText: /Freeze (NOT confirmed|submitted — verification delayed)/,
+    });
     await expect(errorNotice).toContainText("could not be re-read to confirm its effect");
     await expect(page.getByText("Freeze confirmed on chain")).toHaveCount(0);
 

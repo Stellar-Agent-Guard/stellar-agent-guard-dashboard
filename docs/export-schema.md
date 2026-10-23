@@ -20,19 +20,19 @@ Columns and row fields are **append-only**. Schema changes may add new fields at
 
 ### Telemetry Columns (Schema Version 1)
 
-| # | Column | Meaning | Empty When |
-| --- | --- | --- | --- |
-| 1 | `schema_version` | Export schema version (currently `"1"`). | Never |
-| 2 | `guard` | Guard contract address (e.g. `C...`). | Never |
-| 3 | `topic` | Event topic symbol (e.g. `event_auth_checked`). | Never |
-| 4 | `kind` | Event classification (`auth_checked`, `heartbeat`, `frozen`, …). | Never |
-| 5 | `source` | `ledger` (committed) or `diagnostic` (pre-broadcast refusal). | Never |
-| 6 | `decision` | `allowed` or `blocked`. | Non-auth events |
-| 7 | `reason` | Raw contract reason symbol (e.g. `per_tx_cap_exceeded`). | Allowed / non-auth |
-| 8 | `reason_label` | Explanation of reason code via `explainReason`. | Allowed / non-auth |
-| 9 | `ledger` | Ledger sequence number string. | Diagnostic events |
-| 10 | `ledger_closed_at` | ISO-8601 UTC ledger close time. | Diagnostic events |
-| 11 | `transaction_hash` | Hash of committed transaction. | Diagnostic events |
+| #   | Column             | Meaning                                                          | Empty When         |
+| --- | ------------------ | ---------------------------------------------------------------- | ------------------ |
+| 1   | `schema_version`   | Export schema version (currently `"1"`).                         | Never              |
+| 2   | `guard`            | Guard contract address (e.g. `C...`).                            | Never              |
+| 3   | `topic`            | Event topic symbol (e.g. `event_auth_checked`).                  | Never              |
+| 4   | `kind`             | Event classification (`auth_checked`, `heartbeat`, `frozen`, …). | Never              |
+| 5   | `source`           | `ledger` (committed) or `diagnostic` (pre-broadcast refusal).    | Never              |
+| 6   | `decision`         | `allowed` or `blocked`.                                          | Non-auth events    |
+| 7   | `reason`           | Raw contract reason symbol (e.g. `per_tx_cap_exceeded`).         | Allowed / non-auth |
+| 8   | `reason_label`     | Explanation of reason code via `explainReason`.                  | Allowed / non-auth |
+| 9   | `ledger`           | Ledger sequence number string.                                   | Diagnostic events  |
+| 10  | `ledger_closed_at` | ISO-8601 UTC ledger close time.                                  | Diagnostic events  |
+| 11  | `transaction_hash` | Hash of committed transaction.                                   | Diagnostic events  |
 
 ### Cell & File Conventions
 
@@ -42,6 +42,7 @@ Columns and row fields are **append-only**. Schema changes may add new fields at
 - **NDJSON Audit Log**: Line-delimited JSON (`application/x-ndjson`). First line is `audit_header` (`record: "audit_header"`, `schema: "stellar-agent-guard/telemetry-audit@1"`), followed by one `guard_event` line per event.
 
 ### Example: Telemetry JSON
+
 ```json
 {
   "schemaVersion": 1,
@@ -85,21 +86,21 @@ Guard policy configurations are exported and imported as versioned JSON files (`
 
 ### Policy JSON Fields
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `version` | `1` | Schema version identifier (must be integer `1`). |
-| `max_amount_per_tx` | `string` | Decimal string cap per transaction (empty string or `"0"` disables). |
-| `window_cap` | `string` | Decimal string cap for the rolling window. |
-| `window_seconds` | `string` | Rolling window duration in seconds. |
-| `dead_man_switch_seconds` | `string` | Dead-man switch heartbeat grace period in seconds. |
-| `allowed_protocols` | `Array<{ contract: string, functions: string[] \| null }>` | Protocol allowlist contract addresses and function names (`null` allows all functions). |
-| `denied_recipients` | `string[]` | Recipient allowlist addresses (enforced by `PolicyConfig.recipients`). |
-| `per_asset_caps` | `Array<{ asset_contract_address: string, max_cap_stroops: string, symbol: string }>` | Per-asset cap overrides in stroops. |
-| `assets` | `string[]` | Allowed asset contract addresses. |
-| `allow_any_recipient` | `boolean` | When `true`, recipient allowlist is bypassed. |
-| `active_from` | `string` | Unix timestamp string (seconds) after which policy becomes active (`"0"` for immediate). |
-| `active_until` | `string` | Unix timestamp string (seconds) after which policy expires (`"0"` for no expiration). |
-| `paused` | `boolean` | When `true`, policy enforcement is paused. |
+| Field                     | Type                                                                                 | Description                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `version`                 | `1`                                                                                  | Schema version identifier (must be integer `1`).                                         |
+| `max_amount_per_tx`       | `string`                                                                             | Decimal string cap per transaction (empty string or `"0"` disables).                     |
+| `window_cap`              | `string`                                                                             | Decimal string cap for the rolling window.                                               |
+| `window_seconds`          | `string`                                                                             | Rolling window duration in seconds.                                                      |
+| `dead_man_switch_seconds` | `string`                                                                             | Dead-man switch heartbeat grace period in seconds.                                       |
+| `allowed_protocols`       | `Array<{ contract: string, functions: string[] \| null }>`                           | Protocol allowlist contract addresses and function names (`null` allows all functions).  |
+| `denied_recipients`       | `string[]`                                                                           | Recipient allowlist addresses (enforced by `PolicyConfig.recipients`).                   |
+| `per_asset_caps`          | `Array<{ asset_contract_address: string, max_cap_stroops: string, symbol: string }>` | Per-asset cap overrides in stroops.                                                      |
+| `assets`                  | `string[]`                                                                           | Allowed asset contract addresses.                                                        |
+| `allow_any_recipient`     | `boolean`                                                                            | When `true`, recipient allowlist is bypassed.                                            |
+| `active_from`             | `string`                                                                             | Unix timestamp string (seconds) after which policy becomes active (`"0"` for immediate). |
+| `active_until`            | `string`                                                                             | Unix timestamp string (seconds) after which policy expires (`"0"` for no expiration).    |
+| `paused`                  | `boolean`                                                                            | When `true`, policy enforcement is paused.                                               |
 
 ### Numeric and Address Validation Semantics
 
@@ -108,6 +109,7 @@ Guard policy configurations are exported and imported as versioned JSON files (`
 - **Import Validation**: Imports run through `policyExportSchemaV1` (Zod). Invalid entries return detailed issues with formatted paths (e.g., `per_asset_caps[0].symbol`).
 
 ### Example: Policy JSON
+
 ```json
 {
   "version": 1,
@@ -121,9 +123,7 @@ Guard policy configurations are exported and imported as versioned JSON files (`
       "functions": ["swap", "deposit"]
     }
   ],
-  "denied_recipients": [
-    "GD5S5O2MZ6FSMFH6QILG37KSQNRVR3RPSWBTTV4JOUJ7J6TWLLL5LAVS"
-  ],
+  "denied_recipients": ["GD5S5O2MZ6FSMFH6QILG37KSQNRVR3RPSWBTTV4JOUJ7J6TWLLL5LAVS"],
   "per_asset_caps": [
     {
       "asset_contract_address": "CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU7",
@@ -131,9 +131,7 @@ Guard policy configurations are exported and imported as versioned JSON files (`
       "symbol": "USDC"
     }
   ],
-  "assets": [
-    "CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU7"
-  ],
+  "assets": ["CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU7"],
   "allow_any_recipient": false,
   "active_from": "0",
   "active_until": "0",

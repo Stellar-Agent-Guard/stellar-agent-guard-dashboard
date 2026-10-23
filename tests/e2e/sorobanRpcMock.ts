@@ -409,7 +409,9 @@ export class SorobanRpcMock {
       const state = this.guard(call.contract);
       switch (call.fn) {
         case "freeze":
-          state.frozen = true;
+          if (this.autoFreeze) {
+            state.frozen = true;
+          }
           break;
         case "unfreeze":
           state.frozen = false;

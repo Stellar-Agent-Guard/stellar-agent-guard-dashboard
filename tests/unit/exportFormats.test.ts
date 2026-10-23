@@ -248,7 +248,10 @@ describe("documentation schema alignment", () => {
     const telemetryBlock = jsonBlocks.find((b) => b.includes("schemaVersion"));
     const policyBlock = jsonBlocks.find((b) => b.includes('"version": 1'));
 
-    assert.ok(policyBlock, "docs/export-schema.md must contain a policy JSON example with 'version': 1");
+    assert.ok(
+      policyBlock,
+      "docs/export-schema.md must contain a policy JSON example with 'version': 1",
+    );
     const policyResult = importPolicyFromJson(policyBlock);
     assert.ok(
       policyResult.ok,
@@ -268,7 +271,10 @@ describe("documentation schema alignment", () => {
     assert.deepEqual(telemetryData.columns, [...EVENT_EXPORT_COLUMNS]);
     assert.ok(telemetryData.rows.length > 0);
     for (const col of EVENT_EXPORT_COLUMNS) {
-      assert.ok(col in telemetryData.rows[0]!, `Telemetry row example must contain column '${col}'`);
+      assert.ok(
+        col in telemetryData.rows[0]!,
+        `Telemetry row example must contain column '${col}'`,
+      );
     }
   });
 });

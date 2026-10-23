@@ -14,23 +14,26 @@ The Stellar Agent Guard Dashboard provides a client-only, non-custodial operator
 
 ## Supported Providers
 
-| Provider | Kind | Monogram | Install URL | Web / Extension Notes |
-| --- | --- | --- | --- | --- |
-| **Freighter** | Extension | `FR` | [https://www.freighter.app](https://www.freighter.app) | Official browser extension by Stellar Development Foundation. Also routes hardware wallet connections (Ledger, Trezor). |
-| **Albedo** | Web | `AL` | [https://albedo.link](https://albedo.link) | Web-based popup wallet. Signs through popup windows; requires no browser extension installation. |
-| **xBull** | Extension | `XB` | [https://xbull.app](https://xbull.app) | Extension wallet available for Chrome, Firefox, Edge, and Brave. |
+| Provider      | Kind      | Monogram | Install URL                                            | Web / Extension Notes                                                                                                   |
+| ------------- | --------- | -------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| **Freighter** | Extension | `FR`     | [https://www.freighter.app](https://www.freighter.app) | Official browser extension by Stellar Development Foundation. Also routes hardware wallet connections (Ledger, Trezor). |
+| **Albedo**    | Web       | `AL`     | [https://albedo.link](https://albedo.link)             | Web-based popup wallet. Signs through popup windows; requires no browser extension installation.                        |
+| **xBull**     | Extension | `XB`     | [https://xbull.app](https://xbull.app)                 | Extension wallet available for Chrome, Firefox, Edge, and Brave.                                                        |
 
 ---
 
 ## Connection and Signing Behaviors
 
 ### 1. Multi-Extension Installs
+
 Browsers may have multiple wallet extensions installed simultaneously (e.g. both Freighter and xBull).
+
 - Global injections (`window.freighter`, `window.xbull`, `window.albedo`) are evaluated via `readWalletScope()`.
 - The dashboard avoids guessing or defaulting to an arbitrary installed extension when multiple are present.
 - The operator explicitly selects their preferred provider in the wallet connection modal. The choice is saved to local storage under key `stellar-agent-guard-dashboard.walletProvider.v1` and used by `resolveConnector()`.
 
 ### 2. Silent Reconnection vs. Popup Prompts
+
 - **Extensions (Freighter, xBull)**: Support silent auto-reconnection (`canReconnectSilently(id) === true`) using non-invasive probes like `getNetworkDetails()` or saved permissions.
 - **Web Wallets (Albedo)**: Cannot auto-reconnect silently (`canReconnectSilently('albedo') === false`) because doing so on page load would trigger an unwanted browser popup. Operator interaction is required.
 

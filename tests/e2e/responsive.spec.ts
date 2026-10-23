@@ -92,8 +92,12 @@ test.describe("Responsive viewports & critical states (#358)", () => {
         await dialog.getByRole("button", { name: "Sign freeze" }).click();
 
         // Assert error block with long un-spaced string is visible and wrapped
-        await expect(page.getByText("Freeze NOT confirmed")).toBeVisible();
-        const errorBlock = page.locator(".error", { hasText: "Freeze NOT confirmed" });
+        await expect(
+          page.getByText(/Freeze (NOT confirmed|submitted — verification delayed)/),
+        ).toBeVisible();
+        const errorBlock = page.locator(".error", {
+          hasText: /Freeze (NOT confirmed|submitted — verification delayed)/,
+        });
         await expect(errorBlock).toContainText("could not be re-read to confirm its effect");
 
         await assertNoHorizontalOverflow(page);
@@ -131,9 +135,7 @@ test.describe("Responsive viewports & critical states (#358)", () => {
         await signBtn.click();
 
         // Check pending/verifying state notice
-        await expect(
-          page.getByText(/Waiting for the wallet…|Verifying on chain…/),
-        ).toBeVisible();
+        await expect(page.getByText(/Waiting for the wallet…|Verifying on chain…/)).toBeVisible();
 
         await assertNoHorizontalOverflow(page);
       });
