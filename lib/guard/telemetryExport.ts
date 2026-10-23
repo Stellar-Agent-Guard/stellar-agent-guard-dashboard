@@ -14,6 +14,7 @@
  */
 
 import type { GuardEvent } from "stellar-agent-guard-sdk";
+import { canonicalUtc } from "./time.ts";
 import { neutralizeFormulaCell } from "./csv.ts";
 
 export type VerdictFilter = "all" | "allowed" | "blocked";
