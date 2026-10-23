@@ -1571,3 +1571,17 @@ code {
   display: block;
   margin-top: 2px;
 }
+
+@media (max-width: 720px) {
+  .modal .row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .modal .row button,
+  .modal button {
+    width: 100%;
+    min-height: 44px;
+  }
+}

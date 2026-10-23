@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import { Address, Contract, Keypair, rpc, scValToNative, xdr } from "@stellar/stellar-sdk";
+import { importPolicyFromJson } from "../../lib/guard/policySchema.ts";
+import { EVENT_EXPORT_COLUMNS } from "../../lib/guard/eventExport.ts";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
 import {
   AUDIT_LOG_SCHEMA,
@@ -234,6 +237,45 @@ describe("filter scope", () => {
     const header = JSON.parse(lines(out)[0]!);
     assert.equal(header.scope, "filtered");
     assert.equal(header.filter.contract, "CAYJ");
+  });
+});
+
+describe("documentation schema alignment", () => {
+  test("examples in docs/export-schema.md validate against runtime validators", () => {
+    const doc = readFileSync("docs/export-schema.md", "utf8");
+
+    const jsonBlocks = [...doc.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) => m[1]!);
+    const telemetryBlock = jsonBlocks.find((b) => b.includes("schemaVersion"));
+    const policyBlock = jsonBlocks.find((b) => b.includes('"version": 1'));
+
+    assert.ok(
+      policyBlock,
+      "docs/export-schema.md must contain a policy JSON example with 'version': 1",
+    );
+    const policyResult = importPolicyFromJson(policyBlock);
+    assert.ok(
+      policyResult.ok,
+      `Doc policy JSON example must parse cleanly under importPolicyFromJson: ${
+        policyResult.ok ? "" : JSON.stringify(policyResult.issues)
+      }`,
+    );
+
+    assert.ok(telemetryBlock, "docs/export-schema.md must contain a telemetry JSON example");
+    const telemetryData = JSON.parse(telemetryBlock) as {
+      schemaVersion: number;
+      columns: string[];
+      guard: string;
+      rows: Array<Record<string, string>>;
+    };
+    assert.equal(telemetryData.schemaVersion, 1);
+    assert.deepEqual(telemetryData.columns, [...EVENT_EXPORT_COLUMNS]);
+    assert.ok(telemetryData.rows.length > 0);
+    for (const col of EVENT_EXPORT_COLUMNS) {
+      assert.ok(
+        col in telemetryData.rows[0]!,
+        `Telemetry row example must contain column '${col}'`,
+      );
+    }
   });
 });
 

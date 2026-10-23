@@ -19,6 +19,7 @@
 - [Guides](guides/)
   - [Agent Integration](guides/agent-integration.md)
   - [Air-Gapped Multisig Signing](guides/air-gapped-multisig-signing.md)
+  - [Supported Wallet Providers](guides/wallet-providers.md)
 - [Architecture](architecture.md)
 - [Glossary](glossary.md)
 - [Testnet Verification](verification.md)

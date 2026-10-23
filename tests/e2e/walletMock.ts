@@ -112,18 +112,32 @@ export async function installFreighterMock(
               },
             });
             return;
-          case "SUBMIT_TRANSACTION":
+          case "SUBMIT_TRANSACTION": {
+            const win = window as unknown as { __mockFreighterRejectNext?: boolean };
+            if (win.__mockFreighterRejectNext) {
+              win.__mockFreighterRejectNext = false;
+              reply({ error: { message: "User declined transaction signing" } });
+              return;
+            }
             reply({
               signedTransaction: data.transactionXdr ?? "",
               signerAddress: data.accountToSign || address,
             });
             return;
-          case "SUBMIT_AUTH_ENTRY":
+          }
+          case "SUBMIT_AUTH_ENTRY": {
+            const win = window as unknown as { __mockFreighterRejectNext?: boolean };
+            if (win.__mockFreighterRejectNext) {
+              win.__mockFreighterRejectNext = false;
+              reply({ error: { message: "User declined transaction signing" } });
+              return;
+            }
             reply({
               signedAuthEntry: data.entryXdr ?? "",
               signerAddress: data.accountToSign || address,
             });
             return;
+          }
           case "SUBMIT_BLOB":
             reply({
               signedMessage: data.blob ?? "",

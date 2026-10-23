@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { WalletError } from "../../lib/guard/wallet.ts";
 import {
@@ -440,6 +441,16 @@ describe("provider detection and selection", () => {
     assert.equal(isWalletProviderId("xbull"), true);
     assert.equal(isWalletProviderId(null), false);
     assert.equal(isWalletProviderId(42), false);
+  });
+
+  it("keeps the provider list in code aligned with docs/guides/wallet-providers.md", () => {
+    const doc = readFileSync("docs/guides/wallet-providers.md", "utf8");
+    for (const provider of WALLET_PROVIDERS) {
+      assert.ok(
+        doc.includes(provider.name),
+        `docs/guides/wallet-providers.md must mention provider name '${provider.name}'`,
+      );
+    }
   });
 
   it("falls back to Freighter for a stale or unknown stored preference", () => {
