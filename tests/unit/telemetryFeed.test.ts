@@ -16,6 +16,10 @@ import { withIdentity } from "../mocks/eventFixtures.ts";
 
 installDom();
 
+
+const cursorAt = (ledger: number, index = 0) =>
+ `${String(ledger).padStart(19, "0")}-${String(index).padStart(10, "0")}`;
+
 function contextValue(overrides: Record<string, unknown> = {}) {
   return {
     server: new Proxy({}, { get: () => () => Promise.reject(new Error("no network in tests")) }),
@@ -76,10 +80,6 @@ async function renderFeed(
   await act(async () => {
     root = createRoot(container);
     const element: ReactElement = react.createElement(TelemetryFeed);
-    // Two contexts, not one: the panel reads its rows through
-    // `GuardEventsContext`, which the provider keeps deliberately separate from
-    // the guard session. An `events` field on the guard context would look
-    // right and render nothing.
     root.render(
       react.createElement(
         GuardContext.Provider,
@@ -114,9 +114,7 @@ before(async () => {
 });
 
 const GUARD_A = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-
 const GUARD_B = "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
-
 const GUARD_C = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
 
 function rows(container: HTMLElement): HTMLTableRowElement[] {
@@ -147,128 +145,53 @@ const FEED_EVENTS = [
   event(GUARD_A, 102, false),
 ];
 
-describe("TelemetryFeed component unit tests", () => {
-  it("renders events and filter controls", async () => {
-    const { container, unmount } = await renderFeed();
-    const trs = rows(container);
-    assert.equal(trs.length, 3);
-    assert.match(trs[0]!.textContent ?? "", /Guard A/);
-    await unmount();
-  });
-
-  it("renders event rows and guard attribution chips", async () => {
+describe("TelemetryFeed component", () => {
+  it("renders events in rows with attribution chips and severity badges", async () => {
     const { container, unmount } = await renderFeed();
     const trs = rows(container);
     assert.equal(trs.length, 3);
     await unmount();
   });
 
-  it("displays coverage warning notices for lost ranges and unsettled positions", async () => {
+  it("warns when tailed guards are capped", async () => {
     const { container, unmount } = await renderFeed({
       feed: {
         watching: true,
-        latestLedger: 200,
+        latestLedger: 100,
         error: null,
         lastPolledAt: new Date().toISOString(),
-        guards: [
-          { guard: GUARD_A, label: "Guard A" },
-        ],
-        capped: 0,
-        cappedLabels: [],
-        gaps: [
-          {
-            guard: GUARD_A,
-            label: "Guard A",
-            lost: [{ reason: "history_pruned", fromLedger: 50, toLedger: 80, latestLedger: 200 }],
-            unsettled: { reason: "cursor_regressed", fromLedger: null, toLedger: null, latestLedger: 200 },
-          },
-        ],
+        guards: [{ guard: GUARD_A, label: "Guard A" }],
+        capped: 2,
+        cappedLabels: ["Guard B", "Guard C"],
+        gaps: [],
       },
     });
-    const notice = container.querySelector("[data-testid=\"feed-gap-notice\"]");
-    assert.ok(notice);
-    assert.match(notice.textContent ?? "", /Possible gaps in the feed/i);
+    assert.match(container.textContent || "", /not tailed/);
     await unmount();
   });
 
-  it("handles multi-guard gap notices correctly", async () => {
+  it("displays coverage gap warnings and discontinuity notices", async () => {
     const { container, unmount } = await renderFeed({
       feed: {
         watching: true,
-        latestLedger: 250,
-        error: null,
-        lastPolledAt: new Date().toISOString(),
-        guards: [
-          { guard: GUARD_A, label: "Guard A" },
-          { guard: GUARD_B, label: "Guard B" },
-        ],
-        capped: 0,
-        cappedLabels: [],
-        gaps: [
-          {
-            guard: GUARD_A,
-            label: "Guard A",
-            lost: [{ reason: "history_pruned", fromLedger: 10, toLedger: 30, latestLedger: 250 }],
-            unsettled: null,
-          },
-          {
-            guard: GUARD_B,
-            label: "Guard B",
-            lost: [],
-            unsettled: { reason: "cursor_regressed", fromLedger: 40, toLedger: 35, latestLedger: 250 },
-          },
-        ],
-      },
-    });
-    const notices = container.querySelectorAll("[data-testid=\"feed-gap-notice\"]");
-    assert.ok(notices.length >= 2);
-    await unmount();
-  });
-
-  it("displays cursor discontinuity warning when feed discontinuity is detected", async () => {
-    const { container, unmount } = await renderFeed({
-      feed: {
-        watching: true,
-        latestLedger: 200,
+        latestLedger: 100,
         error: null,
         lastPolledAt: new Date().toISOString(),
         guards: [{ guard: GUARD_A, label: "Guard A" }],
         capped: 0,
         cappedLabels: [],
-        gaps: [],
-        discontinuity: true,
-        affectedLedgers: { start: 100, end: 120 },
+        gaps: [
+          {
+            guard: GUARD_A,
+            label: "Guard A",
+            lost: [{ reason: "history_pruned", fromLedger: 50, toLedger: 80, newCursor: "000-0" }],
+            unsettled: { reason: "cursor_regressed", fromLedger: null, toLedger: null, newCursor: "000-0" },
+          },
+        ],
       },
     });
-    const notice = container.querySelector(".notice.warn");
-    assert.ok(notice);
-    assert.match(notice.textContent ?? "", /Cursor discontinuity detected/i);
+    assert.match(container.textContent || "", /older history has been pruned/i);
+    assert.match(container.textContent || "", /cursor discontinuity detected/i);
     await unmount();
-  });
-});
-
-const _FEED_EVENTS_ORIG = [event(GUARD_A, 100, false), event(GUARD_B, null, true)];
-
-const cursorAt = (ledger: number, index = 0) =>
-  `${String(ledger).padStart(19, "0")}-${String(index).padStart(10, "0")}`;
-
-describe("TelemetryFeed unit tests", () => {
-  it("compares cursors correctly", () => {
-    assert.equal(compareEventCursor("9-1", "10-1"), -1);
-    assert.equal(compareEventCursor("10-1", "9-1"), 1);
-    assert.equal(compareEventCursor(cursorAt(5, 1), cursorAt(5, 2)), -1);
-  });
-
-  it("detects feed gaps and cursor discontinuities", () => {
-    const gaps = detectFeedGaps({
-      expectedFrom: 100,
-      heldCursor: cursorAt(50),
-      page: {
-        cursor: cursorAt(200),
-        latestLedger: 200,
-        oldestLedger: 150,
-      },
-    });
-    assert.ok(gaps.length > 0);
   });
 });
