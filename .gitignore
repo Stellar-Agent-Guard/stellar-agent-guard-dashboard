@@ -8,6 +8,13 @@ build/
 .env.*
 !.env.example
 .cache/
+# Playwright run artifacts
+test-results/
+playwright-report/
 .DS_Store
 *.tsbuildinfo
 next-env.d.ts
+
+# Playwright output: traces, last-run state and generated benchmark reports.
+test-results/
+playwright-report/

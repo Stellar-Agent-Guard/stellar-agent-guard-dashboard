@@ -1,11 +1,15 @@
 import type { Metadata, Viewport } from "next";
 import { DemoBadge } from "../components/DemoBadge.tsx";
+import { SecretKeyGuard } from "../components/SecretKeyGuard.tsx";
 import { Tabs } from "../components/bits.tsx";
 import { AriaAnnouncer } from "../components/AriaAnnouncer.tsx";
 import { PwaRegistrar } from "../components/PwaRegistrar.tsx";
 import { ThemeProvider } from "../components/ThemeProvider.tsx";
 import { ThemeToggle } from "../components/ThemeToggle.tsx";
+import { ToastContainer } from "../components/ToastContainer.tsx";
+import { UnsavedChangesProvider } from "../components/UnsavedChangesProvider.tsx";
 import { PWA_MANIFEST_PATH, PWA_THEME_COLOR } from "../lib/guard/pwa.ts";
+import { NETWORK } from "../lib/guard/network.ts";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -62,25 +66,34 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <ThemeProvider>
           <PwaRegistrar />
           <AriaAnnouncer />
-          <div className="shell">
-            <DemoBadge />
-            <header className="top">
-              <div className="brand">
-                <h1>Stellar Agent Guard</h1>
-                <span>operator console</span>
+          <ToastContainer />
+          <SecretKeyGuard />
+          <UnsavedChangesProvider>
+            <div className="shell">
+              <DemoBadge />
+              <header className="top">
+                <div className="brand">
+                  <h1>Stellar Agent Guard</h1>
+                  <span>operator console</span>
+                </div>
+                <div className="row">
+                  <span className="pill">{NETWORK.name}</span>
+                  <a href="https://github.com/aigbagbobila/stellar-agent-guard-contracts">
+                    contracts
+                  </a>
+                  <a href="https://github.com/aigbagbobila/stellar-agent-guard-sdk">sdk</a>
+                </div>
+              </header>
+              <div
+                className="row"
+                style={{ justifyContent: "space-between", marginBottom: "16px" }}
+              >
+                <Tabs />
+                <ThemeToggle />
               </div>
-              <div className="row">
-                <span className="pill">Soroban testnet</span>
-                <a href="https://github.com/aigbagbobila/stellar-agent-guard-contracts">contracts</a>
-                <a href="https://github.com/aigbagbobila/stellar-agent-guard-sdk">sdk</a>
-              </div>
-            </header>
-            <div className="row" style={{ justifyContent: "space-between", marginBottom: "16px" }}>
-              <Tabs />
-              <ThemeToggle />
+              {children}
             </div>
-            {children}
-          </div>
+          </UnsavedChangesProvider>
         </ThemeProvider>
       </body>
     </html>
