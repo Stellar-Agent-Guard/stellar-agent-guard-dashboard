@@ -16,7 +16,6 @@ import { withIdentity } from "../mocks/eventFixtures.ts";
 
 installDom();
 
-
 function contextValue(overrides: Record<string, unknown> = {}) {
   return {
     server: new Proxy({}, { get: () => () => Promise.reject(new Error("no network in tests")) }),
