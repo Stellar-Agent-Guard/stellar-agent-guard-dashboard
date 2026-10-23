@@ -75,6 +75,7 @@ const TEST_GUARD = {
     capped: 0,
     cappedLabels: [],
     health: POLL_OFF,
+    gaps: [],
   },
   startWatching: () => {},
   stopWatching: () => {},
