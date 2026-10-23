@@ -26,6 +26,11 @@
  */
 
 import { Address } from "@stellar/stellar-sdk";
+import {
+  decodeVersionedRecord,
+  encodeVersionedRecord,
+  writeStoredValue,
+} from "./versionedStorage.ts";
 
 export interface Contact {
   /** A valid Stellar account (`G…`) or contract (`C…`) address. Identity. */
@@ -37,6 +42,8 @@ export interface Contact {
 }
 
 export const ADDRESS_BOOK_STORAGE_KEY = "stellar-agent-guard-dashboard.addressBook.v1";
+export const ADDRESS_BOOK_SCHEMA = "stellar-agent-guard/address-book-storage";
+export const ADDRESS_BOOK_VERSION = 1;
 
 /** Stable identifier written into every exported file. */
 export const ADDRESS_BOOK_EXPORT_SCHEMA = "stellar-agent-guard/address-book";
@@ -73,6 +80,44 @@ export function isValidAddress(value: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Validate a contact address and return a helpful reason if it is invalid. */
+export function validateContactAddress(value: string):
+  | {
+      ok: true;
+      address: string;
+    }
+  | {
+      ok: false;
+      reason: string;
+    } {
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return { ok: false, reason: "A contact needs an address." };
+  }
+  try {
+    Address.fromString(trimmed);
+    return { ok: true, address: trimmed };
+  } catch {
+    if (!/^G[A-Z2-7]{55}$/.test(trimmed) && !/^C[A-Z2-7]{55}$/.test(trimmed)) {
+      return {
+        ok: false,
+        reason:
+          "Stellar addresses start with G (account) or C (contract) and are 56 characters long.",
+      };
+    }
+    if (trimmed.length !== 56) {
+      return {
+        ok: false,
+        reason: `A Stellar address must be 56 characters; this one has ${trimmed.length}.`,
+      };
+    }
+    return {
+      ok: false,
+      reason: "That doesn't look like a valid Stellar address; check for typos.",
+    };
   }
 }
 
@@ -145,11 +190,25 @@ export function loadAddressBook(storage: StorageLike | null = defaultStorage()):
   try {
     const raw = storage.getItem(ADDRESS_BOOK_STORAGE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
+    const decoded = decodeVersionedRecord({
+      raw,
+      schema: ADDRESS_BOOK_SCHEMA,
+      version: ADDRESS_BOOK_VERSION,
+      migrations: { 0: (value) => value },
+      validate: (value): value is unknown[] => Array.isArray(value),
+    });
+    if (!decoded.ok) return [];
+    const fullyValid = decoded.value.every(isContact);
+    if (decoded.needsMigration && fullyValid) {
+      writeStoredValue(
+        storage,
+        ADDRESS_BOOK_STORAGE_KEY,
+        encodeVersionedRecord(ADDRESS_BOOK_SCHEMA, ADDRESS_BOOK_VERSION, decoded.value),
+      );
+    }
     const seen = new Set<string>();
     const out: Contact[] = [];
-    for (const entry of parsed) {
+    for (const entry of decoded.value) {
       if (!isContact(entry)) continue;
       const address = entry.address.trim();
       if (seen.has(address)) continue;
@@ -164,11 +223,11 @@ export function loadAddressBook(storage: StorageLike | null = defaultStorage()):
 
 function persist(contacts: Contact[], storage: StorageLike | null): Contact[] {
   if (storage) {
-    try {
-      storage.setItem(ADDRESS_BOOK_STORAGE_KEY, JSON.stringify(contacts));
-    } catch {
-      // A private-mode write must not interrupt the operator.
-    }
+    writeStoredValue(
+      storage,
+      ADDRESS_BOOK_STORAGE_KEY,
+      encodeVersionedRecord(ADDRESS_BOOK_SCHEMA, ADDRESS_BOOK_VERSION, contacts),
+    );
   }
   return contacts;
 }

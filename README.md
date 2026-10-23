@@ -139,6 +139,7 @@ steps and for what it does and does not prove.
 - **`/` (Console Overview)**: Displays connected wallet, active guard address, current balance, policy parameters summary, dead-man switch countdown, live telemetry event stream, and the emergency panic button. Raises a warning-tier banner whenever the guard reports no policy installed — the default-deny state, where every transaction is blocked until one is configured — with a call to action that carries the current guard into the configurator. An unread `status()` is reported as an error, never as "no policy".
 - **`/` (Console Overview)**: Displays connected wallet, active guard address, current balance, policy parameters summary, dead-man switch countdown, live telemetry event stream, transaction history, multisig approvals, an unsigned-XDR submit panel, and the emergency panic button.
 - **`/configure` (Policy Configurator & Deployment)**:
+  - Keep the configured network name and RPC hostname visible beside the page title; switching controls remain in the wallet bar.
   - Deploy fresh guard accounts from verified on-chain WASM bytecode.
   - Follow the **post-deploy checklist** (`SetupWizard`): deploy → initialize → install policy → verify, each step derived from a live read, dismissible, and reopenable.
   - Configure spending policy parameters with real-time validation.
@@ -295,7 +296,8 @@ The **About** description and the topic list are repository settings, not files 
 
 - GitHub issues: <https://github.com/aigbagbobila/stellar-agent-guard-dashboard/issues>
 - Maintainer (GitHub): [@aigbagbobila](https://github.com/aigbagbobila)
-- Security disclosures: see [SECURITY.md](https://github.com/aigbagbobila/stellar-agent-guard-contracts/blob/main/SECURITY.md) (Telegram, the Stellar ecosystem norm)
+- Dashboard security disclosures: see this repository's [SECURITY.md](SECURITY.md).
+- Contract and protocol security disclosures: see the [contracts SECURITY.md](https://github.com/Stellar-Agent-Guard/stellar-agent-guard-contracts/blob/main/SECURITY.md).
 
 ## License
 
