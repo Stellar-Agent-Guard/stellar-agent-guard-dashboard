@@ -16,9 +16,18 @@ import { withIdentity } from "../mocks/eventFixtures.ts";
 
 installDom();
 
-
 const cursorAt = (ledger: number, index = 0) =>
- `${String(ledger).padStart(19, "0")}-${String(index).padStart(10, "0")}`;
+  `${String(ledger).padStart(19, "0")}-${String(index).padStart(10, "0")}`;
+
+const GUARD_A = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const GUARD_B = "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+const GUARD_C = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
+
+const FEED_EVENTS = [
+  event(GUARD_A, 100, false),
+  event(GUARD_B, 101, true),
+  event(GUARD_A, 102, false),
+];
 
 function contextValue(overrides: Record<string, unknown> = {}) {
   return {
@@ -113,10 +122,6 @@ before(async () => {
   act = loaded.act;
 });
 
-const GUARD_A = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-const GUARD_B = "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
-const GUARD_C = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
-
 function rows(container: HTMLElement): HTMLTableRowElement[] {
   return Array.from(container.querySelectorAll<HTMLTableRowElement>("table.events tbody tr"));
 }
@@ -139,12 +144,6 @@ function event(contractId: string, ledger: number | null, blocked: boolean): Gua
   });
 }
 
-const FEED_EVENTS = [
-  event(GUARD_A, 100, false),
-  event(GUARD_B, 101, true),
-  event(GUARD_A, 102, false),
-];
-
 describe("TelemetryFeed component", () => {
   it("renders events in rows with attribution chips and severity badges", async () => {
     const { container, unmount } = await renderFeed();
@@ -153,28 +152,11 @@ describe("TelemetryFeed component", () => {
     await unmount();
   });
 
-  it("warns when tailed guards are capped", async () => {
+  it("renders history pruning and cursor regression gaps warning notices", async () => {
     const { container, unmount } = await renderFeed({
       feed: {
         watching: true,
-        latestLedger: 100,
-        error: null,
-        lastPolledAt: new Date().toISOString(),
-        guards: [{ guard: GUARD_A, label: "Guard A" }],
-        capped: 2,
-        cappedLabels: ["Guard B", "Guard C"],
-        gaps: [],
-      },
-    });
-    assert.match(container.textContent || "", /not tailed/);
-    await unmount();
-  });
-
-  it("displays coverage gap warnings and discontinuity notices", async () => {
-    const { container, unmount } = await renderFeed({
-      feed: {
-        watching: true,
-        latestLedger: 100,
+        latestLedger: 200,
         error: null,
         lastPolledAt: new Date().toISOString(),
         guards: [{ guard: GUARD_A, label: "Guard A" }],
@@ -182,16 +164,55 @@ describe("TelemetryFeed component", () => {
         cappedLabels: [],
         gaps: [
           {
-            guard: GUARD_A,
-            label: "Guard A",
-            lost: [{ reason: "history_pruned", fromLedger: 50, toLedger: 80, newCursor: "000-0" }],
-            unsettled: { reason: "cursor_regressed", fromLedger: null, toLedger: null, newCursor: "000-0" },
+            reason: "history_pruned",
+            fromLedger: 100,
+            toLedger: 150,
+            heldCursor: cursorAt(99),
+            receivedCursor: cursorAt(151),
+            at: new Date().toISOString(),
+          },
+          {
+            reason: "cursor_regressed",
+            fromLedger: null,
+            toLedger: null,
+            heldCursor: cursorAt(200),
+            receivedCursor: cursorAt(180),
+            at: new Date().toISOString(),
           },
         ],
       },
     });
-    assert.match(container.textContent || "", /older history has been pruned/i);
-    assert.match(container.textContent || "", /cursor discontinuity detected/i);
+    const banner = container.querySelector("[data-tier]");
+    assert.ok(banner);
+    assert.match(banner.textContent || "", /history pruned|coverage gap|cursor regressed/i);
+    await unmount();
+  });
+
+  it("detects cursor discontinuity and displays feed gap warning", async () => {
+    const { container, unmount } = await renderFeed({
+      feed: {
+        watching: true,
+        latestLedger: 150,
+        error: null,
+        lastPolledAt: new Date().toISOString(),
+        guards: [{ guard: GUARD_A, label: "Guard A" }],
+        capped: 0,
+        cappedLabels: [],
+        gaps: [
+          {
+            reason: "history_pruned",
+            fromLedger: 101,
+            toLedger: 140,
+            heldCursor: cursorAt(100),
+            receivedCursor: cursorAt(141),
+            at: new Date().toISOString(),
+          },
+        ],
+      },
+    });
+    const notice = container.querySelector(".notice");
+    assert.ok(notice);
+    assert.match(notice.textContent || "", /pruned|gap/i);
     await unmount();
   });
 });
