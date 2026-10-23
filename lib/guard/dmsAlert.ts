@@ -30,6 +30,7 @@
  */
 
 import type { GuardStatus, PolicyConfig } from "stellar-agent-guard-sdk";
+import { type ReferenceTime, type ReferenceTimeSource } from "./ledgerTime.ts";
 
 /** Escalation tier of the dead-man-switch deadline alert. */
 export type DmsAlertLevel = "none" | "warning" | "critical" | "expired";
@@ -120,13 +121,7 @@ export function evaluateDmsAlert(
     // read needed to reconstruct the countdown failed.
     level = "expired";
   } else if (remainingSecs !== null && fractionRemaining !== null) {
-    if (remainingSecs <= 0) {
-      level = "expired"; // deadline reached (or passed) on the ledger clock
-    } else if (fractionRemaining < DMS_CRITICAL_FRACTION) {
-      level = "critical";
-    } else if (fractionRemaining < DMS_WARNING_FRACTION || remainingSecs < DMS_WARNING_SECONDS) {
-      level = "warning";
-    }
+    level = classifyDmsLevel(remainingSecs, fractionRemaining);
   }
 
   return {
@@ -136,6 +131,109 @@ export function evaluateDmsAlert(
     fractionRemaining,
     elapsedSecs,
     expiresAtMs,
+  };
+}
+
+/** The escalation tier for a countdown at a given remaining time. */
+function classifyDmsLevel(remainingSecs: number, fractionRemaining: number): DmsAlertLevel {
+  if (remainingSecs <= 0) {
+    return "expired"; // deadline reached (or passed) on the counting clock
+  }
+  if (fractionRemaining < DMS_CRITICAL_FRACTION) {
+    return "critical";
+  }
+  if (fractionRemaining < DMS_WARNING_FRACTION || remainingSecs < DMS_WARNING_SECONDS) {
+    return "warning";
+  }
+  return "none";
+}
+
+/** A countdown re-judged at a reference time (issue #388). */
+export interface ProjectedDmsCountdown {
+  /** Seconds of grace left at the reference time; null when no clock runs. */
+  remainingSecs: number | null;
+  /** `remainingSecs / totalSecs` at the reference time. */
+  fractionRemaining: number | null;
+  /** Escalation tier at the reference time; never de-escalates below the read. */
+  level: DmsAlertLevel;
+  /** Which clock the countdown leaned on. */
+  source: ReferenceTimeSource;
+  /** Age of the chain reading behind the countdown; null when there is none. */
+  ageSecs: number | null;
+  /**
+   * True only when a fresh chain reading backs the countdown, so the UI may
+   * state the expiry as chain-verified. When false the countdown must be
+   * labelled an estimate and shown with its age, never as an exact expiry.
+   */
+  exact: boolean;
+}
+
+/**
+ * Re-judge an evaluated alert at a resolved reference time.
+ *
+ * The countdown in `DmsAlert` is exact *as of the read*: `remainingSecs` was
+ * computed against the ledger clock `status.now` reported at that moment.
+ * This function answers "what should the banner say now?" without ever
+ * computing from an unbounded browser clock:
+ *
+ *   - **Fresh chain reading** (`reference.authoritative`): the countdown
+ *     advances by the reading's age — elapsed real time within the freshness
+ *     bound is elapsed chain time — and may be stated exactly.
+ *   - **Stale chain reading**: the last chain value is kept, frozen, and
+ *     marked inexact. Projecting it forward on the browser clock is exactly
+ *     the skew this issue exists to prevent (a device an hour ahead would
+ *     declare a live policy expired), so the banner shows the age instead and
+ *     warns the deadline may already have passed.
+ *   - **No chain reading** (browser fallback): the read's own numbers are kept
+ *     and labelled as not chain-verified; the browser clock never becomes the
+ *     authority for a chain deadline.
+ *
+ * The chain's own `heartbeat_expired` verdict is never overridden downward:
+ * once the read says expired, the projection stays expired.
+ */
+export function projectDmsAlert(alert: DmsAlert, reference: ReferenceTime): ProjectedDmsCountdown {
+  const base = {
+    source: reference.source,
+    ageSecs: reference.ageSecs,
+  };
+
+  if (alert.remainingSecs === null || alert.fractionRemaining === null) {
+    // No clock ran at read time (switch disabled, no heartbeat, no policy):
+    // there is nothing to project and nothing exact to claim.
+    return {
+      ...base,
+      remainingSecs: null,
+      fractionRemaining: null,
+      level: alert.level,
+      exact: false,
+    };
+  }
+
+  if (reference.source === "ledger" && reference.authoritative) {
+    const remainingSecs = alert.remainingSecs - (reference.ageSecs ?? 0);
+    const fractionRemaining =
+      alert.totalSecs !== null && alert.totalSecs > 0
+        ? remainingSecs / alert.totalSecs
+        : alert.fractionRemaining;
+    const projected = classifyDmsLevel(remainingSecs, fractionRemaining);
+    return {
+      ...base,
+      remainingSecs,
+      fractionRemaining,
+      // Escalate with the projected countdown; never de-escalate a verdict the
+      // chain itself returned.
+      level: alert.level === "expired" ? "expired" : projected,
+      exact: true,
+    };
+  }
+
+  // Stale or browser-sourced: freeze at the last chain value and say so.
+  return {
+    ...base,
+    remainingSecs: alert.remainingSecs,
+    fractionRemaining: alert.fractionRemaining,
+    level: alert.level,
+    exact: false,
   };
 }
 

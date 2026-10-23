@@ -14,7 +14,7 @@
  */
 
 import type { GuardEvent } from "stellar-agent-guard-sdk";
-import { canonicalUtc } from "./time.ts";
+import { neutralizeFormulaCell } from "./csv.ts";
 
 export type VerdictFilter = "all" | "allowed" | "blocked";
 
@@ -115,7 +115,10 @@ function rowCells(event: GuardEvent): string[] {
 /** The events as CSV: fixed header, one row per event, trailing newline. */
 export function telemetryToCsv(events: GuardEvent[]): string {
   const lines = [csvRow([...TELEMETRY_CSV_COLUMNS])];
-  for (const event of events) lines.push(csvRow(rowCells(event)));
+  for (const event of events) {
+    const cells = rowCells(event).map(neutralizeFormulaCell);
+    lines.push(csvRow(cells));
+  }
   return `${lines.join("\n")}\n`;
 }
 
