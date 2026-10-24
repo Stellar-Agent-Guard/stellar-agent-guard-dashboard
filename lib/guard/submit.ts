@@ -1,4 +1,10 @@
-import { withBackoff, RetryableError } from "./retry.ts";
+import {
+  withBackoff,
+  RetryableError,
+  AmbiguousSubmissionError,
+  WalletCancellationError,
+  isWalletCancellation,
+} from "./retry.ts";
 /**
  * The write path: a contract call authorized by the operator's own wallet.
  *
@@ -35,6 +41,12 @@ import { stringifyError } from "./chain.ts";
 import { announce } from "./useAnnounce.ts";
 import { recordTx } from "./txHistory.ts";
 import { hardwareGuide } from "./hardwareGuide.ts";
+import {
+  checkPresignAuthorization,
+  contextFromTransaction,
+  type AuthorizationCheck,
+  type AuthorizationContext,
+} from "./authorizationSummary.ts";
 import {
   PHASE_LABEL,
   interruptionFromSignerFailure,
@@ -121,6 +133,27 @@ export type InvokeResult =
       diagnosticEvents: unknown[];
     }
   | {
+      /**
+       * The transaction was built, signed and handed to the network, and this
+       * console never learned what became of it: the broadcast threw, or the
+       * inclusion poll ran out of attempts while the ledger stayed silent.
+       *
+       * It is its own outcome rather than a `failed` because "failed" claims the
+       * network rejected it, and a lost answer supports no such claim — the
+       * freeze may have landed. And rather than a `refused` because something was
+       * broadcast, so the operator has a hash to go and check. Nothing here
+       * retries it: the only safe next step is a read, which is what the panels
+       * that re-read `status()` do.
+       */
+      kind: "ambiguous";
+      /** The hash of the signed envelope, computed locally from what was sent. */
+      hash: string;
+      detail: string;
+      /** Total fee paid, in stroops (inclusion fee + resource fee). */
+      feeStroops?: string;
+      diagnosticEvents: unknown[];
+    }
+  | {
       /** An unsigned transaction XDR was successfully exported for external tools. */
       kind: "exported";
       xdr: string;
@@ -148,7 +181,62 @@ export interface InvokeRequest {
   maxFeeCap?: bigint;
   minTimeOffset?: number;
   maxTimeOffset?: number;
+  /**
+   * What the operator was shown and confirmed before this write, in the four
+   * facts that identify it (issue #343).
+   *
+   * Required rather than optional on purpose: a caller has to state where the
+   * summary came from, and the pipeline re-derives the same four facts from the
+   * transaction it is about to simulate and refuses before raising any prompt
+   * when they disagree. A panel passes the context it rendered and acknowledged;
+   * `null` says plainly that no summary exists — a caller that has no admin
+   * address to show has no authorization to confirm, and `null` is refused rather
+   * than quietly allowed.
+   */
+  authorization: AuthorizationContext | null;
 }
+
+/**
+ * The authorization summary for a write, read back out of a built transaction.
+ *
+ * This is the same builder, the same encoding and the same reader the pipeline
+ * uses, so the four facts a panel prints are the four facts the envelope carries.
+ * The sequence number is a placeholder and the transaction is never signed or
+ * submitted: a preview exists to be read, and only `runInvocation`'s own probe
+ * becomes a simulation. A caller with an unusable admin address gets `null`
+ * rather than an exception — an empty address means no wallet is connected, which
+ * is a summary the panel must show as missing, not a crash.
+ */
+export function previewAuthorizationSummary(params: {
+  contract: string;
+  fn: string;
+  admin: string;
+  passphrase?: string;
+  guardForFootprint?: string | null;
+}): AuthorizationContext | null {
+  const passphrase = params.passphrase ?? NETWORK.passphrase;
+  try {
+    const transaction = buildInitialEnvelope({
+      source: new Account(params.admin, PREVIEW_SEQUENCE),
+      operation: Operation.invokeContractFunction({
+        contract: params.contract,
+        function: params.fn,
+        args: [],
+      }),
+      passphrase,
+      guard: params.guardForFootprint ?? null,
+    });
+    return contextFromTransaction(transaction, passphrase);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The sequence number a preview is built on. Any valid one works — the number is
+ * not part of the authorization, and the preview never reaches a network.
+ */
+const PREVIEW_SEQUENCE = "1";
 
 /**
  * Build the initial (footprint-declaring) envelope for a probe or enforce pass.
@@ -406,6 +494,12 @@ export function diagnosticEventsOf(response: unknown): unknown[] {
  *
  * A `NOT_FOUND` immediately after `sendTransaction` is normal — the transaction
  * is in flight — so this polls rather than treating the first miss as failure.
+ *
+ * Giving up is *not* a failure, and this says so by throwing
+ * `AmbiguousSubmissionError` rather than returning a rejected outcome: every
+ * individual lookup is a read that may be retried, but the transaction they were
+ * looking for was already broadcast, so silence means the answer is unknown —
+ * never that the network said no.
  */
 async function pollForInclusion(
   server: rpc.Server,
@@ -442,14 +536,10 @@ async function pollForInclusion(
         }
         throw new RetryableError("TRY_AGAIN_LATER");
       },
-      { baseDelayMs: intervalMs, maxRetries: attempts },
+      { baseDelayMs: intervalMs, maxRetries: attempts, safety: "idempotent-read" },
     );
-  } catch (e) {
-    return {
-      ok: false,
-      detail: `transaction timed out after ${attempts} attempts`,
-      diagnosticEvents: [],
-    };
+  } catch {
+    throw new AmbiguousSubmissionError(`transaction timed out after ${attempts} attempts`, hash);
   }
 }
 
@@ -532,6 +622,26 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     announce("Please approve transaction in Freighter");
   };
 
+  /**
+   * Ask the wallet for one signature, and keep a refusal a refusal.
+   *
+   * Each provider words a dismissal differently and reports it differently, so
+   * the failure is classified here, at the only place that knows a wallet was
+   * involved, and re-raised as the typed cancellation the rest of the pipeline
+   * reads. The message travels untouched — every panel's error line still quotes
+   * what the wallet said — but it travels in a category that no retry policy can
+   * pick up, so "the operator pressed cancel" can never come back as "send the
+   * same freeze again" (issue #344).
+   */
+  async function signWithWallet<T>(sign: () => Promise<T>): Promise<T> {
+    try {
+      return await sign();
+    } catch (error) {
+      if (isWalletCancellation(error)) throw new WalletCancellationError(stringifyError(error));
+      throw error;
+    }
+  }
+
   const plainOperation = Operation.invokeContractFunction({
     contract: request.contract,
     function: request.fn,
@@ -545,6 +655,28 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     passphrase,
     guard: request.guardForFootprint ?? null,
   });
+
+  // ── Step 0: the confirmed authorization, checked against this transaction ─
+  //
+  // The check reads the probe that was just built, before the first RPC call and
+  // long before the first signature request, so a summary that is missing or no
+  // longer true costs nothing and raises no popup (issue #343). The transaction
+  // is the authority: what a panel printed is honoured only while the envelope
+  // says the same thing, which is what turns "the guard changed underneath the
+  // dialog" from a wrong signature into a refusal.
+  const authorization: AuthorizationCheck = checkPresignAuthorization({
+    derived: contextFromTransaction(probe, passphrase),
+    confirmed: request.authorization,
+  });
+  if (!authorization.ok) {
+    return {
+      kind: "refused",
+      stage: "discovery",
+      detail: authorization.detail,
+      diagnosticEvents: [],
+    };
+  }
+
   announce("Transaction simulation started");
   const discovery = await server.simulateTransaction(probe);
   if (rpc.Api.isSimulationError(discovery)) {
@@ -613,7 +745,7 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     promptWallet();
     let signedEntryXdr: string;
     try {
-      signedEntryXdr = await signer.signAuthEntry(entry.toXDR("base64"));
+      signedEntryXdr = await signWithWallet(() => signer.signAuthEntry(entry.toXDR("base64")));
     } catch (error) {
       const interruption = interruptionFromSignerFailure(error, "authorization");
       if (!interruption) throw error;
@@ -650,7 +782,10 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
       }
       return sim;
     },
-    { baseDelayMs: 500, maxRetries: 3 },
+    // A preflight simulation is a question, not a write: it costs nothing until
+    // it is signed and submitted, so a throttled or timed-out one is the exact
+    // case bounded backoff exists for.
+    { baseDelayMs: 500, maxRetries: 3, safety: "idempotent-read" },
   );
   if (rpc.Api.isSimulationError(enforced)) {
     return {
@@ -701,7 +836,9 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   promptWallet();
   let signedEnvelope: string;
   try {
-    signedEnvelope = await signer.signTransaction(assembled.transaction.toXDR());
+    signedEnvelope = await signWithWallet(() =>
+      signer.signTransaction(assembled.transaction.toXDR()),
+    );
   } catch (error) {
     const interruption = interruptionFromSignerFailure(error, "envelope");
     if (!interruption) throw error;
@@ -721,6 +858,10 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   // The envelope's fee field carries inclusion fee + resource fee — exactly
   // what the network will charge for this transaction.
   const feeStroops = transaction.fee;
+  // The hash is derived from the signed envelope locally, so the one fact the
+  // operator needs after an unanswered broadcast — what to look up on the
+  // explorer — is known even when the network never replied.
+  const envelopeHash = Buffer.from(transaction.hash()).toString("hex");
 
   // Broadcast is the last boundary: a provider that vanished here may have
   // been the only witness to a submission, so the outcome is reported as
@@ -730,12 +871,19 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
 
   let sent: rpc.Api.SendTransactionResponse;
   try {
+    // A broadcast is attempted exactly once. The request has left this browser by
+    // the time this await can throw, so a timeout says nothing about whether the
+    // transaction landed; a second send would not retry the first, it would put a
+    // second, identical write on the network (issue #344).
     sent = await server.sendTransaction(transaction);
   } catch (error) {
     return {
-      kind: "refused",
-      stage: "submission",
-      detail: `the network refused the transaction: ${stringifyError(error)}`,
+      kind: "ambiguous",
+      hash: envelopeHash,
+      detail:
+        `the broadcast did not answer, so it is not known whether the network took ` +
+        `this transaction: ${stringifyError(error)}`,
+      feeStroops,
       diagnosticEvents: [],
     };
   }
@@ -764,12 +912,31 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
 
   announce(`Transaction ${request.fn} submitted to network for guard ${request.contract}`);
 
-  const included = await pollForInclusion(
-    server,
-    sent.hash,
-    request.pollAttempts ?? POLLING.txInclusionAttempts,
-    request.pollIntervalMs ?? POLLING.txInclusionMs,
-  );
+  let included:
+    | { ok: true; status: string; ledger: number | null; events: unknown }
+    | { ok: false; detail: string; diagnosticEvents: unknown[] };
+  try {
+    included = await pollForInclusion(
+      server,
+      sent.hash,
+      request.pollAttempts ?? POLLING.txInclusionAttempts,
+      request.pollIntervalMs ?? POLLING.txInclusionMs,
+    );
+  } catch (error) {
+    // The lookups were reads and were retried as such; what ran out was the
+    // *answer about the write*, which no retry can manufacture. Reported as the
+    // unknown it is, with the hash the operator can go and check.
+    if (error instanceof AmbiguousSubmissionError) {
+      return {
+        kind: "ambiguous",
+        hash: error.hash ?? sent.hash,
+        detail: `${error.message} without the ledger reporting an outcome`,
+        feeStroops,
+        diagnosticEvents: [],
+      };
+    }
+    throw error;
+  }
   if (!included.ok) {
     return {
       kind: "failed",
@@ -825,6 +992,16 @@ export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeRe
       networkPassphrase: request.passphrase ?? NETWORK.passphrase,
     });
     announce(`Transaction failed on chain ${context}`, "assertive");
+  } else if (result.kind === "ambiguous") {
+    // Nothing is recorded, because the history's two statuses are both claims
+    // about what the network did — confirmed or rejected — and an unanswered
+    // broadcast supports neither. The hash is announced for the operator to
+    // check; the panels that re-read `status()` are the ones that can then claim
+    // whether the write took effect.
+    announce(
+      `Transaction ${request.fn} outcome unknown — the network did not report an outcome ${context}`,
+      "assertive",
+    );
   } else if (result.kind === "submitted") {
     recordTx({
       hash: result.hash,
@@ -889,16 +1066,6 @@ export function createTransactionEnvelope(
 
 export function detectExpiration(currentTime: number, maxTime: number) {
   return currentTime >= maxTime;
-}
-
-export function isWalletCancellation(error: unknown): boolean {
-  if (!error) return false;
-  if (typeof error === "object" && (error as any).name === "WalletUserRejectedError") {
-    return true;
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  const normalised = message.toLowerCase();
-  return /reject|denied|declin|cancel|abort|user.*(close|dismiss)/.test(normalised);
 }
 
 export function actionableCancellationMessage(error: unknown): string {

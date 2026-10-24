@@ -26,6 +26,9 @@ import { usePwaActivity } from "../lib/guard/usePwaActivity.ts";
 import { computePolicyDiff, type PolicyDiff } from "../lib/guard/policyDiff.ts";
 import { PolicyDiffModal } from "./PolicyDiffModal.tsx";
 import type { InvokeResult } from "../lib/guard/submit.ts";
+import { previewAuthorizationSummary } from "../lib/guard/submit.ts";
+import type { AuthorizationContext } from "../lib/guard/authorizationSummary.ts";
+import { NETWORK } from "../lib/guard/network.ts";
 import {
   policyConfirmed,
   policyFailed,
@@ -75,11 +78,22 @@ type PolicyOutcome =
   { kind: "invalid"; issues: string[] } | { kind: "invoked"; result: InvokeResult };
 
 /**
- * What an operator approved: the draft as it stood, and the diff they were shown
- * (none for an export, which writes nothing). It is bound to the guard it was
- * produced for, so it can only ever be spent on that guard.
+ * What an operator approved: the draft as it stood, the diff they were shown
+ * (none for an export, which writes nothing), and the authorization copy they
+ * confirmed next to it. It is bound to the guard it was produced for, so it can
+ * only ever be spent on that guard.
+ *
+ * The authorization travels inside the approval instead of being re-read from the
+ * panel's props when the write runs (issue #343), so what the pipeline checks is
+ * literally what was on screen. A guard, wallet or network that moved while the
+ * dialog was open produces a transaction that no longer matches that copy, and the
+ * write is refused before the wallet is prompted.
  */
-type PolicyApproval = ScopeBound<{ draft: PolicyDraft; diff: PolicyDiff | null }>;
+type PolicyApproval = ScopeBound<{
+  draft: PolicyDraft;
+  diff: PolicyDiff | null;
+  authorization: AuthorizationContext | null;
+}>;
 
 /** Speak a policy write's outcome, with the reason when it did not land. */
 function speakPolicy(operation: PolicyOperation, reason: string, guard?: string): void {
@@ -416,16 +430,29 @@ export function PolicyForm() {
       if (!validation.ok) return;
       const installed =
         snapshot?.policy.ok && snapshot.policy.value !== null ? snapshot.policy.value : null;
-      // The approval carries the draft it was shown for and the guard it is for.
+      // The approval carries the draft it was shown for, the guard it is for, and
+      // the authorization the operator read in the dialog. That summary is read out
+      // of a transaction built by the same builder the write will use, so "this
+      // account signs set_policy on this guard, on this network" is a fact about the
+      // envelope rather than a restatement of what the form thinks it is sending.
       setPendingApproval(
         bindToScope(activeScope, {
           draft: effective,
           diff: computePolicyDiff(installed, validation.config),
+          authorization: previewAuthorizationSummary({
+            contract: guard,
+            fn: "set_policy",
+            admin: wallet?.address ?? "",
+            passphrase: NETWORK.passphrase,
+          }),
         }),
       );
       return;
     }
-    await runInstall(true, bindToScope(activeScope, { draft: effective, diff: null }));
+    await runInstall(
+      true,
+      bindToScope(activeScope, { draft: effective, diff: null, authorization: null }),
+    );
   }
 
   /**
@@ -451,6 +478,11 @@ export function PolicyForm() {
             guard: target,
             draft: approved.value.draft,
             exportOnly,
+            // An install carries the summary the operator confirmed, including when
+            // that summary was `null` — nothing shown means nothing confirmed, and the
+            // pipeline refuses it rather than signing. An XDR export asks the wallet
+            // for no signature at all, so it has nothing to carry.
+            ...(exportOnly ? {} : { authorization: approved.value.authorization }),
           }),
       });
       if (run.kind === "stale") {
@@ -1131,6 +1163,7 @@ export function PolicyForm() {
       {approval && approval.diff && pendingApproval && (
         <PolicyDiffModal
           diff={approval.diff}
+          authorization={approval.authorization}
           onConfirm={() => void runInstall(false, pendingApproval)}
           onCancel={() => setPendingApproval(null)}
         />
@@ -1238,6 +1271,19 @@ export function OutcomeBlock({
           Refused during {result.stage} — nothing was broadcast, so this cost nothing
         </span>
         <span className="mono tiny">{result.detail}</span>
+      </div>
+    );
+  }
+  if (result.kind === "ambiguous") {
+    return (
+      <div className="error">
+        <span className="t">
+          Broadcast with no answer — the policy may or may not have changed: {starLink(result.hash)}
+        </span>
+        <span className="mono tiny">
+          {result.detail} — re-read the contract, or look this hash up on the explorer, before
+          sending anything again.
+        </span>
       </div>
     );
   }

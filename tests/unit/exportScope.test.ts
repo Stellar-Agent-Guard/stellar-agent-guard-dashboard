@@ -21,6 +21,7 @@ import {
   eventInstant,
 } from "../../lib/guard/exportScope.ts";
 import type { TimeRange } from "../../lib/guard/ledgerTime.ts";
+import { canonicalUtc } from "../../lib/guard/time.ts";
 
 const GUARD = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
@@ -253,7 +254,11 @@ describe("the preview counts match the generated export", () => {
     assert.equal(json.rows.length, scope.rowCount);
     assert.deepEqual(
       json.rows.map((row) => row.ledger_closed_at),
-      scope.rows.map((event) => event.ledgerClosedAt),
+      // Issue #318: the export renders each time through `canonicalUtc`, so the
+      // parity this asserts is row-for-row identity of the *canonical* rendering
+      // of the previewed event's own time, not byte equality with whatever
+      // sub-second spelling the feed happened to carry.
+      scope.rows.map((event) => canonicalUtc(event.ledgerClosedAt)),
     );
     assert.deepEqual([...json.columns], [...EVENT_EXPORT_COLUMNS]);
   });

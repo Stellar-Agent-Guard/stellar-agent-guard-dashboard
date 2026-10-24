@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { RetryableError, withBackoff, type RetryWait } from "../../lib/guard/retry.ts";
+import {
+  AmbiguousSubmissionError,
+  RetryableError,
+  ValidationError,
+  WalletCancellationError,
+  classifyFailure,
+  isWalletCancellation,
+  retryAllowed,
+  withBackoff,
+  type FailureCategory,
+  type OperationSafety,
+  type RetryWait,
+} from "../../lib/guard/retry.ts";
 import { MAX_RETRY_AFTER_MS, parseRetryAfter } from "../../lib/rpc/backoff.ts";
 
 /**
@@ -236,4 +248,146 @@ test("a cancellation aborts a pending wait instead of retrying", async () => {
     /abort/i,
   );
   assert.equal(calls, 1, "no further attempt is made after cancellation");
+});
+
+// ── Typed failure categories, and what may be retried (#344) ───────────────
+
+/** A wallet adapter error of the shape `lib/guard/wallet.ts` produces. */
+function walletError(message: string): Error {
+  const error = new Error(message);
+  error.name = "WalletError";
+  return error;
+}
+
+/** The connector's already-classified refusal, by name rather than by wording. */
+function connectorRejection(): Error {
+  const error = new Error("You declined to sign in Freighter. Nothing was sent.");
+  error.name = "WalletUserRejectedError";
+  return error;
+}
+
+test("every failure the write path can meet lands in exactly one category", () => {
+  assert.equal(classifyFailure(new RetryableError("RPC TIMEOUT")), "retryable-read");
+  assert.equal(classifyFailure(new ValidationError("Invalid contract id")), "validation");
+  assert.equal(
+    classifyFailure(new WalletCancellationError("You declined to sign the transaction.")),
+    "wallet-cancellation",
+  );
+  assert.equal(
+    classifyFailure(new AmbiguousSubmissionError("the broadcast did not answer", "aabb")),
+    "ambiguous-submission",
+  );
+  assert.equal(classifyFailure(new Error("something nobody has seen before")), "unclassified");
+});
+
+test("a cancellation is recognised from a wallet, not from any error that says rejected", () => {
+  assert.equal(
+    classifyFailure(walletError("signTransaction failed in the wallet: User rejected the request")),
+    "wallet-cancellation",
+    "the bare Freighter adapter reports the decline inside a generic WalletError",
+  );
+  assert.equal(classifyFailure(connectorRejection()), "wallet-cancellation");
+  assert.ok(isWalletCancellation(connectorRejection()));
+  assert.equal(
+    classifyFailure(new Error("the network rejected the transaction")),
+    "unclassified",
+    '"rejected" by itself is the network talking, not the operator — the two need opposite repairs',
+  );
+  assert.equal(
+    isWalletCancellation(new Error("Invalid contract id")),
+    false,
+    "a validation failure is never a cancellation",
+  );
+});
+
+test("a not-found is transient only when the caller says so", () => {
+  assert.equal(classifyFailure(new Error("RPC TIMEOUT")), "retryable-read");
+  assert.equal(classifyFailure(new Error("TRY_AGAIN_LATER")), "retryable-read");
+  assert.equal(classifyFailure(rateLimited({})), "retryable-read");
+  assert.equal(
+    classifyFailure(new Error("Contract NOT_FOUND")),
+    "unclassified",
+    "an unfounded contract is a definitive state; retrying it repeats the same answer",
+  );
+  assert.equal(
+    classifyFailure(new RetryableError("NOT_FOUND")),
+    "retryable-read",
+    "the inclusion poll types its own in-flight miss, which genuinely is transient",
+  );
+});
+
+test("retryAllowed is the whole rule: a transient failure on an operation that changes nothing", () => {
+  const categories: FailureCategory[] = [
+    "retryable-read",
+    "validation",
+    "wallet-cancellation",
+    "ambiguous-submission",
+    "unclassified",
+  ];
+  const safeties: OperationSafety[] = ["idempotent-read", "write"];
+  const allowed: string[] = [];
+  for (const safety of safeties) {
+    for (const category of categories) {
+      if (retryAllowed(category, safety)) allowed.push(`${category}/${safety}`);
+    }
+  }
+  assert.deepEqual(
+    allowed,
+    ["retryable-read/idempotent-read"],
+    "exactly one of the ten combinations may repeat",
+  );
+});
+
+test("a write is attempted exactly once even when it failed like a retryable read", async () => {
+  let calls = 0;
+  const delays = await captureDelays(1, () =>
+    assert.rejects(
+      () =>
+        withBackoff(
+          async () => {
+            calls += 1;
+            throw new RetryableError("RPC TIMEOUT");
+          },
+          { maxRetries: 5, baseDelayMs: 10, safety: "write" },
+        ),
+      /RPC TIMEOUT/,
+    ),
+  );
+  assert.equal(calls, 1, "the timeout is exactly the case a read would retry");
+  assert.deepEqual(delays, [], "and not one wait was scheduled");
+});
+
+test("an untyped not-found no longer triggers the retry loop it used to", async () => {
+  let calls = 0;
+  const delays = await captureDelays(1, () =>
+    assert.rejects(
+      () =>
+        withBackoff(
+          async () => {
+            calls += 1;
+            throw new Error("Contract NOT_FOUND");
+          },
+          { maxRetries: 3, baseDelayMs: 10 },
+        ),
+      /NOT_FOUND/,
+    ),
+  );
+  assert.equal(calls, 1, "it is classified as whatever it is, not as a transient read");
+  assert.deepEqual(delays, []);
+});
+
+test("a read still gets its bounded, capped retries — the safety is not a downgrade", async () => {
+  let calls = 0;
+  const delays = await captureDelays(1, () =>
+    withBackoff(
+      async () => {
+        calls += 1;
+        if (calls < 4) throw new RetryableError("TRY_AGAIN_LATER");
+        return "landed";
+      },
+      { maxRetries: 3, baseDelayMs: 100, maxDelayMs: 8000, safety: "idempotent-read" },
+    ),
+  );
+  assert.deepEqual(delays, [100, 200, 400], "three bounded waits, then the read succeeds");
+  assert.equal(calls, 4);
 });
