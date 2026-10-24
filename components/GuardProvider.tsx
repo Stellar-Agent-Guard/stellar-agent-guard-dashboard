@@ -30,7 +30,7 @@ import type { rpc } from "@stellar/stellar-sdk";
 import { createServer } from "../lib/guard/chain.ts";
 import { readGuardSnapshot, type GuardSnapshot } from "../lib/guard/guardOps.ts";
 import { NETWORK } from "../lib/guard/network.ts";
-import { POLLING, jitteredInterval } from "../lib/guard/polling.ts";
+import { POLLING, jitteredInterval, startRefreshTimer } from "../lib/guard/polling.ts";
 import {
   FEED_SWITCH_HISTORY_LEDGERS,
   GuardFeed,
@@ -950,10 +950,10 @@ export function GuardProvider({
 
   useEffect(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), SNAPSHOT_INTERVAL_MS);
-    const unregister = memoryWiper.add(() => clearInterval(timer));
+    const stop = startRefreshTimer(() => void refresh(), SNAPSHOT_INTERVAL_MS);
+    const unregister = memoryWiper.add(stop);
     return () => {
-      clearInterval(timer);
+      stop();
       unregister();
     };
   }, [refresh]);
