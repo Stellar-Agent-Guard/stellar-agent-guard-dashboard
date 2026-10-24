@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  formatRemaining,
-  formatRawStroops,
   formatStroops,
+  formatRawStroops,
   formatStroopsWithUnit,
 } from "../../lib/guard/formatters.ts";
+import { formatRemaining } from "../../lib/guard/time.ts";
 
 describe("formatStroops", () => {
   it("groups a standard 10,000 XLM value without floats", () => {

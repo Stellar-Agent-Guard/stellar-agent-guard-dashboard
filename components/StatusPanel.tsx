@@ -37,7 +37,7 @@ import {
 import { evaluateDmsAlert, formatDmsDuration, type DmsAlert } from "../lib/guard/dmsAlert.ts";
 import { calculateVelocity } from "../lib/guard/velocity.ts";
 import { useStatusTransitionAnnouncer } from "../lib/guard/statusTransitions.ts";
-import { formatRemaining } from "../lib/guard/time.ts";
+import { formatRawStroops as formatRemaining } from "../lib/guard/formatters.ts";
 import { usePrivacy } from "../lib/guard/privacyStore.ts";
 
 /**
@@ -890,9 +890,9 @@ function RealDmsStats({
               const policy = snapshot.policy.ok ? snapshot.policy.value : null;
               const remaining = deadManRemaining(status, policy);
               if (remaining === null) return "switch disabled (grace 0)";
-              const formatted = formatRemaining(remaining);
-              if (formatted.expired) return "grace elapsed; account refuses calls";
-              return `${formatted.text} of grace left`;
+              const text = formatRemaining(remaining);
+              if (remaining <= 0n) return "grace elapsed; account refuses calls";
+              return `${text} of grace left`;
             }}
           />
         }

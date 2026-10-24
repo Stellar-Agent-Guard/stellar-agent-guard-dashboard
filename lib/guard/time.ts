@@ -64,6 +64,12 @@ export function formatRemaining(
   return { text, expired: false };
 }
 
+/**
+ * Alias kept for consumers that import the unified countdown formatter by its
+ * formatter-module name. Behavior is identical to `formatRemaining`.
+ */
+export const formatCountdown = formatRemaining;
+
 export function formatTimeAgo(
   timestampSeconds: bigint | number,
   nowSeconds: bigint | number,
