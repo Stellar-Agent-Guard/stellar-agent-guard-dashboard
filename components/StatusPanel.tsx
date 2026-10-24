@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { deadManRemaining, describePolicy, isDeadManFrozen } from "stellar-agent-guard-sdk";
 import { useGuard } from "./GuardProvider.tsx";
@@ -34,10 +34,32 @@ import {
   type SimulationScenario,
   type SimulationState,
 } from "../lib/guard/dmsSimulator.ts";
-import { evaluateDmsAlert, formatDmsDuration, type DmsAlert } from "../lib/guard/dmsAlert.ts";
+import {
+  evaluateDmsAlert,
+  formatDmsDuration,
+  projectDmsAlert,
+  type DmsAlert,
+} from "../lib/guard/dmsAlert.ts";
+import { resolveReferenceTime, type LedgerClockReading } from "../lib/guard/ledgerTime.ts";
 import { calculateVelocity } from "../lib/guard/velocity.ts";
 import { useStatusTransitionAnnouncer } from "../lib/guard/statusTransitions.ts";
 import { usePrivacy } from "../lib/guard/privacyStore.ts";
+
+/**
+ * The banner's own clock tick.
+ *
+ * Scoped to the banner (mounted only while a countdown is running) so a
+ * once-a-second update cannot re-render the whole state panel. Every render
+ * reads the clock inside this hook, never during someone else's render.
+ */
+function useNowSecs(): number {
+  const [nowSecs, setNowSecs] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const id = window.setInterval(() => setNowSecs(Math.floor(Date.now() / 1000)), 1_000);
+    return () => window.clearInterval(id);
+  }, []);
+  return nowSecs;
+}
 
 /**
  * The proactive dead-man-switch deadline banner, shown above the on-chain
@@ -48,34 +70,68 @@ import { usePrivacy } from "../lib/guard/privacyStore.ts";
  * remaining time, time since the last heartbeat, and the estimated calendar
  * moment of expiration. Every number comes from the snapshot's ledger clock,
  * never the browser's, because that is the clock the contract judges.
+ *
+ * Between polls the countdown advances against a resolved reference time
+ * (issue #388): a fresh ledger reading keeps the countdown chain-derived and
+ * exact, while a stale reading freezes at the last chain value and is marked
+ * with its age instead of asserting an expiry the chain has not confirmed.
  */
-function DmsAlertBanner({ alert }: { alert: DmsAlert }) {
+function DmsAlertBanner({
+  alert,
+  reading,
+}: {
+  alert: DmsAlert;
+  /** The ledger clock at read time; null when no status read succeeded. */
+  reading: LedgerClockReading | null;
+}) {
+  const nowSecs = useNowSecs();
+  const reference = useMemo(() => resolveReferenceTime(reading, nowSecs), [reading, nowSecs]);
+  const projected = projectDmsAlert(alert, reference);
+
   const details: string[] = [];
-  if (alert.remainingSecs !== null && alert.totalSecs !== null) {
-    const pct = Math.max(0, Math.round(alert.fractionRemaining! * 100));
+  if (projected.remainingSecs !== null && alert.totalSecs !== null) {
+    const pct = Math.max(0, Math.round((projected.fractionRemaining ?? 0) * 100));
     details.push(
-      alert.level === "expired"
-        ? `deadline missed by ${formatDmsDuration(-alert.remainingSecs)}`
-        : `${formatDmsDuration(alert.remainingSecs)} of grace left (${pct}%)`,
+      projected.level === "expired"
+        ? `deadline missed by ${formatDmsDuration(-projected.remainingSecs)}`
+        : `${formatDmsDuration(projected.remainingSecs)} of grace left (${pct}%)`,
     );
   }
   if (alert.elapsedSecs !== null) {
     details.push(`last heartbeat ${formatDmsDuration(Math.max(0, alert.elapsedSecs))} ago`);
   }
+  // The reference's age and source are always stated: an operator must be able
+  // to see whether the countdown in front of them is chain-verified or an
+  // estimate over an old read (issue #388).
+  if (projected.exact) {
+    details.push(
+      `chain time read ${formatDmsDuration(projected.ageSecs ?? 0)} ago — expiry is chain-verified`,
+    );
+  } else if (projected.source === "ledger") {
+    details.push(
+      `estimate: chain time is ${formatDmsDuration(projected.ageSecs ?? 0)} old — the deadline may already have passed`,
+    );
+  } else {
+    details.push("no chain time available — countdown runs on the browser clock, not the ledger");
+  }
   if (alert.expiresAtMs !== null) {
-    const prefix = alert.level === "expired" ? "deadline was ≈" : "expires ≈";
+    const prefix = !projected.exact
+      ? "last chain-derived deadline ≈"
+      : projected.level === "expired"
+        ? "deadline was ≈"
+        : "expires ≈";
     details.push(`${prefix} ${new Date(alert.expiresAtMs).toLocaleString()}`);
   }
 
   const title =
-    alert.level === "expired"
+    projected.level === "expired"
       ? "Dead-man switch expired — the agent missed its heartbeat; agent activity is blocked until the heartbeat resumes"
-      : alert.level === "critical"
+      : projected.level === "critical"
         ? "Dead-man switch critical — heartbeat deadline imminent"
         : "Dead-man switch warning — heartbeat deadline approaching";
 
   return (
-    <div className={`dms-banner no-print ${alert.level}`} role="alert">
+    <div className={`dms-banner no-print ${projected.level}`} role="alert">
       <strong>{title}</strong>
       {details.length > 0 && <span className="detail">{details.join(" · ")}</span>}
     </div>
@@ -135,6 +191,22 @@ function ReadDiagnostics({ entries }: { entries: Array<{ label: string; text: st
  * results in a `simulatedStatus` projection and stamps a striped watermark
  * across the panel, so no write path can be reached while it is active.
  */
+/** A printable allowlist: null is an unavailable read, never an empty list. */
+function printAllowlist(items: string[] | null): string {
+  if (items === null) return "Unavailable — the policy read failed";
+  return items.length === 0 ? "None" : items.join(", ");
+}
+
+/** A printable read outcome, with the reason when there is no value. */
+function printReadOutcome(read: {
+  state: "read" | "empty" | "failed";
+  detail: string | null;
+}): string {
+  if (read.state === "failed") return `Unavailable${read.detail ? ` — ${read.detail}` : ""}`;
+  if (read.state === "empty") return "Read succeeded; no entry (not a failure)";
+  return "Read successfully";
+}
+
 export function StatusPanel() {
   const { snapshot, snapshotError, refreshing, refresh, guard, wallet, retryRead, retryingField } =
     useGuard();
@@ -142,7 +214,9 @@ export function StatusPanel() {
   useStatusTransitionAnnouncer(snapshot);
 
   const printReport = snapshot
-    ? compilePrintReport(snapshot, NETWORK.name, wallet?.address || "Disconnected")
+    ? compilePrintReport(snapshot, NETWORK.name, wallet?.address || "Disconnected", {
+        networkPassphrase: NETWORK.passphrase,
+      })
     : null;
   // Derived from this render's read, never from an event: a revoke done here, in
   // another tab, or by the agent's own tooling shows up on the next poll. An
@@ -156,6 +230,21 @@ export function StatusPanel() {
     snapshot && snapshot.status.ok
       ? evaluateDmsAlert(snapshot.status.value, snapshot.policy.ok ? snapshot.policy.value : null)
       : null;
+
+  // The ledger clock at the moment of the read (`status().now`) paired with
+  // when the read happened: the anchor the banner's countdown is judged
+  // against (issue #388). Chain state stays authoritative; the browser clock
+  // only measures how old the reading is.
+  const ledgerReading = useMemo<LedgerClockReading | null>(
+    () =>
+      snapshot && snapshot.status.ok
+        ? {
+            ledgerNowSecs: Number(snapshot.status.value.now),
+            readAtSecs: Math.floor(Date.parse(snapshot.fetchedAt) / 1000),
+          }
+        : null,
+    [snapshot],
+  );
 
   // The panel is `aria-busy` exactly while the first read is in flight (no
   // snapshot yet, no failure yet). A background refresh is NOT busy: the values
@@ -196,7 +285,9 @@ export function StatusPanel() {
 
   return (
     <>
-      {dmsAlert && dmsAlert.level !== "none" && <DmsAlertBanner alert={dmsAlert} />}
+      {dmsAlert && dmsAlert.level !== "none" && (
+        <DmsAlertBanner alert={dmsAlert} reading={ledgerReading} />
+      )}
       <div
         className={`panel${rehearsalActive ? " sim-active" : ""}`}
         aria-busy={initialLoadPending}
@@ -535,14 +626,24 @@ export function StatusPanel() {
         {printReport && (
           <div className="print-only print-report">
             <h2>Compliance Audit Report</h2>
+            <p className="tiny">
+              Captured by the Stellar Agent Guard dashboard. The values below are only as current as
+              the reads listed in the provenance section; re-read the chain before relying on this
+              page.
+            </p>
             <p>
-              <strong>Timestamp:</strong> {printReport.timestamp}
+              <strong>Captured at:</strong> {printReport.capturedAt}
             </p>
             <p>
               <strong>Network:</strong> {printReport.network}
             </p>
             <p>
-              <strong>Contract ID:</strong> <span className="mono">{printReport.contractId}</span>
+              <strong>Network passphrase:</strong>{" "}
+              <span className="mono">{printReport.networkPassphrase || "Not recorded"}</span>
+            </p>
+            <p>
+              <strong>Guard contract ID:</strong>{" "}
+              <span className="mono">{printReport.contractId}</span>
             </p>
             <p>
               <strong>Bytecode Hash:</strong>{" "}
@@ -560,9 +661,20 @@ export function StatusPanel() {
             <div>
               <strong>Allowlists:</strong>
               <ul>
-                <li>Assets: {printReport.allowlists.assets.join(", ") || "None"}</li>
-                <li>Recipients: {printReport.allowlists.recipients.join(", ") || "None"}</li>
-                <li>Protocols: {printReport.allowlists.protocols.join(", ") || "None"}</li>
+                <li>Assets: {printAllowlist(printReport.allowlists.assets)}</li>
+                <li>Recipients: {printAllowlist(printReport.allowlists.recipients)}</li>
+                <li>Protocols: {printAllowlist(printReport.allowlists.protocols)}</li>
+              </ul>
+            </div>
+            <div>
+              <strong>Read provenance:</strong>
+              <ul>
+                {printReport.reads.map((read) => (
+                  <li key={read.key}>
+                    {read.label}: {printReadOutcome(read)} —{" "}
+                    {read.readAt ? `read at ${read.readAt}` : "no successful read to timestamp"}
+                  </li>
+                ))}
               </ul>
             </div>
           </div>
