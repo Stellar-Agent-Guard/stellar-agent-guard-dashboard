@@ -377,6 +377,17 @@ function receiptTransaction(label: string, result: InvokeResult): DeploymentRece
         ledger: null,
         detail: result.detail ? redactDiagnostics(result.detail) : result.detail,
       };
+    case "unknown":
+      // A submission that was never confirmed keeps its hash — the hash is the
+      // thing a reader of the receipt needs in order to verify against the
+      // chain — and a detail that says "unconfirmed", never a verdict.
+      return {
+        operation: label,
+        outcome: "unknown",
+        hash: result.hash,
+        ledger: null,
+        detail: redactDiagnostics(result.detail),
+      };
     case "refused":
       return {
         operation: label,

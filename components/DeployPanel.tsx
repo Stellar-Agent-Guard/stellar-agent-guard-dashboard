@@ -1218,7 +1218,9 @@ export function DeployPanel() {
               ? "initialize landed on chain"
               : initResult.kind === "refused"
                 ? "initialize was refused before broadcast"
-                : "initialize was broadcast and rejected"}
+                : initResult.kind === "unknown"
+                  ? "initialize submission was never confirmed"
+                  : "initialize was broadcast and rejected"}
           </strong>
           {initResult.kind === "submitted" ? (
             <span className="tiny">

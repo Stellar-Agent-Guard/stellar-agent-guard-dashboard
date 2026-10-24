@@ -121,6 +121,22 @@ export type InvokeResult =
       diagnosticEvents: unknown[];
     }
   | {
+      /**
+       * Signed and handed to the network, but no confirmation was observed
+       * before this client gave up: either the inclusion poll timed out or the
+       * send request itself ended without a response. The transaction may still
+       * land — only a read of chain state can say, and this result deliberately
+       * makes no claim either way. Nothing here ever replays it; the operator
+       * verifies the hash read-only before deciding anything (see
+       * `docs/runbooks/submission-timeout.md`).
+       */
+      kind: "unknown";
+      hash: string;
+      detail: string;
+      /** Total fee the envelope carried, in stroops — charged only if it lands. */
+      feeStroops?: string;
+    }
+  | {
       /** An unsigned transaction XDR was successfully exported for external tools. */
       kind: "exported";
       xdr: string;
@@ -406,6 +422,12 @@ export function diagnosticEventsOf(response: unknown): unknown[] {
  *
  * A `NOT_FOUND` immediately after `sendTransaction` is normal — the transaction
  * is in flight — so this polls rather than treating the first miss as failure.
+ *
+ * The two ways out of `ok: false` are deliberately distinguishable: `FAILED`
+ * means the network included the transaction and rejected it (a fact about the
+ * chain), while `timedOut` means this client stopped observing before the chain
+ * said anything (an absence of a fact). Collapsing the second into the first is
+ * what would let a still-in-flight transaction be misread as dead and replayed.
  */
 async function pollForInclusion(
   server: rpc.Server,
@@ -414,7 +436,7 @@ async function pollForInclusion(
   intervalMs: number,
 ): Promise<
   | { ok: true; status: string; ledger: number | null; events: unknown }
-  | { ok: false; detail: string; diagnosticEvents: unknown[] }
+  | { ok: false; detail: string; diagnosticEvents: unknown[]; timedOut: boolean }
 > {
   try {
     return await withBackoff(
@@ -438,6 +460,7 @@ async function pollForInclusion(
             ok: false,
             detail: `transaction ${hash} was included and rejected by the network`,
             diagnosticEvents: diagnostics,
+            timedOut: false,
           };
         }
         throw new RetryableError("TRY_AGAIN_LATER");
@@ -449,6 +472,7 @@ async function pollForInclusion(
       ok: false,
       detail: `transaction timed out after ${attempts} attempts`,
       diagnosticEvents: [],
+      timedOut: true,
     };
   }
 }
@@ -732,11 +756,18 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   try {
     sent = await server.sendTransaction(transaction);
   } catch (error) {
+    // A send request that ends without a response proves nothing: the envelope
+    // may still have reached the network, and the reply may be what was lost.
+    // Reporting "nothing was broadcast" here would be a guess in the unsafe
+    // direction, so this is the ambiguous case — the operator verifies the
+    // locally computed hash on chain before any retry.
     return {
-      kind: "refused",
-      stage: "submission",
-      detail: `the network refused the transaction: ${stringifyError(error)}`,
-      diagnosticEvents: [],
+      kind: "unknown",
+      hash: localHash,
+      feeStroops,
+      detail: `the send request ended without a response (${stringifyError(
+        error,
+      )}) — the transaction may or may not have reached the network; verify this hash on chain before submitting anything else`,
     };
   }
   if (sent.status === "ERROR") {
@@ -746,6 +777,18 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
       detail: `the network rejected the transaction at submission: ${stringifyError(
         sent.errorResult ?? sent,
       )}`,
+      diagnosticEvents: diagnosticEventsOf(sent),
+    };
+  }
+  if (sent.status === "TRY_AGAIN_LATER") {
+    // The RPC explicitly did not accept the transaction: it is not queued and
+    // cannot land, so this is "not submitted", not "submission unknown".
+    return {
+      kind: "refused",
+      stage: "submission",
+      detail:
+        "the RPC did not accept the transaction (TRY_AGAIN_LATER), so nothing was " +
+        "queued for inclusion; re-read chain state and submit again when ready",
       diagnosticEvents: diagnosticEventsOf(sent),
     };
   }
@@ -764,13 +807,25 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
 
   announce(`Transaction ${request.fn} submitted to network for guard ${request.contract}`);
 
+  const pollAttempts = request.pollAttempts ?? POLLING.txInclusionAttempts;
   const included = await pollForInclusion(
     server,
     sent.hash,
-    request.pollAttempts ?? POLLING.txInclusionAttempts,
+    pollAttempts,
     request.pollIntervalMs ?? POLLING.txInclusionMs,
   );
   if (!included.ok) {
+    if (included.timedOut) {
+      // Broadcast but never observed as included: the chain has not spoken.
+      // The transaction can still land after this client stopped watching, so
+      // the outcome is unknown rather than failed — and nothing retries it.
+      return {
+        kind: "unknown",
+        hash: sent.hash,
+        detail: `the transaction was broadcast but no confirmation was observed after ${pollAttempts} attempts; it may still be included — verify this hash on chain before submitting anything else`,
+        feeStroops,
+      };
+    }
     return {
       kind: "failed",
       hash: sent.hash,
@@ -815,6 +870,22 @@ export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeRe
     announce(`${guidance.headline} ${guidance.nextStep}`, "assertive");
   } else if (result.kind === "refused") {
     announce(`Transaction refused — nothing was broadcast ${context}`, "assertive");
+  } else if (result.kind === "unknown") {
+    // Recorded so the ambiguity is visible in the history (an "Unconfirmed"
+    // row with the hash to verify), and announced with the prohibition stated:
+    // the safe next step is a read of chain state, never an automatic replay.
+    recordTx({
+      hash: result.hash,
+      operation: request.fn,
+      status: "unknown",
+      feeStroops: result.feeStroops ?? null,
+      networkName: NETWORK.name,
+      networkPassphrase: request.passphrase ?? NETWORK.passphrase,
+    });
+    announce(
+      `Transaction submission unconfirmed — verify the hash on chain before retrying ${context}`,
+      "assertive",
+    );
   } else if (result.kind === "failed") {
     recordTx({
       hash: result.hash,

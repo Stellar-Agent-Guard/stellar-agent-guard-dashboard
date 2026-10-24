@@ -3,8 +3,9 @@
  *
  * Every admin transaction this dashboard broadcasts — policy installs,
  * freezes, unfreezes, deploys — is recorded here with the facts the
- * submission path actually knew: the hash the network accepted, the
- * operation, the outcome, and the fee the envelope paid. It is a local
+ * submission path actually knew: the hash, the operation, the outcome
+ * (`confirmed`, `failed`, or `unknown` when the submission was never
+ * confirmed), and the fee the envelope paid. It is a local
  * record of *this console's own* writes, capped and stored in
  * `localStorage`; nothing is fetched and nothing is claimed about
  * transactions this console did not make.

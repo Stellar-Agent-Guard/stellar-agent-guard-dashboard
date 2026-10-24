@@ -377,6 +377,36 @@ describe("deployment verification receipt", () => {
     assert.equal(byId.get("artifact-hash")?.status, "unavailable");
   });
 
+  test("an unconfirmed step keeps its hash and says unknown, never a verdict", () => {
+    const receipt = compileDeploymentReceipt(
+      baseInput({
+        read: null,
+        deployedAddress: null,
+        steps: [
+          {
+            label: `create_custom_contract (wasm ${PINNED_HASH.slice(0, 12)}…) → ${PREDICTED}`,
+            result: {
+              kind: "unknown",
+              hash: "cc33",
+              detail: "no confirmation was observed after 30 attempts; verify this hash on chain",
+            },
+          },
+        ],
+      }),
+    );
+
+    const [step] = receipt.transactions;
+    // A submission that was never confirmed is recorded as exactly that: the
+    // hash stays (it is what a reader verifies against), the ledger does not
+    // get invented, and the outcome is "unknown" rather than a verdict.
+    assert.equal(step?.outcome, "unknown");
+    assert.equal(step?.hash, "cc33");
+    assert.equal(step?.ledger, null);
+    assert.match(step?.detail ?? "", /verify this hash on chain/);
+    // With no post-deploy read there is no verification claim either way.
+    assert.equal(receipt.verification.verified, false);
+  });
+
   test("a deploy that stops before the read is unavailable, not verified", () => {
     const receipt = compileDeploymentReceipt(
       baseInput({
