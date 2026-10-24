@@ -61,7 +61,7 @@ describe("StatusPanel", () => {
         heartbeat_expired: false,
         has_policy: true,
         last_heartbeat: 1000n,
-        now: 2000n, // Added now field for deadManRemaining calculation
+        now: 600n, // Added now field for deadManRemaining calculation
       },
     },
     policy: {
@@ -417,5 +417,31 @@ describe("StatusPanel", () => {
 
     // Check that it shows error state
     assert.dom(document.body).containsText("The guard's state could not be read");
+  });
+
+  test("renders DMS remaining via unified countdown formatter", async () => {
+    const div = document.createElement("div");
+    document.body.appendChild(div);
+    root = createRoot(div);
+
+    // last_heartbeat 1000n + dms_grace_secs 300n = 1300n deadline; now 600n -> remaining 700s -> "11m 40s"
+    // (formatter ladder: minutes + seconds for sub-hour values)
+    const mockValue = createMockGuardContextValue({
+      snapshot: mockSnapshotActive,
+    });
+
+    await act(() => {
+      root!.render(
+        React.createElement(
+          GuardContext.Provider,
+          { value: mockValue },
+          React.createElement(StatusPanel),
+        ),
+      );
+    });
+
+    // The DMS line should render the formatted remaining time and not a raw second count.
+    assert.dom(document.body).containsText("Dead-man switch");
+    assert.dom(document.body).containsText("11m 40s");
   });
 });

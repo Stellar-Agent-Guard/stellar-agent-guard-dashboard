@@ -1417,7 +1417,7 @@ export function GuardProvider({
       clearInterval(timer);
       unregister();
     };
-  }, [feed.watching, pushEvents, demo]);
+  }, [feed.watching, pushEvents, demo, guard, server]);
 
   // Built from primitives so a live batch — which replaces `buffer` but leaves
   // these unchanged — does not change the context value's identity.

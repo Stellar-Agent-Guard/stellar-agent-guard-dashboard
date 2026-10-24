@@ -43,6 +43,7 @@ import {
 import { resolveReferenceTime, type LedgerClockReading } from "../lib/guard/ledgerTime.ts";
 import { calculateVelocity } from "../lib/guard/velocity.ts";
 import { useStatusTransitionAnnouncer } from "../lib/guard/statusTransitions.ts";
+import { formatRawStroops as formatRemaining } from "../lib/guard/formatters.ts";
 import { usePrivacy } from "../lib/guard/privacyStore.ts";
 
 /**
@@ -962,8 +963,9 @@ function RealDmsStats({
               const policy = snapshot.policy.ok ? snapshot.policy.value : null;
               const remaining = deadManRemaining(status, policy);
               if (remaining === null) return "switch disabled (grace 0)";
-              if (remaining < 0n) return "grace elapsed; account refuses calls";
-              return `${remaining}s of grace left`;
+              const text = formatRemaining(remaining);
+              if (remaining <= 0n) return "grace elapsed; account refuses calls";
+              return `${text} of grace left`;
             }}
           />
         }
