@@ -26,6 +26,8 @@ import {
   type CompatibilityReport,
   type FieldConversion,
   type FieldConversionStatus,
+  type MigrationPreview,
+  type MigrationScope,
 } from "../lib/guard/migration.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, starLink } from "./bits.tsx";

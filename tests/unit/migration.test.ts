@@ -10,6 +10,8 @@ import {
   sourceRows,
   validateSourcePolicy,
   type FieldConversionStatus,
+  type MigrationNetwork,
+  type MigrationScope,
 } from "../../lib/guard/migration.ts";
 
 const TOKEN = "CDCYDGBGS5AZ5BZS6XY2SK2PHJHSOEGTN3N4INCK34KF6GU2BGC7Z6MB";
