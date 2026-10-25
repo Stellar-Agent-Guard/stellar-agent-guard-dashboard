@@ -308,8 +308,6 @@ export function StatusPanel() {
             {snapshot && (
               <span className="tiny muted">
                 read <TimeAgo iso={snapshot.fetchedAt} />
-                {lastRefresh != null &&
-                  ` • refreshed ${new Date(lastRefresh).toLocaleTimeString()}`}
               </span>
             )}
             {(!snapshot || snapshotError) && lastRefresh != null && (
