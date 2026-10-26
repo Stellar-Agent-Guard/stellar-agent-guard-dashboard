@@ -30,7 +30,7 @@ import type { rpc } from "@stellar/stellar-sdk";
 import { createServer } from "../lib/guard/chain.ts";
 import { readGuardSnapshot, type GuardSnapshot } from "../lib/guard/guardOps.ts";
 import { NETWORK } from "../lib/guard/network.ts";
-import { POLLING, jitteredInterval } from "../lib/guard/polling.ts";
+import { POLLING, jitteredInterval, startRefreshTimer } from "../lib/guard/polling.ts";
 import {
   FEED_SWITCH_HISTORY_LEDGERS,
   GuardFeed,
@@ -210,6 +210,8 @@ export interface GuardContextValue {
   snapshot: GuardSnapshot | null;
   snapshotError: string | null;
   refreshing: boolean;
+  /** Last successful chain read refresh timestamp (ms since epoch). */
+  lastRefresh: number | null;
   refresh: () => Promise<void>;
   /** Per-read retry (issue #36): re-invoke ONLY one failed snapshot read. */
   retryRead: (field: SnapshotField) => Promise<void>;
@@ -376,6 +378,7 @@ export function GuardProvider({
   const [snapshot, setSnapshot] = useState<GuardSnapshot | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState<number | null>(null);
   // Per-read retry state (issue #36): which single field is re-reading. Only
   // one retry is in flight at a time — the same in-flight discipline the panel
   // refresh button follows — and a retry never touches the other fields.
@@ -799,6 +802,7 @@ export function GuardProvider({
       if (epoch !== readEpochRef.current) return;
       setSnapshot(next);
       setSnapshotError(null);
+      setLastRefresh(Date.now());
     } catch (error) {
       if (epoch !== readEpochRef.current) return;
       // A transport failure is not the guard's state: report it as a failure and
@@ -946,10 +950,10 @@ export function GuardProvider({
 
   useEffect(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), SNAPSHOT_INTERVAL_MS);
-    const unregister = memoryWiper.add(() => clearInterval(timer));
+    const stop = startRefreshTimer(() => void refresh(), SNAPSHOT_INTERVAL_MS);
+    const unregister = memoryWiper.add(stop);
     return () => {
-      clearInterval(timer);
+      stop();
       unregister();
     };
   }, [refresh]);
@@ -1453,6 +1457,7 @@ export function GuardProvider({
       removeInstance,
       renameInstance,
       snapshot,
+      lastRefresh,
       snapshotError,
       refreshing,
       refresh,
@@ -1487,6 +1492,7 @@ export function GuardProvider({
       connect,
       disconnect,
       signer,
+      lastRefresh,
       providerId,
       availableProviders,
       networkMismatch,
