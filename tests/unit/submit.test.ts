@@ -9,6 +9,7 @@ import {
   diagnosticEventsOf,
   describeRejectedResult,
   invokeWithWallet,
+  previewAuthorizationSummary,
   type WalletSigner,
 } from "../../lib/guard/submit.ts";
 import { WalletUserRejectedError } from "../../lib/guard/walletConnector.ts";
@@ -463,6 +464,20 @@ const WRITE_REQUEST = {
   pollAttempts: 1,
   pollIntervalMs: 1,
 };
+/**
+ * The confirmed authorization these boundary requests carry.
+ *
+ * The write path now refuses a call whose authorization was never shown to the
+ * operator (issue #343), and every test below signs as the account it connects,
+ * so the summary is built from that address rather than invented.
+ */
+const boundaryAuthorization = (admin: string) =>
+  previewAuthorizationSummary({
+    contract: GUARD_CONTRACT,
+    fn: "freeze",
+    admin,
+    passphrase: PASSPHRASE,
+  });
 
 describe("wallet-bound write boundaries", () => {
   it("refuses to sign the envelope after the wallet account changed", async () => {
@@ -472,6 +487,7 @@ describe("wallet-bound write boundaries", () => {
     const result = await invokeWithWallet({
       ...WRITE_REQUEST,
       server: makeWalletBoundaryServer(sendCalls),
+      authorization: boundaryAuthorization(keypair.publicKey()),
       signer: makeKeypairSigner({
         keypair,
         liveAddress: () => "GD5S5O2MZ6FSMFH6QILG37KSQNRVR3RPSWBTTV4JOUJ7J6TWLLL5LAVS",
@@ -493,10 +509,12 @@ describe("wallet-bound write boundaries", () => {
 
   it("reports a disconnect during signing as recoverable and phase-specific", async () => {
     const sendCalls: string[] = [];
+    const signer = makeKeypairSigner({ liveAddress: () => null });
     const result = await invokeWithWallet({
       ...WRITE_REQUEST,
       server: makeWalletBoundaryServer(sendCalls),
-      signer: makeKeypairSigner({ liveAddress: () => null }),
+      authorization: boundaryAuthorization(signer.address),
+      signer,
     });
 
     assert.equal(result.kind, "refused");
@@ -515,6 +533,7 @@ describe("wallet-bound write boundaries", () => {
     const result = await invokeWithWallet({
       ...WRITE_REQUEST,
       server: makeWalletBoundaryServer(sendCalls),
+      authorization: boundaryAuthorization(keypair.publicKey()),
       signer: makeKeypairSigner({
         keypair,
         liveAddress: () => {
@@ -540,6 +559,7 @@ describe("wallet-bound write boundaries", () => {
     const result = await invokeWithWallet({
       ...WRITE_REQUEST,
       server: makeWalletBoundaryServer(sendCalls),
+      authorization: boundaryAuthorization(keypair.publicKey()),
       signer: makeKeypairSigner({ keypair, liveAddress: () => keypair.publicKey() }),
     });
 

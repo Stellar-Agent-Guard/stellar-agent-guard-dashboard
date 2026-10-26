@@ -132,7 +132,15 @@ export function MigrationWizard({ target }: { target: string }) {
         draft: preview.plan.draft,
       });
       setApplied(outcome);
-      if (outcome.kind === "invoked" && outcome.result.kind === "submitted") await refresh();
+      // A landed write and an unanswered broadcast both get re-read: after the
+      // second, the chain is the only thing that can say whether the policy
+      // migrated, and this panel would rather ask it than guess (#344).
+      if (
+        outcome.kind === "invoked" &&
+        (outcome.result.kind === "submitted" || outcome.result.kind === "ambiguous")
+      ) {
+        await refresh();
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -318,7 +326,9 @@ export function MigrationWizard({ target }: { target: string }) {
                 ? "The wallet or the pre-flight refused the migration"
                 : applied.result.kind === "exported"
                   ? "Migration transaction prepared, not broadcast"
-                  : "The migration was broadcast and rejected"}
+                  : applied.result.kind === "ambiguous"
+                    ? "The migration was broadcast and never answered"
+                    : "The migration was broadcast and rejected"}
           </strong>
           {applied.result.kind === "submitted" ? (
             <span className="tiny">
