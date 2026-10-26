@@ -9,9 +9,11 @@ import { preflightSignedEnvelope, type SignedEnvelopePreflight } from "../lib/gu
 import { announce } from "../lib/guard/useAnnounce.ts";
 import { usePwaActivity } from "../lib/guard/usePwaActivity.ts";
 import { inspectSignedEnvelope } from "../lib/guard/submit.ts";
+import { reviewedAccountCheck } from "../lib/guard/writeReview.ts";
+import { currentAddress } from "../lib/guard/wallet.ts";
 
 export function SubmitSignedXDRPanel() {
-  const { server } = useGuard();
+  const { server, wallet } = useGuard();
   const [xdr, setXdr] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +57,19 @@ export function SubmitSignedXDRPanel() {
     setSuccessHash(null);
     try {
       const tx = TransactionBuilder.fromXDR(xdr.trim(), NETWORK.passphrase);
+      // The review names one account — the source it was checked against. A
+      // wallet that has since moved elsewhere must not broadcast the envelope
+      // that review was for (issue #349). This surface asks the wallet for no
+      // signature of its own, so the question has to be asked here rather than
+      // in the signer, where the other write paths ask it.
+      const check = reviewedAccountCheck({
+        reviewedSource: inspection.sourceAccount ?? "",
+        liveAddress: wallet ? await currentAddress().catch(() => null) : undefined,
+      });
+      if (!check.ok) {
+        setError(check.message);
+        return;
+      }
       const response = await server.sendTransaction(tx as any);
       if (response.status === "ERROR") {
         throw new Error(JSON.stringify(response.errorResult || response));
