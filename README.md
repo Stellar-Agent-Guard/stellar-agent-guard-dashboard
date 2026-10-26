@@ -137,12 +137,12 @@ steps and for what it does and does not prove.
 
 ### Screens
 
-- **`/` (Console Overview)**: Displays connected wallet, active guard address, current balance, policy parameters summary, dead-man switch countdown, live telemetry event stream, and the emergency panic button. Raises a warning-tier banner whenever the guard reports no policy installed — the default-deny state, where every transaction is blocked until one is configured — with a call to action that carries the current guard into the configurator. An unread `status()` is reported as an error, never as "no policy".
+- **`/` (Console Overview)**: Displays connected wallet, active guard address, current balance, policy parameters summary, dead-man switch countdown, live telemetry event stream, and the emergency panic button. Raises a warning-tier banner whenever the guard reports no policy installed — the default-deny state, where every transaction is blocked until one is configured — with a call to action that carries the current guard into the configurator. An unread `status()` is reported as an error, never as "no policy". Each failed read carries its own retry that re-reads only that field — bound to the current guard and network, with late responses after a context change discarded — and a dead-man countdown drawn from a read more than a minute old is labelled stale rather than presented as current.
 - **`/` (Console Overview)**: Displays connected wallet, active guard address, current balance, policy parameters summary, dead-man switch countdown, live telemetry event stream, transaction history, multisig approvals, an unsigned-XDR submit panel, and the emergency panic button.
 - **`/configure` (Policy Configurator & Deployment)**:
   - Keep the configured network name and RPC hostname visible beside the page title; switching controls remain in the wallet bar.
   - Deploy fresh guard accounts from verified on-chain WASM bytecode.
-  - Follow the **post-deploy checklist** (`SetupWizard`): deploy → initialize → install policy → verify, each step derived from a live read, dismissible, and reopenable.
+  - Follow the **post-deploy checklist** (`SetupWizard`): deploy → initialize → install policy → verify, each step derived from a live read, dismissible, and reopenable, with a read-only retry whenever a read fails.
   - Configure spending policy parameters with real-time validation.
   - Sign and submit `set_policy` transactions.
   - Show the same default-deny banner while nothing is installed, and disable the revoke action — the state it would produce is already in force.
@@ -172,7 +172,7 @@ steps and for what it does and does not prove.
 - **`SubmitSignedXDRPanel`**: Imports and broadcasts an externally signed transaction envelope for multisig or air-gapped signing.
 - **`CommandPalette`** (`Cmd`/`Ctrl`+`K`): Keyboard-navigable navigation, guard-instance search, and quick actions.
 - **`ThemeToggle`**: Dark / light / high-contrast themes, following the OS preference until the operator chooses.
-- **`AddressBookModal`** / **`MigrationWizard`**: Saved recipients and a guided policy-migration flow.
+- **`AddressBookModal`** / **`MigrationWizard`**: Saved recipients — nicknames and imported names are screened against a documented label policy that rejects invisible and control characters with a field-level error while preserving international text — and a guided policy-migration flow.
 - **`DashboardGrid`**: Operator-arranged, persisted panel layout.
 - **`TelemetryAlerts`**: Opt-in audio and browser-notification alerts for blocked calls and freezes.
 
