@@ -15,6 +15,7 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { formatHashForDevice, hardwareGuide } from "../lib/guard/hardwareGuide.ts";
 import { short } from "./bits.tsx";
+import { NetworkChip } from "./NetworkChip.tsx";
 
 /** The steps, wording tuned for a Stellar-app Soroban flow on a Nano/Flex/X. */
 const LEDGER_STEPS: readonly string[] = [
@@ -64,7 +65,7 @@ export function HardwareWalletGuide() {
           <div className="stat">
             <div className="k">Contract</div>
             <div className="v small mono" title={contractId}>
-              {short(contractId, 8, 6)}
+              {short(contractId, 8, 6)} <NetworkChip />
             </div>
           </div>
           <div className="stat">
@@ -75,6 +76,10 @@ export function HardwareWalletGuide() {
 
         <div className="stack" style={{ marginTop: 10 }}>
           <span className="lbl">Transaction hash</span>
+          {/* The most careful screen in the console and the one most likely to
+              be read at a glance on a second monitor: it is exactly where an
+              operator is about to compare what they approved against a
+              hardware device, so it names its network inline. */}
           <p
             className="mono"
             style={{
@@ -86,6 +91,7 @@ export function HardwareWalletGuide() {
             aria-live="polite"
           >
             {txHash === null ? "Preparing transaction…" : formatted || "—"}
+            {txHash === null ? null : <NetworkChip />}
           </p>
         </div>
 

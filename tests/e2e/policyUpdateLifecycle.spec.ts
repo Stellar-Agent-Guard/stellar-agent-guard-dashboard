@@ -40,9 +40,12 @@ test("edit, simulate, review, reject in wallet, retry, and verify a fresh chain 
   await expect(page.getByText("Deployed and verified against the pinned artifact")).toBeVisible({
     timeout: 60_000,
   });
+  // The value line is "<address> <network chip>"; keep only the address.
   const predicted = (
     await page.locator(".stat", { hasText: "Predicted guard address" }).locator(".v").innerText()
-  ).trim();
+  )
+    .trim()
+    .split(" ")[0];
   await page.getByRole("button", { name: "Sign and initialize" }).click();
   await expect(page.getByText("initialize landed on chain")).toBeVisible({ timeout: 60_000 });
 

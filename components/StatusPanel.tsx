@@ -17,6 +17,7 @@ import {
 } from "./bits.tsx";
 import { INITIAL_GRID_LABELS, skeletonSpecFor } from "../lib/guard/statusReadState.ts";
 import { CopyButton } from "./CopyButton.tsx";
+import { NetworkChip } from "./NetworkChip.tsx";
 import { StorageExplorerButton } from "./StorageExplorer.tsx";
 import { WebhookAlertBridge } from "./WebhookAlertBridge.tsx";
 import { WebhookSettingsButton } from "./WebhookSettings.tsx";
@@ -346,9 +347,7 @@ export function StatusPanel() {
         </div>
 
         <p className="tiny muted" style={{ marginTop: 10 }}>
-          <span className="mono" aria-label={masked ? "Masked guard address" : undefined}>
-            {masked ? "••••••••••••••••" : guard}
-          </span>{" "}
+          <span className="mono">{guard}</span> <NetworkChip />{" "}
           <CopyButton value={guard} label="guard address" />
         </p>
 

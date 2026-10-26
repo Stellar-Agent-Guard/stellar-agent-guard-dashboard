@@ -114,8 +114,10 @@ test.describe("guard lifecycle: deploy → configure → freeze → unfreeze", (
     // The address the deploy will produce, reported before signing.
     const predictedStat = page.locator(".stat", { hasText: "Predicted guard address" });
     await expect(predictedStat).toBeVisible();
-    const predicted = (await predictedStat.locator(".v").innerText()).trim();
-    expect(predicted).toMatch(/^C[A-Z2-7]{55}$/);
+    // The address is shown with its network chip beside it (issue #61).
+    const predictedText = (await predictedStat.locator(".v").innerText()).trim();
+    expect(predictedText).toMatch(/^C[A-Z2-7]{55} testnet$/);
+    const predicted = predictedText.split(" ")[0];
     await expect(page.getByText("Pinned bytecode already on chain")).toBeVisible();
 
     await page.getByRole("button", { name: "Deploy guard" }).click();
@@ -125,7 +127,7 @@ test.describe("guard lifecycle: deploy → configure → freeze → unfreeze", (
     const outcome = page.locator(".notice.info", {
       hasText: "Deployed and verified against the pinned artifact",
     });
-    await expect(outcome.locator(".tiny.mono")).toHaveText(predicted);
+    await expect(outcome.locator(".tiny.mono")).toHaveText(`${predicted} testnet`);
     await expect(outcome.getByText("submitted").first()).toBeVisible();
 
     // The handoff record (#396) is built from the same outcome, and its verified
