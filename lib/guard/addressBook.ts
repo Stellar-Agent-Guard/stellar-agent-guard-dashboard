@@ -23,9 +23,16 @@
  *
  * Nothing here touches chain state: the book is local convenience data, never a
  * substitute for a live read.
+ *
+ * Labels additionally follow the label policy in `inputSanitizer.ts` (issue
+ * #384): whitespace is normalized (below), while invisible and control
+ * characters are refused with a field-level error — typed saves, imported
+ * records and previously stored entries all run through the same screen, so a
+ * deceptive label can enter the book by no route.
  */
 
 import { Address } from "@stellar/stellar-sdk";
+import { validateLabel } from "./inputSanitizer.ts";
 import {
   decodeVersionedRecord,
   encodeVersionedRecord,
@@ -80,6 +87,44 @@ export function isValidAddress(value: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Validate a contact address and return a helpful reason if it is invalid. */
+export function validateContactAddress(value: string):
+  | {
+      ok: true;
+      address: string;
+    }
+  | {
+      ok: false;
+      reason: string;
+    } {
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return { ok: false, reason: "A contact needs an address." };
+  }
+  try {
+    Address.fromString(trimmed);
+    return { ok: true, address: trimmed };
+  } catch {
+    if (!/^G[A-Z2-7]{55}$/.test(trimmed) && !/^C[A-Z2-7]{55}$/.test(trimmed)) {
+      return {
+        ok: false,
+        reason:
+          "Stellar addresses start with G (account) or C (contract) and are 56 characters long.",
+      };
+    }
+    if (trimmed.length !== 56) {
+      return {
+        ok: false,
+        reason: `A Stellar address must be 56 characters; this one has ${trimmed.length}.`,
+      };
+    }
+    return {
+      ok: false,
+      reason: "That doesn't look like a valid Stellar address; check for typos.",
+    };
   }
 }
 
@@ -142,7 +187,11 @@ function isContact(value: unknown): value is Contact {
     typeof entry.address === "string" &&
     typeof entry.label === "string" &&
     isValidAddress(entry.address) &&
-    normalizeAlias(entry.label) !== ""
+    normalizeAlias(entry.label) !== "" &&
+    // An entry that predates the label policy (or arrived in storage from a
+    // hand-edited payload) is dropped rather than re-admitted: loading is a
+    // save path too.
+    validateLabel(entry.label).ok
   );
 }
 
@@ -253,12 +302,17 @@ export function saveContact(
   storage: StorageLike | null = defaultStorage(),
 ): SaveContactResult {
   const address = input.address.trim();
-  const label = normalizeAlias(input.label);
   if (!isValidAddress(address)) {
     throw new Error(
       `"${address || "(empty)"}" is not a valid Stellar address (a G… or C… account).`,
     );
   }
+  // Screened on the raw input, before normalization: a label the policy
+  // refuses throws with its field-level message rather than being silently
+  // rewritten into something the operator did not type.
+  const labelCheck = validateLabel(input.label);
+  if (!labelCheck.ok) throw new Error(labelCheck.error);
+  const label = normalizeAlias(input.label);
   if (label === "") {
     throw new Error("A contact needs a label.");
   }
@@ -494,12 +548,19 @@ function parseRecord(entry: unknown, index: number): ParsedRecord | { error: str
   }
   const value = entry as Record<string, unknown>;
   const address = typeof value.address === "string" ? value.address.trim() : "";
-  const label = typeof value.label === "string" ? normalizeAlias(value.label) : "";
+  const rawLabel = typeof value.label === "string" ? value.label : "";
   if (!isValidAddress(address)) {
     return {
       error: `Contact ${index + 1}: "${address || "(empty)"}" is not a valid Stellar address.`,
     };
   }
+  // The same label policy as a typed save: an imported label with invisible
+  // characters is reported record by record in the preview, never half-applied.
+  const labelCheck = validateLabel(rawLabel);
+  if (!labelCheck.ok) {
+    return { error: `Contact ${index + 1}: ${labelCheck.error}` };
+  }
+  const label = normalizeAlias(rawLabel);
   if (label === "") {
     return { error: `Contact ${index + 1}: a label is required.` };
   }
