@@ -7,7 +7,9 @@ import {
   DMS_WARNING_SECONDS,
   evaluateDmsAlert,
   formatDmsDuration,
+  projectDmsAlert,
 } from "../../lib/guard/dmsAlert.ts";
+import { LEDGER_CLOCK_MAX_AGE_SECS, resolveReferenceTime } from "../../lib/guard/ledgerTime.ts";
 
 /** A `status()` read with controllable ledger-clock fields. */
 function status(overrides: Partial<GuardStatus> = {}): GuardStatus {
@@ -193,4 +195,170 @@ test("escalation constants match the alerting spec", () => {
   assert.equal(DMS_WARNING_FRACTION, 0.25);
   assert.equal(DMS_CRITICAL_FRACTION, 0.1);
   assert.equal(DMS_WARNING_SECONDS, 3_600);
+});
+
+// ── Chain-time boundaries under a fake, skewed local clock (issue #389) ─────
+//
+// The countdown is safety-relevant, so these tests pin the boundary itself
+// with explicit ledger timestamps and fake local clocks: the switch must not
+// jump to expired early, must not keep presenting a stale figure as current,
+// and a local clock disagreeing with the chain by a generation must change
+// nothing.
+
+test("the deadline crosses exactly once: before, at, and after, under any local clock", (t) => {
+  const heartbeat = 1_000_000n;
+  const grace = 100_000n;
+  const deadline = heartbeat + grace; // 1_100_000 ledger seconds
+  const boundaryCases = [
+    {
+      name: "immediately before the boundary",
+      now: deadline - 1n,
+      level: "critical",
+      remaining: 1,
+    },
+    { name: "exactly at the boundary", now: deadline, level: "expired", remaining: 0 },
+    { name: "immediately after the boundary", now: deadline + 1n, level: "expired", remaining: -1 },
+  ] as const;
+
+  // The same three ledger timestamps, judged with the local clock skewed a
+  // whole generation in either direction. Nothing may differ between runs.
+  const localClocks = [Date.UTC(1990, 0, 1), Date.UTC(2026, 9, 20), Date.UTC(2050, 0, 1)];
+  for (const localNow of localClocks) {
+    t.mock.timers.enable({ apis: ["Date"], now: localNow });
+    try {
+      const localLabel = new Date(localNow).toISOString();
+      for (const boundary of boundaryCases) {
+        const alert = evaluateDmsAlert(
+          status({ last_heartbeat: heartbeat, now: boundary.now }),
+          policy(grace),
+        );
+        assert.equal(
+          alert.level,
+          boundary.level,
+          `${boundary.name} must read ${boundary.level} with the local clock at ${localLabel}`,
+        );
+        assert.equal(alert.remainingSecs, boundary.remaining);
+      }
+    } finally {
+      t.mock.timers.reset();
+    }
+  }
+});
+
+test("clock skew cannot green-wash a tripped switch nor cry-wolf a healthy one", (t) => {
+  // Skew backwards a year: the local clock claims the deadline is far away.
+  t.mock.timers.enable({ apis: ["Date"], now: Date.UTC(1999, 0, 1) });
+  try {
+    const tripped = evaluateDmsAlert(
+      status({ last_heartbeat: 1_000_000n, now: 1_100_001n }),
+      policy(100_000n),
+    );
+    assert.equal(tripped.level, "expired", "the chain's own clock judges the switch");
+    assert.equal(tripped.remainingSecs, -1);
+  } finally {
+    t.mock.timers.reset();
+  }
+
+  // Skew forward to 2050: the local clock insists years have passed; the
+  // ledger still reports a healthy countdown and that is what shows.
+  t.mock.timers.enable({ apis: ["Date"], now: Date.UTC(2050, 0, 1) });
+  try {
+    const healthy = evaluateDmsAlert(
+      status({ last_heartbeat: 1_000_000n, now: 1_025_000n }),
+      policy(100_000n),
+    );
+    assert.equal(healthy.level, "none");
+    assert.equal(healthy.remainingSecs, 75_000);
+  } finally {
+    t.mock.timers.reset();
+  }
+});
+
+test("the uncertainty line is drawn at the staleness threshold", () => {
+  const readAt = 1_700_000_000;
+  const ledgerNow = 1_700_000_123;
+  const reading = { ledgerNowSecs: ledgerNow, readAtSecs: readAt };
+  const at = (ageSecs: number) => resolveReferenceTime(reading, readAt + ageSecs);
+  assert.equal(at(0).authoritative, true, "a just-fetched read is current");
+  assert.equal(
+    at(LEDGER_CLOCK_MAX_AGE_SECS).authoritative,
+    true,
+    "a reading exactly at the freshness bound still counts",
+  );
+  assert.equal(
+    at(LEDGER_CLOCK_MAX_AGE_SECS + 1).authoritative,
+    false,
+    "one second past the bound the countdown is already uncertain",
+  );
+  assert.equal(at(10 * 60).authoritative, false, "a long-untouched read is stale");
+
+  // The uncertainty survives into the projection: a stale read's countdown is
+  // frozen at the last chain value and never stated as exact.
+  const alert = evaluateDmsAlert(
+    status({ last_heartbeat: 1_000_000n, now: 1_025_000n }),
+    policy(100_000n),
+  );
+  const projected = projectDmsAlert(alert, at(10 * 60));
+  assert.equal(projected.exact, false);
+  assert.equal(
+    projected.remainingSecs,
+    alert.remainingSecs,
+    "a stale read's figure is kept as read, not re-derived",
+  );
+});
+
+test("skew and garbage make a read uncertain, never fresh by accident", () => {
+  const readAt = 1_700_000_000;
+  const reading = { ledgerNowSecs: 1_700_000_123, readAtSecs: readAt };
+  // A local clock that jumped backwards ages the read *less*, never more:
+  // skew can hide staleness at worst, it cannot invent freshness elsewhere.
+  const behind = resolveReferenceTime(reading, readAt - 120);
+  assert.equal(behind.ageSecs, 0, "age clamps at zero");
+  assert.equal(behind.authoritative, true);
+  // An unparseable fetch timestamp is uncertainty, not a free pass.
+  const garbage = resolveReferenceTime(
+    { ledgerNowSecs: 1_700_000_123, readAtSecs: Number.NaN },
+    readAt,
+  );
+  assert.equal(Number.isNaN(garbage.ageSecs), true);
+  assert.equal(garbage.authoritative, false, "a garbage read timestamp can never come back fresh");
+});
+
+test("a failed ledger read is an uncertainty state, and the next good read recovers it", () => {
+  // What the banner is handed while the status read is failing: inert by
+  // construction — no level, no deadline, no invented numbers.
+  const inert = evaluateDmsAlert(null, policy(100_000n));
+  assert.equal(inert.level, "none");
+  assert.equal(inert.remainingSecs, null);
+  assert.equal(inert.totalSecs, null);
+  assert.equal(inert.fractionRemaining, null);
+  assert.equal(inert.elapsedSecs, null);
+  assert.equal(inert.expiresAtMs, null);
+
+  // Recovery: the next successful ledger-time update produces the countdown
+  // again — from the chain's clock, crossing the boundary exactly once.
+  const deadline = 1_100_000n;
+  const recovered = evaluateDmsAlert(
+    status({ last_heartbeat: 1_000_000n, now: deadline - 1n }),
+    policy(100_000n),
+  );
+  assert.equal(recovered.level, "critical");
+  assert.equal(recovered.remainingSecs, 1);
+  const crossed = evaluateDmsAlert(
+    status({ last_heartbeat: 1_000_000n, now: deadline }),
+    policy(100_000n),
+  );
+  assert.equal(crossed.level, "expired");
+  assert.equal(crossed.remainingSecs, 0);
+});
+
+test("a failed policy read removes the countdown numbers without inventing a deadline", () => {
+  // The status read is healthy, the policy read (which carries the grace) is
+  // not: elapsed time is a fact the status alone supports, the deadline is not.
+  const alert = evaluateDmsAlert(status({ last_heartbeat: 1_000_000n, now: 1_025_000n }), null);
+  assert.equal(alert.level, "none");
+  assert.equal(alert.elapsedSecs, 25_000);
+  assert.equal(alert.remainingSecs, null, "no grace read, no remaining time");
+  assert.equal(alert.totalSecs, null);
+  assert.equal(alert.expiresAtMs, null, "no invented deadline");
 });

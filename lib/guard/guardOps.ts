@@ -201,7 +201,14 @@ export async function submitOperation(params: {
     if (!result) continue;
     if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
       const ledger = (result as { ledger?: number }).ledger ?? null;
-      recordTx({ hash: sent.hash, operation: label, status: "confirmed", feeStroops });
+      recordTx({
+        hash: sent.hash,
+        operation: label,
+        status: "confirmed",
+        feeStroops,
+        networkName: NETWORK.name,
+        networkPassphrase: passphrase,
+      });
       announce(
         ledger !== null
           ? `Transaction confirmed on ledger ${ledger}`
@@ -217,7 +224,14 @@ export async function submitOperation(params: {
       };
     }
     if (result.status === rpc.Api.GetTransactionStatus.FAILED) {
-      recordTx({ hash: sent.hash, operation: label, status: "failed", feeStroops });
+      recordTx({
+        hash: sent.hash,
+        operation: label,
+        status: "failed",
+        feeStroops,
+        networkName: NETWORK.name,
+        networkPassphrase: passphrase,
+      });
       announce("Transaction failed on chain");
       return {
         kind: "failed",
@@ -230,7 +244,14 @@ export async function submitOperation(params: {
       };
     }
   }
-  recordTx({ hash: sent.hash, operation: label, status: "failed", feeStroops });
+  recordTx({
+    hash: sent.hash,
+    operation: label,
+    status: "failed",
+    feeStroops,
+    networkName: NETWORK.name,
+    networkPassphrase: passphrase,
+  });
   announce("Transaction failed on chain");
   return {
     kind: "failed",
@@ -729,21 +750,36 @@ export interface GuardSnapshot {
   identity: ReadResult<WasmIdentity>;
 }
 
+/**
+ * Stamp a successful read with when it completed.
+ *
+ * The printed report must be able to say which sections were live reads and when
+ * each one returned; one batch timestamp would silently imply that a section
+ * which failed and was retried was as fresh as the others. Failures carry no
+ * timestamp because nothing was read.
+ */
+async function stamped<T>(read: Promise<ReadResult<T>>): Promise<ReadResult<T>> {
+  const result = await read;
+  return result.ok ? { ...result, readAt: new Date().toISOString() } : result;
+}
+
 export async function readGuardSnapshot(
   server: rpc.Server,
   guard: string,
   source?: string,
 ): Promise<GuardSnapshot> {
   const [status, policy, window, identity] = await Promise.all([
-    readStatus(server, guard, source),
-    readPolicy(server, guard, source),
-    readWindow(server, guard),
-    verifyWasmIdentity(server, guard)
-      .then((value): ReadResult<WasmIdentity> => ({ ok: true, value }))
-      .catch((error): ReadResult<WasmIdentity> => ({
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      })),
+    stamped(readStatus(server, guard, source)),
+    stamped(readPolicy(server, guard, source)),
+    stamped(readWindow(server, guard)),
+    stamped(
+      verifyWasmIdentity(server, guard)
+        .then((value): ReadResult<WasmIdentity> => ({ ok: true, value }))
+        .catch((error): ReadResult<WasmIdentity> => ({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        })),
+    ),
   ]);
   return { guard, fetchedAt: new Date().toISOString(), status, policy, window, identity };
 }

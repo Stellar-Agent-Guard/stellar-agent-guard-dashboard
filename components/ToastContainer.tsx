@@ -4,6 +4,7 @@ import { useState } from "react";
 import { toastStore, useToast, type Toast } from "../lib/guard/useToast.ts";
 import { classifyFailure } from "../lib/guard/recoveryGuidance.ts";
 import { RecoveryGuidanceBlock } from "./RecoveryGuidance.tsx";
+import { redactDiagnostics } from "../lib/guard/inputSanitizer.ts";
 
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -63,7 +64,7 @@ function ErrorDetails({ toast }: { toast: Toast }) {
             type="button"
             className="tiny toast-copy"
             onClick={() => {
-              void copyText(raw).then((ok) => {
+              void copyText(redactDiagnostics(raw)).then((ok) => {
                 setCopied(ok);
                 if (ok) window.setTimeout(() => setCopied(false), 1500);
               });

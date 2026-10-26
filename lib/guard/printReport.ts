@@ -3,42 +3,198 @@ import { describePolicy, isDeadManFrozen } from "stellar-agent-guard-sdk";
 import type { ReadResult, WasmIdentity } from "./chain.ts";
 import type { InvokeResult } from "./submit.ts";
 import { looksLikeContractAddress } from "./instance.ts";
+import { redactDiagnostics } from "./inputSanitizer.ts";
+
+/** One section of the printed report, with its own read provenance. */
+export type AuditReportSectionKey = "status" | "policy" | "window" | "identity";
+
+/**
+ * What happened when the report tried to read a section.
+ *
+ * `empty` is a successful read that legitimately returned nothing (no policy
+ * installed, no spend window yet). It is distinct from `failed`, which means the
+ * report has no value and must say so rather than print a default.
+ */
+export type AuditReportSectionState = "read" | "empty" | "failed";
+
+export interface AuditReportRead {
+  key: AuditReportSectionKey;
+  label: string;
+  state: AuditReportSectionState;
+  /** When the successful read returned; null when the read failed. */
+  readAt: string | null;
+  /** The failure reason, or a note for an empty read; null for a normal read. */
+  detail: string | null;
+}
 
 export interface AuditReport {
   contractId: string;
   bytecodeHash: string;
   policyRules: string;
   allowlists: {
-    assets: string[];
-    recipients: string[];
-    protocols: string[];
+    /** null means the policy read failed — not "no assets are allowed". */
+    assets: string[] | null;
+    recipients: string[] | null;
+    protocols: string[] | null;
+    state: "read" | "failed";
   };
   adminKey: string;
   dmsStatus: string;
   network: string;
-  timestamp: string;
+  networkPassphrase: string;
+  /** When this report was compiled, in ISO-8601. */
+  capturedAt: string;
+  /** Per-section read outcomes and timestamps, so a reader can judge freshness. */
+  reads: AuditReportRead[];
 }
 
 export function compilePrintReport(
   snapshot: GuardSnapshot,
   networkName: string,
   adminKey: string,
+  options: { networkPassphrase?: string; capturedAt?: string } = {},
 ): AuditReport {
   const policy = snapshot.policy.ok ? snapshot.policy.value : null;
   const status = snapshot.status.ok ? snapshot.status.value : null;
+  const identity = snapshot.identity.ok ? snapshot.identity.value : null;
+  const capturedAt = options.capturedAt ?? new Date().toISOString();
+  const readAt = snapshot.fetchedAt;
 
+  const failed = (label: string, key: AuditReportSectionKey, error: string): AuditReportRead => ({
+    key,
+    label,
+    state: "failed",
+    readAt: null,
+    detail: redactDiagnostics(error),
+  });
+  const read = (
+    label: string,
+    key: AuditReportSectionKey,
+    result: { ok: true; value: unknown; readAt?: string },
+    empty = false,
+  ): AuditReportRead => ({
+    key,
+    label,
+    state: empty ? "empty" : "read",
+    readAt: result.readAt ?? readAt,
+    detail: empty ? "The read succeeded and returned no entry." : null,
+  });
+
+  const reads: AuditReportRead[] = [];
+  reads.push(
+    snapshot.status.ok
+      ? read("Contract status()", "status", snapshot.status)
+      : failed("Contract status()", "status", snapshot.status.error),
+  );
+  reads.push(
+    snapshot.policy.ok
+      ? read("Installed policy()", "policy", snapshot.policy, snapshot.policy.value === null)
+      : failed("Installed policy()", "policy", snapshot.policy.error),
+  );
+  reads.push(
+    snapshot.window.ok
+      ? read("Rolling spend window", "window", snapshot.window, snapshot.window.value === null)
+      : failed("Rolling spend window", "window", snapshot.window.error),
+  );
+  reads.push(
+    snapshot.identity.ok
+      ? read("WASM bytecode identity", "identity", snapshot.identity)
+      : failed("WASM bytecode identity", "identity", snapshot.identity.error),
+  );
+
+  const policyFailed = !snapshot.policy.ok;
   return {
     contractId: snapshot.guard,
-    bytecodeHash: snapshot.identity.ok ? (snapshot.identity.value.reportedWasmHash ?? "-") : "-",
-    policyRules: policy ? describePolicy(policy) : "No policy installed",
+    bytecodeHash: snapshot.identity.ok
+      ? (identity?.reportedWasmHash ?? "Not reported by the ledger")
+      : "Unavailable — the WASM identity read failed",
+    policyRules: policyFailed
+      ? "Unavailable — the policy read failed"
+      : policy
+        ? describePolicy(policy)
+        : "No policy installed (default-deny)",
     allowlists: {
-      assets: policy ? policy.assets : [],
-      recipients: policy ? (policy.allow_any_recipient ? ["* (Any)"] : policy.recipients) : [],
-      protocols: policy
-        ? policy.protocols.map((p) => `${p.contract} ${p.fns ? `(${p.fns.join(", ")})` : "(Any)"}`)
-        : [],
+      assets: snapshot.policy.ok ? (policy ? policy.assets : []) : null,
+      recipients: snapshot.policy.ok
+        ? policy
+          ? policy.allow_any_recipient
+            ? ["* (Any)"]
+            : policy.recipients
+          : []
+        : null,
+      protocols: snapshot.policy.ok
+        ? policy
+          ? policy.protocols.map(
+              (p) => `${p.contract} ${p.fns ? `(${p.fns.join(", ")})` : "(Any)"}`,
+            )
+          : []
+        : null,
+      state: snapshot.policy.ok ? "read" : "failed",
     },
     adminKey,
+    dmsStatus: snapshot.status.ok
+      ? status
+        ? isDeadManFrozen(status)
+          ? "FIRED"
+          : status.heartbeat_expired
+            ? "EXPIRED"
+            : "OK"
+        : "UNKNOWN"
+      : "Unavailable — the status read failed",
+    network: networkName,
+    networkPassphrase: options.networkPassphrase ?? "",
+    capturedAt,
+    reads,
+  };
+}
+
+// ── Incident handoff summary (#321) ────────────────────────────────────────
+
+/**
+ * A safe snapshot for incident handoff that excludes sensitive data.
+ *
+ * This deliberately omits private keys, wallet sessions, signed envelopes, and
+ * any other credential material. It is labelled as client-generated to clarify
+ * it is not an audit record or chain proof.
+ */
+export interface IncidentSummary {
+  label: string;
+  captureTime: string;
+  network: string;
+  guardAddress: string;
+  freezeStatus: "frozen" | "clear" | "unknown";
+  dmsStatus: "FIRED" | "EXPIRED" | "OK" | "UNKNOWN";
+  lastRead: string | null;
+  txHash?: string;
+  policyInstalled: boolean;
+  readErrors: string[];
+}
+
+export function compileIncidentSummary(
+  snapshot: GuardSnapshot | null,
+  networkName: string,
+  options?: {
+    txHash?: string;
+    lastReadError?: string;
+    lastSuccessfulRead?: string;
+  },
+): IncidentSummary {
+  const status = snapshot?.status.ok ? snapshot.status.value : null;
+  const policy = snapshot?.policy.ok ? snapshot.policy.value : null;
+  const errors: string[] = [];
+
+  if (!snapshot) {
+    errors.push(options?.lastReadError ?? "Snapshot unavailable");
+  } else if (!snapshot.status.ok) {
+    errors.push(`Status read failed: ${snapshot.status.error}`);
+  }
+
+  const result: IncidentSummary = {
+    label: "CLIENT-GENERATED SNAPSHOT — Not an audit record",
+    captureTime: new Date().toISOString(),
+    network: networkName,
+    guardAddress: snapshot?.guard ?? "Unknown",
+    freezeStatus: status ? (status.admin_frozen ? "frozen" : "clear") : "unknown",
     dmsStatus: status
       ? isDeadManFrozen(status)
         ? "FIRED"
@@ -46,9 +202,47 @@ export function compilePrintReport(
           ? "EXPIRED"
           : "OK"
       : "UNKNOWN",
-    network: networkName,
-    timestamp: new Date().toISOString(),
+    lastRead: options?.lastSuccessfulRead ?? (snapshot ? new Date().toISOString() : null),
+    policyInstalled: !!policy,
+    readErrors: errors,
   };
+
+  if (options?.txHash) {
+    result.txHash = options.txHash;
+  }
+
+  return result;
+}
+
+export function formatIncidentSummary(summary: IncidentSummary): string {
+  const lines: string[] = [
+    `=== ${summary.label} ===`,
+    "",
+    `Capture Time: ${summary.captureTime}`,
+    `Network: ${summary.network}`,
+    `Guard Address: ${summary.guardAddress}`,
+    `Freeze Status: ${summary.freezeStatus.toUpperCase()}`,
+    `DMS Status: ${summary.dmsStatus}`,
+    `Last Read: ${summary.lastRead ?? "N/A"}`,
+    `Policy Installed: ${summary.policyInstalled ? "Yes" : "No"}`,
+  ];
+
+  if (summary.txHash) {
+    lines.push(`Transaction Hash: ${summary.txHash}`);
+  }
+
+  if (summary.readErrors.length > 0) {
+    lines.push("");
+    lines.push("Read Errors:");
+    for (const error of summary.readErrors) {
+      lines.push(`  - ${error}`);
+    }
+  }
+
+  lines.push("");
+  lines.push("Note: This snapshot excludes private keys, wallet sessions, and signed envelopes.");
+
+  return lines.join("\n");
 }
 
 // ── Deployment verification receipt (#396, #397) ───────────────────────────
@@ -181,7 +375,7 @@ function receiptTransaction(label: string, result: InvokeResult): DeploymentRece
         outcome: "failed",
         hash: result.hash,
         ledger: null,
-        detail: result.detail,
+        detail: result.detail ? redactDiagnostics(result.detail) : result.detail,
       };
     case "refused":
       return {
@@ -189,7 +383,15 @@ function receiptTransaction(label: string, result: InvokeResult): DeploymentRece
         outcome: "refused",
         hash: null,
         ledger: null,
-        detail: `${result.stage}: ${result.detail}`,
+        detail: redactDiagnostics(`${result.stage}: ${result.detail}`),
+      };
+    case "cancelled":
+      return {
+        operation: label,
+        outcome: "cancelled",
+        hash: null,
+        ledger: null,
+        detail: redactDiagnostics(result.detail),
       };
     case "exported":
       return {
@@ -197,7 +399,9 @@ function receiptTransaction(label: string, result: InvokeResult): DeploymentRece
         outcome: "exported",
         hash: null,
         ledger: null,
-        detail: result.detail ?? "an unsigned transaction was exported; nothing was broadcast",
+        detail: redactDiagnostics(
+          result.detail ?? "an unsigned transaction was exported; nothing was broadcast",
+        ),
       };
   }
 }
@@ -281,9 +485,11 @@ export function compileDeploymentReceipt(input: DeploymentReceiptInput): Deploym
         "contract-created",
         "Create transaction",
         "failed",
-        createStep.result.kind === "refused"
-          ? `The create transaction was refused before broadcast (${createStep.result.stage}): ${createStep.result.detail}`
-          : `The create transaction was broadcast and rejected: ${createStep.result.detail}`,
+        redactDiagnostics(
+          createStep.result.kind === "refused"
+            ? `The create transaction was refused before broadcast (${createStep.result.stage}): ${createStep.result.detail}`
+            : `The create transaction was broadcast and rejected: ${createStep.result.detail}`,
+        ),
       ),
     );
   }
@@ -312,7 +518,7 @@ export function compileDeploymentReceipt(input: DeploymentReceiptInput): Deploym
         "live-read",
         "Post-deploy read",
         "failed",
-        `Reading the deployed instance failed: ${input.read.error}`,
+        redactDiagnostics(`Reading the deployed instance failed: ${input.read.error}`),
       ),
     );
   }

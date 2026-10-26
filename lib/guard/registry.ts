@@ -11,6 +11,10 @@
  *   2. Read the contract's own `status()` — the same read the panels use — and
  *      refuse the add when it traps or the transport fails.
  *
+ * An operator-supplied label is additionally screened against the label policy
+ * (`inputSanitizer.ts`) before either step, so a deceptive name is refused
+ * without touching the network at all.
+ *
  * It signs nothing: the add flow never touches a wallet, so there is no
  * `sendTransaction` on this path at all. That is asserted by call-count in
  * `registryLive.test.ts`, not merely intended.
@@ -21,6 +25,8 @@
 
 import { StrKey, type rpc } from "@stellar/stellar-sdk";
 import { readStatus } from "./chain.ts";
+import { validateLabel } from "./inputSanitizer.ts";
+import type { RegistryChangeNotice } from "./tabSync.ts";
 import {
   defaultGuardLabel,
   looksLikeContractAddress,
@@ -101,6 +107,13 @@ export type AddGuardResult =
  */
 export async function addGuard(params: AddGuardParams): Promise<AddGuardResult> {
   const address = params.address.trim();
+  // The label is screened before any RPC call: a name carrying invisible or
+  // control characters (issue #384) is refused with the same field-level
+  // message the address book shows, and nothing is read or remembered.
+  if (params.label !== undefined) {
+    const labelCheck = validateLabel(params.label);
+    if (!labelCheck.ok) return { ok: false, kind: "invalid", error: labelCheck.error };
+  }
   const label = (params.label ?? "").trim() || defaultGuardLabel(address);
   const check = await verifyGuardIsLive(params.server, address);
   if (!check.ok) {
@@ -123,4 +136,48 @@ export async function addGuard(params: AddGuardParams): Promise<AddGuardResult> 
     };
   }
   return { ok: true, instance };
+}
+
+// ── Following another tab's registry change ────────────────────────────────
+
+/**
+ * The instance list to hold after another tab changed the saved registry.
+ *
+ * `saved` is the registry as just re-read from storage — the authority. `current`
+ * is what this tab was showing. The only thing kept from `current` is the active
+ * guard when it is not in `saved` and was not the one just removed: a guard
+ * adopted from a link lives only in this tab's list, and dropping it would leave
+ * the selector without an option for the guard on screen.
+ */
+export function registryAfterChange(params: {
+  saved: readonly GuardInstance[];
+  current: readonly GuardInstance[];
+  activeGuard: string;
+  notice: Pick<RegistryChangeNotice, "kind" | "guard">;
+}): GuardInstance[] {
+  const { saved, current, activeGuard, notice } = params;
+  const removedActive = notice.kind === "remove" && notice.guard === activeGuard;
+  const active = current.find((instance) => instance.guard === activeGuard);
+  if (active && !removedActive && !saved.some((instance) => instance.guard === activeGuard)) {
+    return [...saved, active];
+  }
+  return [...saved];
+}
+
+/**
+ * The guard to move to when another tab deleted the one this tab is showing, or
+ * `null` when no move is needed (a different guard changed, the guard is still
+ * saved — a build-seeded guard cannot be deleted — or the change was not a
+ * removal). The choice matches a local delete: the first remaining guard.
+ */
+export function fallbackAfterRemoval(params: {
+  saved: readonly GuardInstance[];
+  activeGuard: string;
+  notice: Pick<RegistryChangeNotice, "kind" | "guard">;
+  defaultGuard: string;
+}): string | null {
+  const { saved, activeGuard, notice, defaultGuard } = params;
+  if (notice.kind !== "remove" || notice.guard !== activeGuard) return null;
+  if (saved.some((instance) => instance.guard === activeGuard)) return null;
+  return saved[0]?.guard ?? defaultGuard;
 }
