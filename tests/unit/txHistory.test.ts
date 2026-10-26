@@ -340,7 +340,12 @@ test("an empty list paginates to a single empty page", () => {
 
 test("CSV export has a fixed header and one quoted row per entry", () => {
   const entries = [
-    entry({ hash: "h1", operation: "set_policy", feeStroops: "310" }),
+    entry({
+      hash: "h1",
+      operation: "set_policy",
+      feeStroops: "310",
+      recordedAt: "2026-09-24T10:00:00.000Z",
+    }),
     entry({
       hash: "h2",
       operation: 'odd "operation"',

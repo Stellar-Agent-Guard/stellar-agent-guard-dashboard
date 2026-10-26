@@ -87,6 +87,12 @@ function DmsAlertBanner({
   const nowSecs = useNowSecs();
   const reference = useMemo(() => resolveReferenceTime(reading, nowSecs), [reading, nowSecs]);
   const projected = projectDmsAlert(alert, reference);
+  // A chain reading that outlived the freshness bound is a stale read (#389):
+  // the projection already freezes its numbers at the last chain value and
+  // refuses to state an exact expiry; this flag adds the explicit "stale read"
+  // note so the operator knows to refresh rather than read the figures as a
+  // fresh deadline.
+  const stale = reference.source === "ledger" && !reference.authoritative;
 
   const details: string[] = [];
   if (projected.remainingSecs !== null && alert.totalSecs !== null) {
@@ -134,6 +140,12 @@ function DmsAlertBanner({
     <div className={`dms-banner no-print ${projected.level}`} role="alert">
       <strong>{title}</strong>
       {details.length > 0 && <span className="detail">{details.join(" · ")}</span>}
+      {stale && (
+        <span className="detail" data-testid="dms-stale-note">
+          stale read — these figures are from the last successful ledger read, not a new one; they
+          are not a fresh deadline. Refresh to re-read the chain.
+        </span>
+      )}
     </div>
   );
 }
@@ -208,8 +220,17 @@ function printReadOutcome(read: {
 }
 
 export function StatusPanel() {
-  const { snapshot, snapshotError, refreshing, refresh, guard, wallet, retryRead, retryingField } =
-    useGuard();
+  const {
+    snapshot,
+    snapshotError,
+    refreshing,
+    refresh,
+    guard,
+    wallet,
+    retryRead,
+    retryingField,
+    lastRefresh,
+  } = useGuard();
 
   useStatusTransitionAnnouncer(snapshot);
 
@@ -301,6 +322,13 @@ export function StatusPanel() {
                 read <TimeAgo iso={snapshot.fetchedAt} />
               </span>
             )}
+            {(!snapshot || snapshotError) && lastRefresh != null && (
+              <span className="tiny muted">
+                {snapshotError ? "error state" : "stale since "}
+                {lastRefresh != null && new Date(lastRefresh).toLocaleTimeString()}
+              </span>
+            )}
+            {refreshing && !snapshot && <span className="tiny muted">loading...</span>}
             <StorageExplorerButton />
             <WebhookSettingsButton />
             <WebhookAlertBridge />
