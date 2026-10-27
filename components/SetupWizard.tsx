@@ -126,20 +126,23 @@ export function SetupWizard() {
     };
   }, [guard, demo, fetchInitialized]);
 
+  const activeSnapshot = snapshot?.guard === guard ? snapshot : null;
+
   const steps = useMemo(
     () =>
       deriveSetupSteps({
         deployedMarker,
         initialized,
-        status: snapshot?.status ?? { ok: false, error: "Reading the chain…" },
-        policy: snapshot?.policy ?? { ok: false, error: "Reading the chain…" },
+        status: activeSnapshot?.status ?? { ok: false, error: "Reading the chain…" },
+        policy: activeSnapshot?.policy ?? { ok: false, error: "Reading the chain…" },
         verified,
       }),
-    [deployedMarker, initialized, snapshot, verified],
+    [deployedMarker, initialized, activeSnapshot, verified],
   );
 
   const verify = useCallback(async () => {
     setVerifying(true);
+    setVerification({ guard, value: null });
     try {
       // A live re-read, not the polled snapshot: the point of the step is that
       // the operator asked the chain right now. It reads `status()` and
@@ -156,6 +159,14 @@ export function SetupWizard() {
           guard,
           value: { ok: true, value: { hasPolicy: status.value.has_policy } },
         });
+    } catch (error) {
+      setVerification({
+        guard,
+        value: {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
     } finally {
       setVerifying(false);
     }
