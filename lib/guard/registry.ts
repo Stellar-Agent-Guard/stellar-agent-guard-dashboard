@@ -26,6 +26,7 @@
 import { StrKey, type rpc } from "@stellar/stellar-sdk";
 import { readStatus } from "./chain.ts";
 import { validateLabel } from "./inputSanitizer.ts";
+import { NETWORK } from "./network.ts";
 import type { RegistryChangeNotice } from "./tabSync.ts";
 import {
   defaultGuardLabel,
