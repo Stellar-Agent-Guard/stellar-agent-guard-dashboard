@@ -131,7 +131,8 @@ function derivePolicy(
       id: "policy",
       label: SETUP_STEPS[2]!.label,
       state: "error",
-      detail: "status() and policy() returned inconsistent results; re-read the chain before continuing",
+      detail:
+        "status() and policy() returned inconsistent results; re-read the chain before continuing",
     };
   }
 

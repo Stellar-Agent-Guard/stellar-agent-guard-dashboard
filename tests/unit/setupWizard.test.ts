@@ -228,11 +228,7 @@ function contextValue(
 
 interface Rendered {
   container: HTMLElement;
-  rerender: (
-    snapshot: GuardSnapshot,
-    server?: unknown,
-    guard?: string,
-  ) => Promise<void>;
+  rerender: (snapshot: GuardSnapshot, server?: unknown, guard?: string) => Promise<void>;
   unmount: () => Promise<void>;
 }
 
@@ -250,7 +246,7 @@ async function render(
     root.render(
       react.createElement(
         GuardContext.Provider,
-    { value: contextValue(snapshot, server, guard) },
+        { value: contextValue(snapshot, server, guard) },
         element,
       ),
     );

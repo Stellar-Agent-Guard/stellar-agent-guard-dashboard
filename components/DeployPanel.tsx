@@ -290,9 +290,7 @@ export function DeployPanel() {
         : { address: predicted, state: "checking" };
   const deployControl = writeControlState(wallet, {
     busy: deploying,
-    extraDisabled:
-      artifact?.ok !== true ||
-      currentPredictedInspection?.state !== "available",
+    extraDisabled: artifact?.ok !== true || currentPredictedInspection?.state !== "available",
     label: "deploy a guard",
   });
   useEffect(() => {
@@ -722,8 +720,8 @@ export function DeployPanel() {
         <div className="error" role="alert" style={{ marginTop: 8 }}>
           <strong>Predicted address could not be checked</strong>
           <span className="tiny">
-            {currentPredictedInspection.error} Deployment stays disabled until the chain confirms whether
-            this address is free.
+            {currentPredictedInspection.error} Deployment stays disabled until the chain confirms
+            whether this address is free.
           </span>
         </div>
       )}
@@ -731,8 +729,8 @@ export function DeployPanel() {
         <div className="error" role="alert" style={{ marginTop: 8 }}>
           <strong>Address already exists on {NETWORK.name}</strong>
           <span className="tiny">
-            No create transaction will be submitted for this address. Change the deployer or salt
-            to derive a new address before deploying again.
+            No create transaction will be submitted for this address. Change the deployer or salt to
+            derive a new address before deploying again.
           </span>
           {currentPredictedInspection.integrity ? (
             <>

@@ -243,9 +243,7 @@ describe("invokeWithWallet source sequence freshness (issue #392)", () => {
     const server = {
       getAccount: async () => new Account(SIGNER_ADDRESS, "42"),
       simulateTransaction: async (transaction: any) => {
-        simulatedSequences.push(
-          (transaction.toEnvelope() as any).v1.tx.seqNum.toString(),
-        );
+        simulatedSequences.push((transaction.toEnvelope() as any).v1.tx.seqNum.toString());
         simulationCalls += 1;
         return simulation;
       },
@@ -284,7 +282,11 @@ describe("invokeWithWallet source sequence freshness (issue #392)", () => {
       assert.equal((submitted.toEnvelope() as any).v1.tx.seqNum.toString(), "43");
       assert.equal(simulationCalls, 2);
       const passAccounts = sourceAccounts.slice(1);
-      assert.equal(passAccounts.length, 3, "probe, enforcement, and final build each get an account");
+      assert.equal(
+        passAccounts.length,
+        3,
+        "probe, enforcement, and final build each get an account",
+      );
       assert.equal(new Set(passAccounts).size, 3, "each pass must use a distinct Account object");
     } finally {
       Account.prototype.sequenceNumber = originalSequenceNumber;

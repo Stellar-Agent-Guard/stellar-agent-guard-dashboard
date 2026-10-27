@@ -321,7 +321,10 @@ export class GuardOperationError extends Error {
   }
 }
 
-async function assertDeploymentAddressAvailable(server: rpc.Server, address: string): Promise<void> {
+async function assertDeploymentAddressAvailable(
+  server: rpc.Server,
+  address: string,
+): Promise<void> {
   const lookup = await contractAlreadyDeployed(server, address);
   if (lookup.error) {
     throw new GuardOperationError(

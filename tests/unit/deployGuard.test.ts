@@ -34,10 +34,7 @@ test("an existing predicted instance stops deployment before any write or wallet
     },
   };
 
-  await assert.rejects(
-    deployGuard({ server, signer, salt }),
-    /already exists/,
-  );
+  await assert.rejects(deployGuard({ server, signer, salt }), /already exists/);
   assert.deepEqual(lookups, [predicted], "check the predicted address before artifact reads");
   assert.equal(preparedTransactions, 0);
   assert.equal(prompts, 0);

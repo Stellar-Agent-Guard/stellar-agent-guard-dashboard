@@ -136,14 +136,14 @@ describe("read failures never look like success (issue #24)", () => {
     );
     assert.equal(step.state, "error");
     assert.equal(stepOf(base({ status: fail("x"), policy: ok(POLICY) }), "policy").state, "error");
-    assert.equal(stepOf(base({ status: ok(status(true)), policy: fail("x") }), "policy").state, "error");
+    assert.equal(
+      stepOf(base({ status: ok(status(true)), policy: fail("x") }), "policy").state,
+      "error",
+    );
   });
 
   it("does not mark policy done when status() failed, even if policy() answered", () => {
-    const step = stepOf(
-      base({ status: fail("status unavailable"), policy: ok(POLICY) }),
-      "policy",
-    );
+    const step = stepOf(base({ status: fail("status unavailable"), policy: ok(POLICY) }), "policy");
     assert.equal(step.state, "error");
     assert.match(step.detail, /status unavailable/);
   });
