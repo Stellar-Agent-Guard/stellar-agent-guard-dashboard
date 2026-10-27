@@ -62,6 +62,14 @@ import {
 } from "../lib/guard/guardScoped.ts";
 import { useToast } from "../lib/guard/useToast.ts";
 import { exportPolicyDraft, importPolicyFromJson } from "../lib/guard/policySchema.ts";
+import { NETWORK } from "../lib/guard/network.ts";
+import {
+  DRAFT_AUTOSAVE_DEBOUNCE_MS,
+  clearPolicyDraft,
+  loadPolicyDraft,
+  savePolicyDraft,
+} from "../lib/guard/drafts.ts";
+import { formatTimeAgo } from "../lib/guard/time.ts";
 
 /**
  * The no-code configurator.
@@ -162,6 +170,11 @@ export function PolicyForm() {
   // confirmation dialog applies it. The draft is never replaced by a stray
   // change event on the select.
   const [pendingPreset, setPendingPreset] = useState<PolicyPreset | null>(null);
+  // Issue #20: a draft restored from localStorage, with the age the banner
+  // shows. `null` means nothing was restored, so no banner is rendered. The
+  // age label is computed once at restore time rather than per render, so the
+  // render stays free of wall-clock reads (same discipline as the simulator).
+  const [restoredAge, setRestoredAge] = useState<string | null>(null);
   // ── Which guard everything on this form belongs to ──────────────────────
   // The active guard is shared application context: the operator, another tab or
   // a link can change it while a draft, an approval or a write is still live.
@@ -222,8 +235,59 @@ export function PolicyForm() {
   const toast = useToast();
   const presetSelect = useRef<HTMLSelectElement>(null);
   const presetDialog = useRef<HTMLDivElement>(null);
+  // Consumed by the autosave effect below: the value the restore effect just
+  // pushed must not be written back (it would refresh `savedAt` on mere page
+  // load, and a draft that renews itself by being opened never expires).
+  const skipNextSave = useRef(false);
+  // Restore runs once per mount, not per guard change: a guard switched
+  // mid-session must not clobber the edits in progress on the form.
+  const didRestore = useRef(false);
 
   const confirmingPreset = pendingPreset !== null;
+
+  // Issue #20: restore the last saved draft for this guard, once on mount.
+  // Client-side effects only — localStorage is never touched during the server
+  // render. The ref guard makes a restore strictly one-shot, so a guard switched
+  // mid-session cannot overwrite edits already in progress on the form. setState
+  // is deferred through requestAnimationFrame so it is not called synchronously
+  // in the effect body (the lint rule forbids synchronous setState in an effect
+  // body; see DashboardGrid's persisted-layout loading for the same shape).
+  useEffect(() => {
+    if (didRestore.current) return;
+    didRestore.current = true;
+    const restored = loadPolicyDraft(NETWORK.name, guard);
+    if (restored === null) return;
+    skipNextSave.current = true;
+    const apply = () => {
+      setDraft(restored.draft);
+      setRestoredAge(formatTimeAgo(restored.savedAt, Math.floor(Date.now() / 1000)));
+    };
+    const frame = requestAnimationFrame(apply);
+    return () => cancelAnimationFrame(frame);
+  }, [guard, setDraft]);
+
+  // Debounced autosave of whatever the operator is editing, under this
+  // guard's scope. A `null` draft means "no edits yet" — there is nothing to
+  // save, and writing one would resurrect the installed policy as a draft.
+  useEffect(() => {
+    if (draft === null) return;
+    if (skipNextSave.current) {
+      skipNextSave.current = false;
+      return;
+    }
+    const timer = setTimeout(() => {
+      savePolicyDraft(NETWORK.name, guard, draft);
+    }, DRAFT_AUTOSAVE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [draft, guard]);
+
+  /** Discard the restored draft: forget storage and fall back to installed. */
+  function discardRestoredDraft() {
+    clearPolicyDraft(NETWORK.name, guard);
+    setDraft(null);
+    setRestoredAge(null);
+    setAssetCapChanges({});
+  }
 
   // Same focus discipline as the freeze dialog: move focus into the modal, keep
   // Tab inside it, close on Escape, and return focus to the select afterwards.
@@ -596,6 +660,16 @@ export function PolicyForm() {
       </div>
       <ScopeNotice />
 
+      {restoredAge !== null && (
+        <div className="notice info" role="status" data-testid="policy-draft-restored">
+          <strong>Draft restored</strong>
+          <span className="tiny">
+            The policy form was restored from a draft saved {restoredAge} ago in this browser.
+            Review it before signing — it is what you were editing, not what is installed on chain.
+          </span>
+          <button className="secondary" type="button" onClick={discardRestoredDraft}>
+            Discard draft
+          </button>
       {draftForOtherGuard && draftScope && (
         <div className="notice danger" role="alert" data-testid="other-guard-draft">
           <strong>Unsaved edits belong to a different guard</strong>
@@ -1072,7 +1146,11 @@ export function PolicyForm() {
         <button
           className="secondary"
           onClick={() => {
+            // "Load installed" means discard the edits — so the stored draft
+            // goes too, or the next refresh would resurrect what was discarded.
+            clearPolicyDraft(NETWORK.name, guard);
             setDraft(null);
+            setRestoredAge(null);
             setAssetCapChanges({});
           }}
           disabled={busy || draft === null || draftForOtherGuard}
