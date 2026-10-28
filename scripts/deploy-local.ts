@@ -171,6 +171,9 @@ function outcome(result: InvokeResult): string {
   if (result.kind === "refused") {
     return `refused at ${result.stage}: ${result.detail}`;
   }
+  if (result.kind === "unknown") {
+    return `submission unconfirmed for tx ${result.hash}: ${result.detail}`;
+  }
   return `included and rejected: ${result.detail}`;
 }
 

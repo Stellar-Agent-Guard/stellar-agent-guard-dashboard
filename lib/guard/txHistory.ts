@@ -3,8 +3,9 @@
  *
  * Every admin transaction this dashboard broadcasts — policy installs,
  * freezes, unfreezes, deploys — is recorded here with the facts the
- * submission path actually knew: the hash the network accepted, the
- * operation, the outcome, and the fee the envelope paid. It is a local
+ * submission path actually knew: the hash, the operation, the outcome
+ * (`confirmed`, `failed`, or `unknown` when the submission was never
+ * confirmed), and the fee the envelope paid. It is a local
  * record of *this console's own* writes, capped and stored in
  * `localStorage`; nothing is fetched and nothing is claimed about
  * transactions this console did not make.
@@ -23,7 +24,7 @@ import {
 import { NETWORK } from "./network.ts";
 
 export type TxHistoryTerminalOutcome =
-  "confirmed" | "failed" | "cancelled" | "pre-submit-failure" | "submitted";
+  "confirmed" | "failed" | "cancelled" | "pre-submit-failure" | "submitted" | "unknown";
 
 export type TxHistoryStatus = TxHistoryTerminalOutcome;
 
@@ -124,6 +125,11 @@ const VALID_STATUSES = new Set<string>([
   "cancelled",
   "pre-submit-failure",
   "submitted",
+  // A submission whose outcome the console could not witness is recorded as
+  // "unknown". It is a status this console writes itself, so it must pass the
+  // read-side validation too — otherwise every reload would silently drop the
+  // very rows the operator needs in order to verify the hash on chain.
+  "unknown",
 ]);
 
 function isEntry(value: unknown): value is TxHistoryEntry {

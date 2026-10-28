@@ -143,7 +143,9 @@ export function TxHistoryTable() {
       <p className="tiny muted" style={{ marginTop: 8 }}>
         Every admin transaction signed from this console — policy changes, freezes, unfreezes,
         deployments — recorded with the hash the network accepted. Refused calls never became
-        transactions, and cancellations are tracked without a transaction hash.
+        transactions, and cancellations are tracked without a transaction hash. A submission the
+        console could not confirm is recorded as <strong>Unconfirmed</strong>, never as a failure:
+        verify the hash on chain and never resubmit blind.
       </p>
 
       {saveWarning !== null && (
@@ -284,6 +286,17 @@ export function TxHistoryTable() {
                           <span className="pill warn">Cancelled</span>
                         ) : entry.status === "pre-submit-failure" ? (
                           <span className="pill danger">Pre-submit failure</span>
+                        ) : entry.status === "unknown" ? (
+                          // A submission whose outcome was never witnessed is not a
+                          // failure: it may have landed. It wears the warning
+                          // treatment and carries the verify-before-retry rule with
+                          // it, so the row can never be read as "nothing happened".
+                          <span
+                            className="pill warn"
+                            title="Submission unconfirmed — verify this hash on chain before submitting anything else"
+                          >
+                            Unconfirmed
+                          </span>
                         ) : (
                           <span className="pill danger">Failed</span>
                         )}

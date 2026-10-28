@@ -320,7 +320,9 @@ export function MigrationWizard({ target }: { target: string }) {
                 ? "The wallet or the pre-flight refused the migration"
                 : applied.result.kind === "exported"
                   ? "Migration transaction prepared, not broadcast"
-                  : "The migration was broadcast and rejected"}
+                  : applied.result.kind === "unknown"
+                    ? "Migration submission was never confirmed — verify the hash on chain before retrying"
+                    : "The migration was broadcast and rejected"}
           </strong>
           {applied.result.kind === "submitted" ? (
             <span className="tiny">

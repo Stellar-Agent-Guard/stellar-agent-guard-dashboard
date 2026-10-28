@@ -121,6 +121,9 @@ export async function submitOperation(params: {
   /** Name recorded in the transaction history for this operation. */
   label?: string;
   passphrase?: string;
+  /** Inclusion-poll tuning; defaults to the shared cadence. Tests inject tiny values. */
+  pollAttempts?: number;
+  pollIntervalMs?: number;
 }): Promise<InvokeResult> {
   const passphrase = params.passphrase ?? NETWORK.passphrase;
   const { server, signer } = params;
@@ -183,21 +186,65 @@ export async function submitOperation(params: {
   // what the network will charge for this transaction.
   const feeStroops = transaction.fee;
 
-  const sent = await server.sendTransaction(transaction);
+  const recordUnknown = (hash: string, detail: string): InvokeResult => {
+    recordTx({
+      hash,
+      operation: label,
+      status: "unknown",
+      feeStroops,
+      networkName: NETWORK.name,
+      networkPassphrase: passphrase,
+    });
+    announce(
+      "Transaction submission unconfirmed — verify the hash on chain before retrying",
+      "assertive",
+    );
+    return { kind: "unknown", hash, detail, feeStroops };
+  };
+
+  let sent: rpc.Api.SendTransactionResponse;
+  try {
+    sent = await server.sendTransaction(transaction);
+  } catch (error) {
+    // No response is not a refusal: the envelope may have reached the network
+    // with only the reply lost. Hand the ambiguity to the operator as an
+    // unconfirmed submission carrying the locally computed hash — never as a
+    // claim that nothing was broadcast.
+    return recordUnknown(
+      Buffer.from(transaction.hash()).toString("hex"),
+      `the send request ended without a response (${
+        error instanceof Error ? error.message : String(error)
+      }) — the transaction may or may not have reached the network; verify this hash on chain before submitting anything else`,
+    );
+  }
   if (sent.status === "ERROR") {
     announce("Transaction refused — nothing was broadcast");
     return {
       kind: "refused",
       stage: "submission",
       detail: JSON.stringify(sent.errorResult ?? sent),
-      diagnosticEvents: [],
+      diagnosticEvents: diagnosticEventsOf(sent),
+    };
+  }
+  if (sent.status === "TRY_AGAIN_LATER") {
+    // Explicitly not accepted: "not submitted", not "submission unknown".
+    announce("Transaction refused — nothing was broadcast");
+    return {
+      kind: "refused",
+      stage: "submission",
+      detail:
+        "the RPC did not accept the transaction (TRY_AGAIN_LATER), so nothing was " +
+        "queued for inclusion; re-read chain state and submit again when ready",
+      diagnosticEvents: diagnosticEventsOf(sent),
     };
   }
 
   announce("Transaction submitted to network");
 
-  for (let attempt = 0; attempt < 30; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  const maxAttempts = params.pollAttempts ?? 30;
+  const intervalMs = params.pollIntervalMs ?? 2_000;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
     const result = await server.getTransaction(sent.hash).catch(() => null);
     if (!result) continue;
     if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
@@ -245,22 +292,14 @@ export async function submitOperation(params: {
       };
     }
   }
-  recordTx({
-    hash: sent.hash,
-    operation: label,
-    status: "failed",
-    feeStroops,
-    networkName: NETWORK.name,
-    networkPassphrase: passphrase,
-  });
-  announce("Transaction failed on chain");
-  return {
-    kind: "failed",
-    hash: sent.hash,
-    detail: `timed out waiting for ${sent.hash}`,
-    feeStroops,
-    diagnosticEvents: [],
-  };
+  // The inclusion window elapsed without a final status: the transaction may
+  // still land after this client stopped watching, so the outcome is unknown —
+  // recorded as such, announced with the verify-before-retry instruction, and
+  // never replayed automatically.
+  return recordUnknown(
+    sent.hash,
+    `no confirmation was observed for ${sent.hash} after ${maxAttempts} attempts; it may still be included — verify this hash on chain before submitting anything else`,
+  );
 }
 
 // ── Deploy ─────────────────────────────────────────────────────────────────

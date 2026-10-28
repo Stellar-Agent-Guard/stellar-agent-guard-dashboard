@@ -6,7 +6,8 @@ dashboard reads and writes.
 **Related:** [Dual-freeze semantics](../concepts/dual-freeze-semantics.md) ·
 [Panic button & freeze](../screens/panic-freeze.md) ·
 [Enforcement scope](../enforcement-scope.md) ·
-[Routine policy updates](./policy-updates.md)
+[Routine policy updates](./policy-updates.md) ·
+[Submission timeout: verifying an ambiguous transaction](./submission-timeout.md)
 
 > **Read this before an incident, not during one.** Everything here is designed to
 > be followed under stress. If you are in the middle of an incident, jump straight
