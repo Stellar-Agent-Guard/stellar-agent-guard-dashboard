@@ -61,6 +61,7 @@ Enforcement happens **inside the account itself**, via Soroban's native Custom A
 ## What it does
 
 - **No-code guardrail configurator (`/configure`)**: Interactive form for defining spending policies without writing code: per-transaction cap, rolling-window cap and length, asset allowlists, recipient allowlists, protocol allowlists, active execution windows, pause state, and dead-man switch grace periods. Validates inputs locally before prompting Freighter, encodes via SDK `policyToScVal`, and executes `set_policy`.
+- **Versioned policy JSON (`.guard-policy.json`)**: Schema version 2 exports the policy fields and public network name only. Import validates the schema, network match, and Stellar account/contract identifier types, then presents a preview before applying values to the editable draft. Version 1 files are rejected because they do not identify a network; imported data never counts as installed chain state and must still pass the normal validation, simulation, signing, and post-write read.
 - **Artifact-verified guard deployment**: Deploys fresh guard accounts from verified on-chain WASM bytecode with cryptographic address prediction.
 - **Deployment verification receipt**: After a deploy, the panel produces a downloadable, client-generated JSON record — capture time, network, predicted and deployed addresses, pinned artifact hash and length, transaction references, and explicit per-check outcomes. It is not a signed credential: the format has no field for a secret key, a signed envelope or wallet session details, and it reports `verified` only when the post-deploy live read matched the pinned bytecode. A refused deploy and a failed or skipped read are recorded as `failed`/`unavailable`, never as success.
 - **Emergency panic button (`PanicPanel`)**: Two-step confirmation modal with wallet-signed `freeze()` execution, followed by a mandatory on-chain re-read of `status()` confirming `admin_frozen = true` before updating UI state. Provides matching wallet-signed `unfreeze()` reversal.
@@ -122,6 +123,7 @@ npm run typecheck    # tsc --noEmit
 npm run lint         # eslint
 npm test             # full unit suite (see CI for the current count)
 npm run build        # Next.js production build
+npm run check:docs-scripts  # guard README.md + CONTRIBUTING.md script references
 npm run inspect      # read-only dump of an instance's state
 ```
 
@@ -137,12 +139,12 @@ steps and for what it does and does not prove.
 
 ### Screens
 
-- **`/` (Console Overview)**: Displays connected wallet, active guard address, current balance, policy parameters summary, dead-man switch countdown, live telemetry event stream, and the emergency panic button. Raises a warning-tier banner whenever the guard reports no policy installed — the default-deny state, where every transaction is blocked until one is configured — with a call to action that carries the current guard into the configurator. An unread `status()` is reported as an error, never as "no policy".
+- **`/` (Console Overview)**: Displays connected wallet, active guard address, current balance, policy parameters summary, dead-man switch countdown, live telemetry event stream, and the emergency panic button. Raises a warning-tier banner whenever the guard reports no policy installed — the default-deny state, where every transaction is blocked until one is configured — with a call to action that carries the current guard into the configurator. An unread `status()` is reported as an error, never as "no policy". Each failed read carries its own retry that re-reads only that field — bound to the current guard and network, with late responses after a context change discarded — and a dead-man countdown drawn from a read more than a minute old is labelled stale rather than presented as current.
 - **`/` (Console Overview)**: Displays connected wallet, active guard address, current balance, policy parameters summary, dead-man switch countdown, live telemetry event stream, transaction history, multisig approvals, an unsigned-XDR submit panel, and the emergency panic button.
 - **`/configure` (Policy Configurator & Deployment)**:
   - Keep the configured network name and RPC hostname visible beside the page title; switching controls remain in the wallet bar.
   - Deploy fresh guard accounts from verified on-chain WASM bytecode.
-  - Follow the **post-deploy checklist** (`SetupWizard`): deploy → initialize → install policy → verify, each step derived from a live read, dismissible, and reopenable.
+  - Follow the **post-deploy checklist** (`SetupWizard`): deploy → initialize → install policy → verify, each step derived from a live read, dismissible, and reopenable, with a read-only retry whenever a read fails.
   - Configure spending policy parameters with real-time validation.
   - Sign and submit `set_policy` transactions.
   - Show the same default-deny banner while nothing is installed, and disable the revoke action — the state it would produce is already in force.
@@ -172,7 +174,7 @@ steps and for what it does and does not prove.
 - **`SubmitSignedXDRPanel`**: Imports and broadcasts an externally signed transaction envelope for multisig or air-gapped signing.
 - **`CommandPalette`** (`Cmd`/`Ctrl`+`K`): Keyboard-navigable navigation, guard-instance search, and quick actions.
 - **`ThemeToggle`**: Dark / light / high-contrast themes, following the OS preference until the operator chooses.
-- **`AddressBookModal`** / **`MigrationWizard`**: Saved recipients and a guided policy-migration flow.
+- **`AddressBookModal`** / **`MigrationWizard`**: Saved recipients — nicknames and imported names are screened against a documented label policy that rejects invisible and control characters with a field-level error while preserving international text — and a guided policy-migration flow.
 - **`DashboardGrid`**: Operator-arranged, persisted panel layout.
 - **`TelemetryAlerts`**: Opt-in audio and browser-notification alerts for blocked calls and freezes.
 
