@@ -1,7 +1,3 @@
-import { Keypair, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
-import { NETWORK } from "./network.ts";
-import { toHex } from "./scval.ts";
-
 /**
  * Multi-signature approval tracking for admin transactions.
  *
@@ -68,7 +64,6 @@ export interface MultisigThresholds {
 
 /** The threshold levels an account carries. Admin writes use the medium one. */
 export type ThresholdLevel = "low" | "med" | "high";
-export type MultisigEvaluationStatus = "supported" | "unsupported" | "incomplete";
 
 /** A signature present on a pending envelope. */
 export interface EnvelopeSignature {
@@ -85,7 +80,7 @@ export interface EnvelopeSignature {
 export interface ThresholdProgress {
   level: ThresholdLevel;
   /** Weight this level requires. */
-  requiredWeight: number | null;
+  requiredWeight: number;
   /** Weight the envelope has collected (an identical number at every level). */
   collectedWeight: number;
   /**
@@ -106,14 +101,10 @@ export interface ThresholdProgress {
  * multisig transaction — so no failure semantics attach to it.
  */
 export interface MultisigApprovalState {
-  /** Whether the dashboard can evaluate this account configuration safely. */
-  evaluationStatus: MultisigEvaluationStatus;
-  /** Specific configuration or envelope input that prevents evaluation. */
-  evaluationReasons: string[];
   /** Total weight of the signatures actually on the envelope. */
   collectedWeight: number;
   /** The threshold this transaction must meet (see `thresholdLevel`). */
-  requiredWeight: number | null;
+  requiredWeight: number;
   /** `true` only when `collectedWeight >= requiredWeight`. */
   ready: boolean;
   /** Per-signer status, in the account's signer order. */
@@ -168,13 +159,6 @@ function isEd25519(signer: MultisigSigner): boolean {
   return signer.kind === undefined || signer.kind === "ed25519";
 }
 
-function validThresholds(thresholds: MultisigThresholds | null): thresholds is MultisigThresholds {
-  if (thresholds === null) return false;
-  return [thresholds.low_threshold, thresholds.med_threshold, thresholds.high_threshold].every(
-    (value) => Number.isInteger(value) && value >= 0 && value <= 255,
-  );
-}
-
 /**
  * Evaluate a pending envelope against the account's signers and thresholds.
  *
@@ -195,11 +179,12 @@ function validThresholds(thresholds: MultisigThresholds | null): thresholds is M
  *    account alone suffices.
  *  - Non-Ed25519 signers with weight cannot be matched from the envelope's
  *    4-byte signature hints. As soon as one exists (or the caller reports
- *    ambiguous hint matching), no threshold is declared met.
+ *    ambiguous hint matching), the remaining weight is `null` unless the
+ *    collected lower bound already meets the threshold.
  */
 export function evaluateApprovalState(params: {
   signers: readonly MultisigSigner[];
-  thresholds: MultisigThresholds | null;
+  thresholds: MultisigThresholds;
   signatures: readonly EnvelopeSignature[];
   /** Which threshold governs. Admin writes are medium-threshold operations. */
   thresholdLevel?: ThresholdLevel;
@@ -209,8 +194,6 @@ export function evaluateApprovalState(params: {
    * Defaults to `true`; a caller that knows matching was ambiguous must say so.
    */
   signatureDataComplete?: boolean;
-  /** Additional account-read incompleteness reported by the reader. */
-  incompleteReasons?: readonly string[];
 }): MultisigApprovalState {
   const { signers: accountSigners, thresholds, signatures } = params;
   const level = params.thresholdLevel ?? "med";
@@ -238,78 +221,37 @@ export function evaluateApprovalState(params: {
   }
 
   const unattributable = accountSigners.filter((signer) => signer.weight > 0 && !isEd25519(signer));
-  const incompleteReasons = [...(params.incompleteReasons ?? [])];
-  if (
-    accountSigners.some(
-      (signer) =>
-        typeof signer.key !== "string" ||
-        signer.key.length === 0 ||
-        !Number.isInteger(signer.weight) ||
-        signer.weight < 0 ||
-        signer.weight > 255,
-    )
-  ) {
-    incompleteReasons.push("One or more signer keys or weights are invalid.");
-  }
-  if (new Set(accountSigners.map((signer) => signer.key)).size !== accountSigners.length) {
-    incompleteReasons.push("The account signer list contains duplicate signer keys.");
-  }
-  if (!(params.signatureDataComplete ?? true)) {
-    incompleteReasons.push(
-      "Envelope signature hints do not uniquely identify the account signers.",
-    );
-  }
-  if (!validThresholds(thresholds)) {
-    incompleteReasons.push("One or more account thresholds are missing or invalid.");
-  }
-  const evaluationStatus: MultisigEvaluationStatus =
-    unattributable.length > 0
-      ? "unsupported"
-      : incompleteReasons.length > 0
-        ? "incomplete"
-        : "supported";
-  const evaluationReasons = [
-    ...unattributable.map(
-      (signer) =>
-        `${signer.label} uses ${signer.kind ?? "a non-Ed25519 signer"}, which cannot be evaluated from transaction signature hints.`,
-    ),
-    ...incompleteReasons,
-  ];
-  const coverage = evaluationStatus === "supported" ? "complete" : "unknown";
+  const coverage =
+    (params.signatureDataComplete ?? true) && unattributable.length === 0 ? "complete" : "unknown";
 
   const remainingFor = (requiredWeight: number): number | null => {
-    if (evaluationStatus !== "supported") return null;
     const missing = Math.max(0, requiredWeight - collectedWeight);
-    return missing;
+    if (missing === 0) return 0;
+    return coverage === "complete" ? missing : null;
   };
 
   const thresholdProgress = (["low", "med", "high"] as const).map((thresholdLevel) => {
-    const requiredWeight = validThresholds(thresholds)
-      ? thresholdLevel === "low"
+    const requiredWeight =
+      thresholdLevel === "low"
         ? thresholds.low_threshold
         : thresholdLevel === "high"
           ? thresholds.high_threshold
-          : thresholds.med_threshold
-      : null;
+          : thresholds.med_threshold;
     return {
       level: thresholdLevel,
       requiredWeight,
       collectedWeight,
-      remainingWeight: requiredWeight === null ? null : remainingFor(requiredWeight),
-      met:
-        evaluationStatus === "supported" &&
-        requiredWeight !== null &&
-        collectedWeight >= requiredWeight,
+      remainingWeight: remainingFor(requiredWeight),
+      met: collectedWeight >= requiredWeight,
     };
   }) as [ThresholdProgress, ThresholdProgress, ThresholdProgress];
 
-  const requiredWeight = validThresholds(thresholds)
-    ? level === "low"
+  const requiredWeight =
+    level === "low"
       ? thresholds.low_threshold
       : level === "high"
         ? thresholds.high_threshold
-        : thresholds.med_threshold
-    : null;
+        : thresholds.med_threshold;
 
   // Build statuses only after the total is known, so every pending signer sees
   // the same shortfall rather than the partial total accumulated so far.
@@ -324,18 +266,12 @@ export function evaluateApprovalState(params: {
     if (signed && signer.weight > 0) {
       return { ...base, status: "signed", weightNeeded: null };
     }
-    const shortfall =
-      requiredWeight === null ? null : Math.max(0, requiredWeight - collectedWeight);
+    const shortfall = Math.max(0, requiredWeight - collectedWeight);
     return {
       ...base,
       status: signed ? "signed" : "pending",
       // A disabled (weight-0) signer cannot help reach the threshold.
-      weightNeeded:
-        evaluationStatus !== "supported"
-          ? null
-          : signer.weight > 0 && shortfall !== null
-            ? Math.min(signer.weight, shortfall)
-            : 0,
+      weightNeeded: signer.weight > 0 ? Math.min(signer.weight, shortfall) : 0,
     };
   });
 
@@ -344,16 +280,11 @@ export function evaluateApprovalState(params: {
   );
 
   return {
-    evaluationStatus,
-    evaluationReasons,
     collectedWeight,
     requiredWeight,
-    ready:
-      evaluationStatus === "supported" &&
-      requiredWeight !== null &&
-      (requiredWeight > 0 ? collectedWeight >= requiredWeight : true),
+    ready: requiredWeight > 0 ? collectedWeight >= requiredWeight : true,
     signers,
-    remainingWeight: requiredWeight === null ? null : remainingFor(requiredWeight),
+    remainingWeight: remainingFor(requiredWeight),
     thresholds: thresholdProgress,
     coverage,
     unattributableSigners,
@@ -369,8 +300,7 @@ export function evaluateApprovalState(params: {
  * envelope towards the threshold.
  */
 export function pendingSigners(state: MultisigApprovalState): string[] {
-  if (state.evaluationStatus !== "supported" || state.ready || state.requiredWeight === null)
-    return [];
+  if (state.ready) return [];
   let remaining = state.requiredWeight - state.collectedWeight;
   const waiting: string[] = [];
   for (const signer of state.signers) {
@@ -385,9 +315,6 @@ export function pendingSigners(state: MultisigApprovalState): string[] {
 
 /** The canonical summary line the tracker displays. */
 export function approvalSummary(state: MultisigApprovalState): string {
-  if (state.evaluationStatus !== "supported") {
-    return `Approval threshold cannot be evaluated: ${state.evaluationReasons.join(" ")}`;
-  }
   const who = state.signers
     .map((signer) => `${signer.label} [${signer.status === "signed" ? "Signed" : "Pending"}]`)
     .join(", ");
@@ -403,50 +330,18 @@ export function approvalSummary(state: MultisigApprovalState): string {
  */
 export function remainingWeightSummary(state: MultisigApprovalState): string {
   const governing = THRESHOLD_LABELS.med;
-  if (state.evaluationStatus !== "supported") {
-    return `Threshold status is ${state.evaluationStatus}: ${state.evaluationReasons.join(" ")}`;
+  if (state.remainingWeight === null) {
+    const count = state.unattributableSigners.length;
+    const detail =
+      count > 0
+        ? `${count} signer${count === 1 ? "" : "s"} of a type that cannot be matched from envelope signatures`
+        : "the envelope signatures could not be matched unambiguously to account signers";
+    return `Remaining weight at the ${governing.toLowerCase()} is unknown: ${detail}.`;
   }
   if (state.remainingWeight === 0) {
     return `No further signer weight is required at the ${governing.toLowerCase()}.`;
   }
   return `${state.remainingWeight} more signer weight is required at the ${governing.toLowerCase()}.`;
-}
-
-/** Describe signer and threshold changes between two live account snapshots. */
-export function signerRuleChanges(
-  previous: MultisigApprovalState,
-  current: MultisigApprovalState,
-): string[] {
-  const changes: string[] = [];
-  const previousSigners = new Map(previous.signers.map((signer) => [signer.key, signer]));
-  const currentSigners = new Map(current.signers.map((signer) => [signer.key, signer]));
-
-  for (const [key, signer] of previousSigners) {
-    const updated = currentSigners.get(key);
-    if (!updated) {
-      changes.push(`${signer.label} (${key}) was removed.`);
-    } else if (updated.weight !== signer.weight) {
-      changes.push(`${updated.label} weight changed from ${signer.weight} to ${updated.weight}.`);
-    }
-  }
-  for (const [key, signer] of currentSigners) {
-    if (!previousSigners.has(key)) {
-      changes.push(`${signer.label} (${key}) was added with weight ${signer.weight}.`);
-    }
-  }
-
-  for (const level of ["low", "med", "high"] as const) {
-    const before = previous.thresholds.find(
-      (threshold) => threshold.level === level,
-    )?.requiredWeight;
-    const after = current.thresholds.find((threshold) => threshold.level === level)?.requiredWeight;
-    if (before !== after) {
-      changes.push(
-        `${THRESHOLD_LABELS[level]} changed from ${before ?? "unknown"} to ${after ?? "unknown"}.`,
-      );
-    }
-  }
-  return changes;
 }
 
 /**
@@ -457,517 +352,6 @@ export function signerRuleChanges(
  * by definition and returns 100.
  */
 export function approvalPercent(state: MultisigApprovalState): number {
-  if (state.evaluationStatus !== "supported" || state.requiredWeight === null) return 0;
   if (state.requiredWeight <= 0) return 100;
   return Math.min(100, Math.round((state.collectedWeight / state.requiredWeight) * 100));
-}
-
-/* ────────────────────────── partial-envelope merging ─────────────────────── */
-
-/**
- * One externally signed envelope offered to a merge.
- *
- * Can include an optional `networkPassphrase` (when checking cross-network
- * boundaries between two envelopes) and an optional `label` (for reporting
- * multi-envelope merge sources and mismatches).
- */
-export interface SignedEnvelopeInput {
-  xdr: string;
-  networkPassphrase?: string;
-  label?: string;
-}
-
-/** The immutable transaction body, as extracted from an envelope. */
-export interface SignedEnvelopeFacts {
-  source: string;
-  sequence: string;
-  fee: string;
-  timeBounds: { minTime: string; maxTime: string } | null;
-  /** The signed transaction body without signatures, base64 XDR. */
-  bodyXdr: string;
-  /** Transaction hash for the merge network, hex. */
-  hash: string;
-}
-
-/** One unique signature in the merged envelope. */
-export interface MergedSignature {
-  /** 4-byte signer hint, hex. */
-  hint: string;
-  /** 64-byte signature, base64. */
-  signature: string;
-  /** Labels of the input envelopes that carried this exact signature. */
-  sources: string[];
-  /**
-   * `verified` only when `signers` were supplied, exactly one matched the hint,
-   * and the signature verified against this network's transaction hash.
-   */
-  verification: "verified" | "unchecked";
-}
-
-/** The same signature repeated across inputs; counted once. */
-export interface DuplicateSignature {
-  hint: string;
-  signature: string;
-  sources: string[];
-}
-
-/**
- * Two different signatures sharing a 4-byte hint. They are both preserved —
- * distinct keys can collide on the hint — but the collision is reported so it is
- * never silently read as one signer.
- */
-export interface SignatureConflict {
-  hint: string;
-  signatures: string[];
-  sources: string[];
-}
-
-/** One input that is not the same transaction as the reference envelope. */
-export interface EnvelopeMismatch {
-  label: string;
-  /** The parts that differ: source, sequence, time bounds, fee, body. */
-  fields: string[];
-}
-
-export interface MergeSignedEnvelopesParams {
-  envelopes: readonly SignedEnvelopeInput[];
-  /**
-   * The one network every envelope is decoded for. An envelope does not carry a
-   * network id, so this is the network the merged envelope is built for; when
-   * `signers` are supplied, signatures are also verified against its hash. A
-   * signature made on another network therefore fails verification rather than
-   * being merged.
-   */
-  networkPassphrase?: string;
-  /**
-   * The source account's Ed25519 signers (`G…`), when known. Supplying them
-   * turns on cryptographic verification; without them signatures are merged but
-   * labelled `unchecked`.
-   */
-  signers?: readonly string[];
-}
-
-export type MergeSignedEnvelopesResult =
-  | {
-      ok: true;
-      mergedXdr: string;
-      networkPassphrase: string;
-      facts: SignedEnvelopeFacts;
-      signatures: MergedSignature[];
-      duplicates: DuplicateSignature[];
-      conflicts: SignatureConflict[];
-    }
-  | {
-      ok: false;
-      error: string;
-      mismatches: EnvelopeMismatch[];
-    };
-
-export type EnvelopeMergeResult =
-  | {
-      ok: true;
-      /** The merged envelope, carrying exactly the base transaction body. */
-      envelopeXdr: string;
-      /** Transaction hash under the base envelope's network passphrase. */
-      hash: string;
-      addedSignatures: number;
-      duplicateSignatures: number;
-      totalSignatures: number;
-    }
-  | {
-      ok: false;
-      error: string;
-      /** The intent fields that differ, when the envelopes are not the same tx. */
-      differences: string[];
-    };
-
-interface ParsedEnvelope {
-  label: string;
-  tx: Transaction;
-  facts: SignedEnvelopeFacts;
-  signatures: Array<{ hint: string; signature: string }>;
-}
-
-type V1Envelope = xdr.TransactionEnvelopeTx;
-
-function decodeV1Envelope(input: SignedEnvelopeInput, label: string): V1Envelope | string {
-  try {
-    const envelope = xdr.TransactionEnvelope.fromXDR(input.xdr.trim(), "base64");
-    if (envelope.type !== "envelopeTypeTx") {
-      return `The ${label} envelope is a ${envelope.type}; only a regular v1 transaction envelope can be merged here.`;
-    }
-    return envelope;
-  } catch (error) {
-    return `The ${label} envelope could not be decoded: ${
-      error instanceof Error ? error.message : String(error)
-    }`;
-  }
-}
-
-function signatureKey(signature: xdr.DecoratedSignature): string {
-  return `${signature.hint.toXDR("hex")}:${signature.signature.toXDR("hex")}`;
-}
-
-/**
- * Describe every intent field that differs between two transaction bodies.
- *
- * Operations are compared as whole XDR values (which includes their Soroban
- * authorization entries), and auth entries are also compared separately so a
- * failure names the security-sensitive part rather than just "operations".
- */
-function intentDifferences(base: xdr.Transaction, incoming: xdr.Transaction): string[] {
-  const differences = new Set<string>();
-  if (base.sourceAccount.toXDR("base64") !== incoming.sourceAccount.toXDR("base64")) {
-    differences.add("source account");
-  }
-  if (base.fee !== incoming.fee) differences.add("fee");
-  if (base.seqNum !== incoming.seqNum) differences.add("sequence number");
-  if (base.cond.toXDR("base64") !== incoming.cond.toXDR("base64")) {
-    differences.add("time bounds / preconditions");
-  }
-  if (base.memo.toXDR("base64") !== incoming.memo.toXDR("base64")) differences.add("memo");
-  if (base.ext.toXDR("base64") !== incoming.ext.toXDR("base64")) {
-    differences.add("Soroban transaction data");
-  }
-
-  if (base.operations.length !== incoming.operations.length) {
-    differences.add("operations");
-    return [...differences];
-  }
-
-  let operationsDiffer = false;
-  let authEntriesDiffer = false;
-  for (let index = 0; index < base.operations.length; index += 1) {
-    const baseOp = base.operations[index]!;
-    const incomingOp = incoming.operations[index]!;
-    if (baseOp.toXDR("base64") !== incomingOp.toXDR("base64")) operationsDiffer = true;
-
-    const baseAuth =
-      baseOp.body.type === "invokeHostFunction" ? baseOp.body.invokeHostFunctionOp.auth : [];
-    const incomingAuth =
-      incomingOp.body.type === "invokeHostFunction"
-        ? incomingOp.body.invokeHostFunctionOp.auth
-        : [];
-    const authOf = (entries: xdr.SorobanAuthorizationEntry[]): string =>
-      entries.map((entry) => entry.toXDR("base64")).join("\u0000");
-    if (authOf(baseAuth) !== authOf(incomingAuth)) authEntriesDiffer = true;
-  }
-  if (operationsDiffer) differences.add("operations");
-  if (authEntriesDiffer) differences.add("Soroban authorization entries");
-  return [...differences];
-}
-
-function mergeTwoEnvelopes(
-  baseInput: SignedEnvelopeInput,
-  incomingInput: SignedEnvelopeInput,
-): EnvelopeMergeResult {
-  const basePassphrase = baseInput.networkPassphrase ?? NETWORK.passphrase;
-  const incomingPassphrase = incomingInput.networkPassphrase ?? NETWORK.passphrase;
-  if (baseInput.networkPassphrase !== incomingInput.networkPassphrase) {
-    return {
-      ok: false,
-      error:
-        "The envelopes target different networks, so they cannot carry the same transaction. A signature collected for one network cannot authorize a transaction on another; rebuild both for the same network.",
-      differences: ["network"],
-    };
-  }
-
-  const base = decodeV1Envelope(baseInput, "base");
-  if (typeof base === "string") return { ok: false, error: base, differences: [] };
-  const incoming = decodeV1Envelope(incomingInput, "incoming");
-  if (typeof incoming === "string") return { ok: false, error: incoming, differences: [] };
-
-  const differences = intentDifferences(base.v1.tx, incoming.v1.tx);
-  if (differences.length > 0) {
-    return {
-      ok: false,
-      error: `The envelopes do not carry the same transaction (${differences.join(", ")}). Merging signatures would change what the signers approved, so it is refused.`,
-      differences,
-    };
-  }
-
-  const merged = [...base.v1.signatures];
-  const seen = new Set(merged.map(signatureKey));
-  let addedSignatures = 0;
-  let duplicateSignatures = 0;
-  for (const signature of incoming.v1.signatures) {
-    const key = signatureKey(signature);
-    if (seen.has(key)) {
-      duplicateSignatures += 1;
-      continue;
-    }
-    seen.add(key);
-    merged.push(signature);
-    addedSignatures += 1;
-  }
-
-  const envelope = xdr.TransactionEnvelope.envelopeTypeTx(
-    new xdr.TransactionV1Envelope({ tx: base.v1.tx, signatures: merged }),
-  );
-  const envelopeXdr = envelope.toXDR("base64");
-  const hash = TransactionBuilder.fromXDR(envelopeXdr, basePassphrase).hash();
-
-  return {
-    ok: true,
-    envelopeXdr,
-    hash: toHex(new Uint8Array(hash)),
-    addedSignatures,
-    duplicateSignatures,
-    totalSignatures: merged.length,
-  };
-}
-
-function mergeMultiEnvelopes(params: MergeSignedEnvelopesParams): MergeSignedEnvelopesResult {
-  const networkPassphrase = params.networkPassphrase ?? NETWORK.passphrase;
-  if (params.envelopes.length === 0) {
-    return { ok: false, error: "Add at least one signed envelope to merge.", mismatches: [] };
-  }
-
-  const parsed: ParsedEnvelope[] = [];
-  for (const [index, input] of params.envelopes.entries()) {
-    const label = input.label?.trim() || `Envelope ${index + 1}`;
-    const decoded = decodeMultiEnvelope(input.xdr, networkPassphrase, label);
-    if (!decoded.ok) return { ok: false, error: decoded.error, mismatches: [] };
-    parsed.push({ label, ...decoded.value });
-  }
-
-  const reference = parsed[0]!;
-  const mismatches: EnvelopeMismatch[] = [];
-  for (const candidate of parsed.slice(1)) {
-    const fields: string[] = [];
-    if (candidate.facts.source !== reference.facts.source) fields.push("source account");
-    if (candidate.facts.sequence !== reference.facts.sequence) fields.push("sequence number");
-    if (JSON.stringify(candidate.facts.timeBounds) !== JSON.stringify(reference.facts.timeBounds)) {
-      fields.push("time bounds");
-    }
-    if (candidate.facts.fee !== reference.facts.fee) fields.push("fee");
-    if (candidate.facts.bodyXdr !== reference.facts.bodyXdr) {
-      fields.push("memo, operations, or authorization payload");
-    }
-    if (fields.length > 0) mismatches.push({ label: candidate.label, fields });
-  }
-  if (mismatches.length > 0) {
-    const detail = mismatches
-      .map((mismatch) => `${mismatch.label} differs in ${mismatch.fields.join(", ")}`)
-      .join("; ");
-    return {
-      ok: false,
-      error: `Refusing to merge incompatible envelopes: ${detail}. No signatures were combined.`,
-      mismatches,
-    };
-  }
-
-  const knownHints = knownSignersByHint(params.signers ?? []);
-  const unique = new Map<string, MergedSignature>();
-  const byHint = new Map<string, Set<string>>();
-
-  for (const envelope of parsed) {
-    for (const signature of envelope.signatures) {
-      const key = `${signature.hint}:${signature.signature}`;
-      const existing = unique.get(key);
-      if (existing) {
-        if (!existing.sources.includes(envelope.label)) existing.sources.push(envelope.label);
-      } else {
-        unique.set(key, {
-          hint: signature.hint,
-          signature: signature.signature,
-          sources: [envelope.label],
-          verification: "unchecked",
-        });
-      }
-      const hintSet = byHint.get(signature.hint) ?? new Set<string>();
-      hintSet.add(signature.signature);
-      byHint.set(signature.hint, hintSet);
-    }
-  }
-
-  // Verify only where the hint identifies exactly one known signer. A hint with
-  // no match may be a signer added since the last account read; attributing it
-  // to the wrong key would be worse than leaving it unchecked.
-  if (params.signers && params.signers.length > 0) {
-    const hashBytes = reference.tx.hash();
-    for (const signature of unique.values()) {
-      const candidates = knownHints.get(signature.hint) ?? [];
-      if (candidates.length !== 1) continue;
-      const key = candidates[0]!;
-      let valid = false;
-      try {
-        valid = Keypair.fromPublicKey(key).verify(hashBytes, base64ToBytes(signature.signature));
-      } catch {
-        valid = false;
-      }
-      if (!valid) {
-        return {
-          ok: false,
-          error:
-            `${signature.sources[0]} carries a signature for ${key} that does not verify on this network. ` +
-            "It was likely produced for another network or a different transaction; no signatures were combined.",
-          mismatches: [],
-        };
-      }
-      signature.verification = "verified";
-    }
-  }
-
-  const signatures = [...unique.values()].sort((left, right) =>
-    left.hint === right.hint
-      ? left.signature.localeCompare(right.signature)
-      : left.hint.localeCompare(right.hint),
-  );
-  const duplicates: DuplicateSignature[] = signatures
-    .filter((signature) => signature.sources.length > 1)
-    .map((signature) => ({
-      hint: signature.hint,
-      signature: signature.signature,
-      sources: [...signature.sources],
-    }));
-  const conflicts: SignatureConflict[] = [...byHint.entries()]
-    .filter(([, values]) => values.size > 1)
-    .map(([hint, values]) => {
-      const conflicting = [...values].sort();
-      return {
-        hint,
-        signatures: conflicting,
-        sources: [
-          ...new Set(
-            conflicting.flatMap((signature) => unique.get(`${hint}:${signature}`)?.sources ?? []),
-          ),
-        ].sort(),
-      };
-    })
-    .sort((left, right) => left.hint.localeCompare(right.hint));
-
-  const referenceEnvelope = (
-    reference.tx.toEnvelope() as unknown as { v1: xdr.TransactionV1Envelope }
-  ).v1;
-  const merged = xdr.TransactionEnvelope.envelopeTypeTx(
-    new xdr.TransactionV1Envelope({
-      tx: referenceEnvelope.tx,
-      signatures: signatures.map(
-        (signature) =>
-          new xdr.DecoratedSignature({
-            hint: hexToBytes(signature.hint),
-            signature: base64ToBytes(signature.signature),
-          }),
-      ),
-    }),
-  );
-
-  return {
-    ok: true,
-    mergedXdr: merged.toXDR("base64"),
-    networkPassphrase,
-    facts: reference.facts,
-    signatures,
-    duplicates,
-    conflicts,
-  };
-}
-
-export function mergeSignedEnvelopes(
-  baseInput: SignedEnvelopeInput,
-  incomingInput: SignedEnvelopeInput,
-): EnvelopeMergeResult;
-export function mergeSignedEnvelopes(
-  params: MergeSignedEnvelopesParams,
-): MergeSignedEnvelopesResult;
-export function mergeSignedEnvelopes(
-  first: SignedEnvelopeInput | MergeSignedEnvelopesParams,
-  second?: SignedEnvelopeInput,
-): EnvelopeMergeResult | MergeSignedEnvelopesResult {
-  if (second !== undefined) {
-    return mergeTwoEnvelopes(first as SignedEnvelopeInput, second);
-  }
-  return mergeMultiEnvelopes(first as MergeSignedEnvelopesParams);
-}
-
-function decodeMultiEnvelope(
-  xdrString: string,
-  networkPassphrase: string,
-  label: string,
-): { ok: true; value: Omit<ParsedEnvelope, "label"> } | { ok: false; error: string } {
-  let tx: Transaction;
-  try {
-    const decoded = TransactionBuilder.fromXDR(xdrString.trim(), networkPassphrase);
-    if (!(decoded instanceof Transaction)) {
-      return { ok: false, error: `${label} is a fee-bump envelope, which cannot be merged here.` };
-    }
-    tx = decoded;
-  } catch (error) {
-    return {
-      ok: false,
-      error: `${label} could not be decoded: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-
-  const envelope = tx.toEnvelope();
-  if (envelope.type !== "envelopeTypeTx") {
-    return { ok: false, error: `${label} is a legacy (v0) envelope and cannot be merged here.` };
-  }
-
-  const timeBounds = tx.timeBounds
-    ? {
-        minTime: String(tx.timeBounds.minTime ?? "0"),
-        maxTime: String(tx.timeBounds.maxTime ?? "0"),
-      }
-    : null;
-
-  return {
-    ok: true,
-    value: {
-      tx,
-      facts: {
-        source: tx.source,
-        sequence: tx.sequence,
-        fee: String(tx.fee),
-        timeBounds,
-        bodyXdr: envelope.v1.tx.toXDR("base64"),
-        hash: bytesToHex(tx.hash()),
-      },
-      signatures: envelope.v1.signatures.map((decorated) => ({
-        hint: bytesToHex(decorated.hint.value),
-        signature: bytesToBase64(decorated.signature.value),
-      })),
-    },
-  };
-}
-
-function knownSignersByHint(signers: readonly string[]): Map<string, string[]> {
-  const byHint = new Map<string, string[]>();
-  for (const signer of signers) {
-    let hint: string;
-    try {
-      hint = bytesToHex(StrKey.decodeEd25519PublicKey(signer).subarray(-4));
-    } catch {
-      continue;
-    }
-    byHint.set(hint, [...(byHint.get(hint) ?? []), signer]);
-  }
-  return byHint;
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function hexToBytes(value: string): Uint8Array {
-  if (value.length % 2 !== 0 || /[^0-9a-f]/i.test(value)) {
-    throw new Error(`Invalid hex value: ${value}`);
-  }
-  const bytes = new Uint8Array(value.length / 2);
-  for (let index = 0; index < bytes.length; index += 1) {
-    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
-  }
-  return bytes;
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-function base64ToBytes(value: string): Uint8Array {
-  const binary = atob(value);
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }

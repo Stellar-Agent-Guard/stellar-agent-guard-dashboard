@@ -46,8 +46,8 @@ export function defaultHorizonUrl(): string {
 }
 
 interface HorizonSignerRecord {
-  key?: unknown;
-  weight?: unknown;
+  key: string;
+  weight: number;
   /** Horizon's signer type: `ed25519_public_key`, `sha256_hash`, … */
   type?: string;
 }
@@ -76,15 +76,8 @@ export function signerKind(type: string | undefined): SignerKind {
 }
 
 interface HorizonAccountRecord {
-  signers?: unknown;
-  thresholds?: unknown;
-}
-
-export interface MultisigAccountSnapshot {
-  signers: MultisigSigner[];
-  thresholds: MultisigThresholds | null;
-  observedAt: string;
-  incompleteReasons: string[];
+  signers: HorizonSignerRecord[];
+  thresholds: MultisigThresholds;
 }
 
 /** Labels are derived deterministically so tests and UI agree on them. */
@@ -105,72 +98,18 @@ function toHex(bytes: Uint8Array): string {
 export async function readAccountSigners(
   server: Horizon.Server,
   accountId: string,
-  now: () => Date = () => new Date(),
-): Promise<HorizonReadResult<MultisigAccountSnapshot>> {
+): Promise<HorizonReadResult<{ signers: MultisigSigner[]; thresholds: MultisigThresholds }>> {
   try {
     const record = (await server.accounts().accountId(accountId).call()) as HorizonAccountRecord;
-    const incompleteReasons: string[] = [];
-    const signers: MultisigSigner[] = [];
-    if (!Array.isArray(record.signers)) {
-      incompleteReasons.push("Horizon did not return a complete signer list.");
-    } else {
-      record.signers.forEach((value, index) => {
-        if (typeof value !== "object" || value === null) {
-          incompleteReasons.push(
-            `Horizon returned an invalid signer record at position ${index + 1}.`,
-          );
-          return;
-        }
-        const signer = value as HorizonSignerRecord;
-        if (
-          typeof signer.key !== "string" ||
-          !Number.isInteger(signer.weight) ||
-          (signer.weight as number) < 0 ||
-          (signer.weight as number) > 255
-        ) {
-          incompleteReasons.push(
-            `Horizon returned incomplete signer data at position ${index + 1}.`,
-          );
-          return;
-        }
-        const kind = signerKind(typeof signer.type === "string" ? signer.type : undefined);
-        if (kind === "ed25519" && signerHint(signer.key) === null) {
-          incompleteReasons.push(
-            `Horizon returned an invalid Ed25519 signer key at position ${index + 1}.`,
-          );
-          return;
-        }
-        signers.push({
-          key: signer.key,
-          weight: signer.weight as number,
-          label: defaultSignerLabel(index),
-          kind,
-        });
-      });
-    }
-
-    const rawThresholds = record.thresholds as Partial<MultisigThresholds> | undefined;
-    const thresholdValues = rawThresholds
-      ? [rawThresholds.low_threshold, rawThresholds.med_threshold, rawThresholds.high_threshold]
-      : [];
-    const thresholds =
-      thresholdValues.length === 3 &&
-      thresholdValues.every(
-        (value) => Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 255,
-      )
-        ? {
-            low_threshold: rawThresholds!.low_threshold as number,
-            med_threshold: rawThresholds!.med_threshold as number,
-            high_threshold: rawThresholds!.high_threshold as number,
-          }
-        : null;
-    if (thresholds === null) {
-      incompleteReasons.push("Horizon did not return all valid account thresholds.");
-    }
-
+    const signers: MultisigSigner[] = record.signers.map((signer, index) => ({
+      key: signer.key,
+      weight: signer.weight,
+      label: defaultSignerLabel(index),
+      kind: signerKind(signer.type),
+    }));
     return {
       ok: true,
-      value: { signers, thresholds, observedAt: now().toISOString(), incompleteReasons },
+      value: { signers, thresholds: record.thresholds },
     };
   } catch (error) {
     return {

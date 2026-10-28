@@ -117,12 +117,8 @@ test.describe("E2E panic flow: freeze verification requires fresh on-chain read 
     await dialog.getByRole("button", { name: "Sign freeze" }).click();
 
     // Verified message MUST NOT appear on delayed/failed read
-    await expect(
-      page.getByText(/Freeze (NOT confirmed|submitted — verification delayed)/),
-    ).toBeVisible();
-    const errorNotice = page.locator(".error", {
-      hasText: /Freeze (NOT confirmed|submitted — verification delayed)/,
-    });
+    await expect(page.getByText("Freeze NOT confirmed")).toBeVisible();
+    const errorNotice = page.locator(".error", { hasText: "Freeze NOT confirmed" });
     await expect(errorNotice).toContainText("could not be re-read to confirm its effect");
     await expect(page.getByText("Freeze confirmed on chain")).toHaveCount(0);
 

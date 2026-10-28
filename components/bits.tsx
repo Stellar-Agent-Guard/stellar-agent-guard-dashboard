@@ -15,8 +15,6 @@ import {
   formatStroopsWithUnit,
   type FormatStroopsOptions,
 } from "../lib/guard/formatters.ts";
-import { classifyFailure } from "../lib/guard/recoveryGuidance.ts";
-import { RecoveryGuidanceBlock } from "./RecoveryGuidance.tsx";
 
 export function Tabs() {
   const pathname = usePathname();
@@ -95,29 +93,11 @@ export function WarningBanner({
   );
 }
 
-export function ErrorBlock({
-  title,
-  detail,
-  context = "read",
-  stage,
-}: {
-  title: string;
-  detail: string;
-  /** Reads are safe to repeat; writes may already be in flight. */
-  context?: "read" | "write";
-  /** The write stage, when the caller knows it, sharpens the guidance. */
-  stage?: "discovery" | "enforcement" | "submission";
-}) {
-  const guidance = classifyFailure({
-    message: detail,
-    context,
-    ...(stage !== undefined ? { stage } : {}),
-  });
+export function ErrorBlock({ title, detail }: { title: string; detail: string }) {
   return (
     <div className="error">
       <span className="t">{title}</span>
       <span className="mono">{detail}</span>
-      <RecoveryGuidanceBlock guidance={guidance} />
     </div>
   );
 }

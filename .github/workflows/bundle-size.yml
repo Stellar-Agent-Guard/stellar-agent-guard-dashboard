@@ -202,7 +202,8 @@ jobs:
                 marker,
                 "## Bundle size report",
                 "",
-                "The bundle-size analysis run did not produce a report" + reason + ".",
+                "The bundle-size analysis run did not produce a report" +
+                  `${process.env.conclusion === "timeout" ? " (timed out waiting for it)" : ""}.`,
                 "Check the `bundle-size` workflow logs on this pull request.",
               ].join("\n");
             }

@@ -6,7 +6,6 @@ import { Tabs } from "./bits.tsx";
 import { AriaAnnouncer } from "./AriaAnnouncer.tsx";
 import { ThemeProvider } from "./ThemeProvider.tsx";
 import { PrivacyToggle, ThemeToggle } from "./ThemeToggle.tsx";
-import { SIDEBAR_COLLAPSED_STORAGE_KEY } from "../lib/guard/presentationStorageKeys.ts";
 
 /**
  * Layout shell providing:
@@ -24,7 +23,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
 
   // Load sidebar state from localStorage
   useEffect(() => {
-    const saved = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
+    const saved = localStorage.getItem("sidebar-collapsed");
     if (saved === "true" || saved === "false") {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setSidebarCollapsed(saved === "true");
@@ -33,7 +32,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
 
   // Save sidebar state to localStorage when it changes
   useEffect(() => {
-    localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(sidebarCollapsed));
+    localStorage.setItem("sidebar-collapsed", String(sidebarCollapsed));
   }, [sidebarCollapsed]);
 
   // Handle touch gestures for mobile drawer
