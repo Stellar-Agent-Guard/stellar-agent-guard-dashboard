@@ -12,7 +12,6 @@ import { StatusPanel } from "../../components/StatusPanel.tsx";
 import { TxHistoryTable } from "../../components/TxHistoryTable.tsx";
 import { TelemetryFeed } from "../../components/TelemetryFeed.tsx";
 import { GuardContext, GuardEventsContext } from "../../components/GuardProvider.tsx";
-import { POLL_OFF } from "../../lib/guard/feedHealth.ts";
 import { TX_HISTORY_STORAGE_KEY, type TxHistoryEntry } from "../../lib/guard/txHistory.ts";
 import type { GuardSnapshot } from "../../lib/guard/guardOps.ts";
 
@@ -74,14 +73,9 @@ const TEST_GUARD = {
     guards: [],
     capped: 0,
     cappedLabels: [],
-    health: POLL_OFF,
-    gaps: [],
   },
   startWatching: () => {},
   stopWatching: () => {},
-  tailSelection: [],
-  toggleTailedGuard: () => {},
-  exportRange: null,
   stream: { paused: false, pendingCount: 0, dropped: 0 },
   pauseStream: () => {},
   resumeStream: () => {},
@@ -318,26 +312,20 @@ test("TelemetryFeed passes axe-core with severity tiers on every row kind", asyn
 
 test("TxHistoryTable passes automated axe-core WCAG 2.1 AA checks", async () => {
   // Seed the store so the scan sees the populated table, not just empty state.
-  // The timestamps are relative to now: loadTxHistory prunes records older than
-  // TX_HISTORY_MAX_AGE_DAYS, so a fixed date would eventually seed nothing.
   const seeded: TxHistoryEntry[] = [
     {
       hash: "abc123def456",
       operation: "set_policy",
       status: "confirmed",
       feeStroops: "310",
-      networkName: null,
-      networkPassphrase: null,
-      recordedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      recordedAt: "2026-09-24T10:00:00.000Z",
     },
     {
       hash: "789xyz012345",
       operation: "freeze",
       status: "failed",
       feeStroops: "100",
-      networkName: null,
-      networkPassphrase: null,
-      recordedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      recordedAt: "2026-09-23T09:30:00.000Z",
     },
   ];
   window.localStorage.setItem(TX_HISTORY_STORAGE_KEY, JSON.stringify(seeded));

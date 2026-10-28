@@ -2,8 +2,6 @@ export type Density = "comfortable" | "compact";
 
 export type Unsubscribe = () => void;
 
-export const DENSITY_STORAGE_KEY = "display-density";
-
 export interface DensityStore {
   subscribe(fn: (value: Density) => void): Unsubscribe;
   set(value: Density): void;
@@ -51,7 +49,7 @@ export const density = createDensityStore("comfortable");
  */
 export function initDensityStore() {
   if (typeof localStorage !== "undefined") {
-    const saved = localStorage.getItem(DENSITY_STORAGE_KEY);
+    const saved = localStorage.getItem("display-density");
     if (saved === "comfortable" || saved === "compact") {
       density.set(saved);
     } else {
@@ -63,7 +61,7 @@ export function initDensityStore() {
   return density.subscribe((value) => {
     if (typeof localStorage !== "undefined") {
       try {
-        localStorage.setItem(DENSITY_STORAGE_KEY, value);
+        localStorage.setItem("display-density", value);
       } catch {
         // QuotaExceeded or security error in private mode
       }

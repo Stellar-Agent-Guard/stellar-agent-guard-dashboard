@@ -111,38 +111,33 @@ function derivePolicy(
   status: ReadResult<GuardStatus>,
   policy: ReadResult<PolicyConfig | null>,
 ): SetupStep {
-  if (!status.ok || !policy.ok) {
-    const failures = [
-      !status.ok ? `status(): ${status.error}` : null,
-      !policy.ok ? `policy(): ${policy.error}` : null,
-    ].filter((failure): failure is string => failure !== null);
+  if (status.ok) {
+    const hasPolicy = status.value.has_policy;
     return {
       id: "policy",
       label: SETUP_STEPS[2]!.label,
-      state: "error",
-      detail: `A required chain read failed: ${failures.join("; ")}`,
+      state: hasPolicy ? "done" : "pending",
+      detail: hasPolicy
+        ? "status() reports a policy in force"
+        : "status() reports no policy — the account is in default-deny and refuses every call",
     };
   }
-
-  const statusHasPolicy = status.value.has_policy;
-  const policyHasPolicy = policy.value !== null;
-  if (statusHasPolicy !== policyHasPolicy) {
+  if (policy.ok) {
+    const hasPolicy = policy.value !== null;
     return {
       id: "policy",
       label: SETUP_STEPS[2]!.label,
-      state: "error",
-      detail:
-        "status() and policy() returned inconsistent results; re-read the chain before continuing",
+      state: hasPolicy ? "done" : "pending",
+      detail: hasPolicy
+        ? "policy() returned a policy, though status() could not be read"
+        : "policy() returned none — the account is in default-deny",
     };
   }
-
   return {
     id: "policy",
     label: SETUP_STEPS[2]!.label,
-    state: statusHasPolicy ? "done" : "pending",
-    detail: statusHasPolicy
-      ? "status() and policy() both report a policy in force"
-      : "status() and policy() both report no policy — the account is in default-deny and refuses every call",
+    state: "error",
+    detail: `status() and policy() could not be read: ${status.error}`,
   };
 }
 
@@ -161,7 +156,7 @@ function deriveVerified(verified: ReadResult<{ hasPolicy: boolean }> | null): Se
       id: "verified",
       label: SETUP_STEPS[3]!.label,
       state: "error",
-      detail: `The live re-read failed: ${verified.error}. Still pending — the read-only retry re-reads the chain (it never repeats a write); only a confirmed read turns this green.`,
+      detail: `The live re-read failed: ${verified.error}. Still pending — retry; only a confirmed read turns this green.`,
     };
   }
   return {

@@ -29,18 +29,15 @@ import {
   type PolicyDraft,
 } from "./policyForm.ts";
 import { validateAssetCapOverrides, type AssetCapOverride } from "./assetCapsCsv.ts";
-import { NETWORK } from "./network.ts";
 
-export const POLICY_SCHEMA_VERSION = 2 as const;
+export const POLICY_SCHEMA_VERSION = 1 as const;
 
 // ---------------------------------------------------------------------------
-// On-disk shape (version 2)
+// On-disk shape (version 1)
 // ---------------------------------------------------------------------------
 
-export interface PolicyExportV2 {
-  version: 2;
-  /** Public network name; prevents applying a portable file to the wrong network. */
-  network: string;
+export interface PolicyExportV1 {
+  version: 1;
   max_amount_per_tx: string;
   window_cap: string;
   window_seconds: string;
@@ -77,70 +74,43 @@ function addressField(label: string) {
   return z.string().refine(isValidAddress, { message: `${label} is not a valid Stellar address` });
 }
 
-function contractAddressField(label: string) {
-  return addressField(label).refine((value) => value.startsWith("C"), {
-    message: `${label} must be a Stellar contract address (C…)`,
-  });
-}
-
-function accountAddressField(label: string) {
-  return addressField(label).refine((value) => value.startsWith("G"), {
-    message: `${label} must be a Stellar account address (G…)`,
-  });
-}
-
 /** A cap/duration field: digits only, blank means "off" (0). Rejects negative values by construction. */
 function nonNegativeAmountField(label: string) {
   return z.string().refine((value) => /^\d*$/.test(value), {
-    message: `${label} must be a non-negative whole number of units (digits only), blank to disable; maximum i128 value`,
+    message: `${label} must be a non-negative whole number of units (digits only), or blank to disable`,
   });
 }
 
 const protocolRuleSchema = z.object({
-  contract: contractAddressField("allowed_protocols contract"),
+  contract: addressField("allowed_protocols contract"),
   functions: z
     .array(z.string().min(1, "allowed_protocols function name cannot be blank"))
     .nullable(),
 });
 
 const assetCapEntrySchema = z.object({
-  asset_contract_address: contractAddressField("per_asset_caps asset_contract_address"),
-  max_cap_stroops: z
-    .string()
-    .refine(
-      (value) =>
-        /^\d+$/.test(value) &&
-        BigInt(value) > 0n &&
-        BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER),
-      {
-        message:
-          "per_asset_caps max_cap_stroops must be a positive whole number not exceeding i128 max",
-      },
-    ),
+  asset_contract_address: addressField("per_asset_caps asset_contract_address"),
+  max_cap_stroops: z.string().refine((value) => /^\d+$/.test(value) && BigInt(value) > 0n, {
+    message: "per_asset_caps max_cap_stroops must be a positive whole number",
+  }),
   symbol: z.string().min(1, "per_asset_caps symbol is required"),
 });
 
-const amountFieldSchema = z.string().refine((value) => /^\d*$/.test(value), {
-  message:
-    "amount must be a non-negative whole number of units (digits only), blank to disable; maximum i128 value",
-});
-
-export const policyExportSchemaV2 = z.object({
+export const policyExportSchemaV1 = z.object({
   version: z.number().refine((value) => value === POLICY_SCHEMA_VERSION, {
     message: `Unknown schema version; this build only supports version ${POLICY_SCHEMA_VERSION}`,
   }),
-  network: z.string().min(1, "network is required"),
-  max_amount_per_tx: amountFieldSchema,
-  window_cap: amountFieldSchema,
-  window_seconds: amountFieldSchema,
-  dead_man_switch_seconds: amountFieldSchema,
+  max_amount_per_tx: nonNegativeAmountField("max_amount_per_tx"),
+  window_cap: nonNegativeAmountField("window_cap"),
+  window_seconds: nonNegativeAmountField("window_seconds"),
+  dead_man_switch_seconds: nonNegativeAmountField("dead_man_switch_seconds"),
   allowed_protocols: z.array(protocolRuleSchema),
-  denied_recipients: z.array(accountAddressField("denied_recipients")),
+  denied_recipients: z.array(addressField("denied_recipients")),
   per_asset_caps: z.array(assetCapEntrySchema),
-  assets: z.array(contractAddressField("assets")),
+  assets: z.array(addressField("assets")),
   allow_any_recipient: z.boolean(),
-  active_from: amountFieldSchema,
-  active_until: amountFieldSchema,
+  active_from: nonNegativeAmountField("active_from"),
+  active_until: nonNegativeAmountField("active_until"),
   paused: z.boolean(),
 });
 
@@ -165,7 +135,7 @@ function formatPath(path: ReadonlyArray<PropertyKey>): string {
 }
 
 // ---------------------------------------------------------------------------
-// Export: PolicyConfig + asset caps + network -> PolicyExportV2 -> JSON text
+// Export: PolicyConfig + asset caps -> PolicyExportV1 -> JSON text
 // ---------------------------------------------------------------------------
 
 function renderAmount(value: bigint): string {
@@ -175,11 +145,9 @@ function renderAmount(value: bigint): string {
 export function policyToExport(
   config: PolicyConfig,
   assetCaps: AssetCapOverride[],
-  network: string = NETWORK.name,
-): PolicyExportV2 {
+): PolicyExportV1 {
   return {
     version: POLICY_SCHEMA_VERSION,
-    network,
     max_amount_per_tx: renderAmount(config.per_tx_cap),
     window_cap: renderAmount(config.window_cap),
     window_seconds: renderAmount(config.window_secs),
@@ -203,13 +171,10 @@ export function policyToExport(
 }
 
 /** Serialized file text, matching the trailing-newline convention used by exportAssetCapsJson. */
-export function exportPolicyToJson(
-  config: PolicyConfig,
-  assetCaps: AssetCapOverride[],
-  network: string = NETWORK.name,
-): string {
-  return `${JSON.stringify(policyToExport(config, assetCaps, network), null, 2)}\n`;
+export function exportPolicyToJson(config: PolicyConfig, assetCaps: AssetCapOverride[]): string {
+  return `${JSON.stringify(policyToExport(config, assetCaps), null, 2)}\n`;
 }
+
 /** `YYYY-MM-DDTHH-mm-ss-sssZ.guard-policy.json`, filesystem-safe on every OS. */
 export function policyExportFilename(now: Date = new Date()): string {
   const stamp = now.toISOString().replace(/[:.]/g, "-");
@@ -224,10 +189,7 @@ export type PolicyExportOutcome =
  * overrides, which `buildPolicyConfig` does not check on its own) and, if
  * valid, produces the file text and a timestamped filename.
  */
-export function exportPolicyDraft(
-  draft: PolicyDraft,
-  network: string = NETWORK.name,
-): PolicyExportOutcome {
+export function exportPolicyDraft(draft: PolicyDraft): PolicyExportOutcome {
   const assetCapIssues: FieldIssue[] = validateAssetCapOverrides(draft.assetCaps).map(
     (message) => ({
       field: "assetCaps",
@@ -243,13 +205,13 @@ export function exportPolicyDraft(
 
   return {
     ok: true,
-    json: exportPolicyToJson(built.config, draft.assetCaps, network),
+    json: exportPolicyToJson(built.config, draft.assetCaps),
     filename: policyExportFilename(),
   };
 }
 
 // ---------------------------------------------------------------------------
-// Import: JSON text -> PolicyExportV2 (validated for the active network) -> PolicyDraft
+// Import: JSON text -> PolicyExportV1 (validated) -> PolicyDraft
 // ---------------------------------------------------------------------------
 
 function parseAmount(value: string): bigint {
@@ -259,10 +221,7 @@ function parseAmount(value: string): bigint {
 export type PolicyImportResult =
   { ok: true; draft: PolicyDraft } | { ok: false; issues: PolicyImportIssue[] };
 
-export function importPolicyFromJson(
-  source: string,
-  expectedNetwork: string = NETWORK.name,
-): PolicyImportResult {
+export function importPolicyFromJson(source: string): PolicyImportResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(source);
@@ -270,7 +229,7 @@ export function importPolicyFromJson(
     return { ok: false, issues: [{ path: "", message: "The JSON file is not valid JSON" }] };
   }
 
-  const result = policyExportSchemaV2.safeParse(parsed);
+  const result = policyExportSchemaV1.safeParse(parsed);
   if (!result.success) {
     return {
       ok: false,
@@ -282,20 +241,6 @@ export function importPolicyFromJson(
   }
 
   const data = result.data;
-  if (data.network !== expectedNetwork) {
-    return {
-      ok: false,
-      issues: [
-        {
-          path: "network",
-          message:
-            `This file targets "${data.network}", but the dashboard is configured for "${expectedNetwork}". ` +
-            "Switch networks or import a matching export.",
-        },
-      ],
-    };
-  }
-
   const config: PolicyConfig = {
     per_tx_cap: parseAmount(data.max_amount_per_tx),
     window_cap: parseAmount(data.window_cap),

@@ -90,7 +90,7 @@ export function transitionsBetween(previous: StatusFlags, next: StatusFlags): St
  * which the write path has already announced, so the poll's observation is
  * polite corroboration rather than an interruption.
  */
-export function transitionCopy(transition: StatusTransition, guard?: string): Spoken {
+export function transitionCopy(transition: StatusTransition): Spoken {
   const copy: Record<StatusTransition, Spoken> = {
     frozen: { message: "On-chain state: the account is frozen", priority: "polite" },
     unfrozen: { message: "On-chain state: the account is no longer frozen", priority: "polite" },
@@ -111,8 +111,7 @@ export function transitionCopy(transition: StatusTransition, guard?: string): Sp
       priority: "assertive",
     },
   };
-  const spoken = copy[transition];
-  return guard ? { ...spoken, message: `${spoken.message} for guard ${guard}` } : spoken;
+  return copy[transition];
 }
 
 /** Where a message goes. Injectable so the transition table can be counted in tests. */
@@ -221,7 +220,7 @@ export function createStatusAnnouncer(options: StatusAnnouncerOptions = {}): Sta
       );
       last = { guard: snapshot.guard, flags };
       for (const transition of transitions) {
-        const spoken = transitionCopy(transition, snapshot.guard);
+        const spoken = transitionCopy(transition);
         emit(spoken.message, spoken.priority);
       }
       return transitions;

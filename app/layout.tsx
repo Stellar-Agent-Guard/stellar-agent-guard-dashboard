@@ -7,9 +7,7 @@ import { PwaRegistrar } from "../components/PwaRegistrar.tsx";
 import { ThemeProvider } from "../components/ThemeProvider.tsx";
 import { ThemeToggle } from "../components/ThemeToggle.tsx";
 import { ToastContainer } from "../components/ToastContainer.tsx";
-import { UnsavedChangesProvider } from "../components/UnsavedChangesProvider.tsx";
 import { PWA_MANIFEST_PATH, PWA_THEME_COLOR } from "../lib/guard/pwa.ts";
-import { NETWORK } from "../lib/guard/network.ts";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -68,32 +66,27 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <AriaAnnouncer />
           <ToastContainer />
           <SecretKeyGuard />
-          <UnsavedChangesProvider>
-            <div className="shell">
-              <DemoBadge />
-              <header className="top">
-                <div className="brand">
-                  <h1>Stellar Agent Guard</h1>
-                  <span>operator console</span>
-                </div>
-                <div className="row">
-                  <span className="pill">{NETWORK.name}</span>
-                  <a href="https://github.com/aigbagbobila/stellar-agent-guard-contracts">
-                    contracts
-                  </a>
-                  <a href="https://github.com/aigbagbobila/stellar-agent-guard-sdk">sdk</a>
-                </div>
-              </header>
-              <div
-                className="row"
-                style={{ justifyContent: "space-between", marginBottom: "16px" }}
-              >
-                <Tabs />
-                <ThemeToggle />
+          <div className="shell">
+            <DemoBadge />
+            <header className="top">
+              <div className="brand">
+                <h1>Stellar Agent Guard</h1>
+                <span>operator console</span>
               </div>
-              {children}
+              <div className="row">
+                <span className="pill">Soroban testnet</span>
+                <a href="https://github.com/aigbagbobila/stellar-agent-guard-contracts">
+                  contracts
+                </a>
+                <a href="https://github.com/aigbagbobila/stellar-agent-guard-sdk">sdk</a>
+              </div>
+            </header>
+            <div className="row" style={{ justifyContent: "space-between", marginBottom: "16px" }}>
+              <Tabs />
+              <ThemeToggle />
             </div>
-          </UnsavedChangesProvider>
+            {children}
+          </div>
         </ThemeProvider>
       </body>
     </html>

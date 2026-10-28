@@ -32,8 +32,6 @@ export interface InitParameters {
 
 /** A dead-man grace shorter than this can be out-raced by the very delay it guards against. */
 export const MIN_DMS_SECONDS = 300n;
-const MAX_I128 = (1n << 127n) - 1n;
-const MAX_U64 = (1n << 64n) - 1n;
 
 export type CheckId =
   "separation-of-duties" | "dms-duration" | "window-covers-per-tx" | "spend-caps-positive";
@@ -68,13 +66,12 @@ function isStellarAddress(value: string): boolean {
 }
 
 /** Parse a whole non-negative number, or `null` when blank / not an integer. */
-function parseAmount(value: string, maximum: bigint): bigint | null {
+function parseAmount(value: string): bigint | null {
   const trimmed = value.trim();
   if (trimmed === "") return null;
   if (!/^\d+$/.test(trimmed)) return null;
   try {
-    const parsed = BigInt(trimmed);
-    return parsed <= maximum ? parsed : null;
+    return BigInt(trimmed);
   } catch {
     return null;
   }
@@ -111,7 +108,7 @@ export function validateInitParameters(params: InitParameters): InitValidation {
             : "The admin and the agent are distinct accounts.",
   });
 
-  const dms = parseAmount(params.dmsDurationSecs, MAX_U64);
+  const dms = parseAmount(params.dmsDurationSecs);
   const dmsPassed = dms !== null && dms >= MIN_DMS_SECONDS;
   checks.push({
     id: "dms-duration",
@@ -126,8 +123,8 @@ export function validateInitParameters(params: InitParameters): InitValidation {
           : `Grace of ${dms}s meets the minimum.`,
   });
 
-  const perTxCap = parseAmount(params.perTxCap, MAX_I128);
-  const windowCap = parseAmount(params.windowCap, MAX_I128);
+  const perTxCap = parseAmount(params.perTxCap);
+  const windowCap = parseAmount(params.windowCap);
 
   // The window cap must be at least the per-transaction cap: a smaller window
   // than a single allowed transaction means the window can never be filled by a
@@ -160,40 +157,4 @@ export function validateInitParameters(params: InitParameters): InitValidation {
 
   const blockers = checks.filter((check) => !check.passed && check.fatal);
   return { checks, blockers, canDeploy: blockers.length === 0 };
-}
-
-/** Field-level messages for the initialization inputs, including range errors. */
-export function validateInitFormFields(
-  params: InitParameters & { agentPubkey: string },
-): Record<string, string> {
-  const errors: Record<string, string> = {};
-  const agent = params.agentAddress.trim();
-  if (!isStellarAddress(agent)) {
-    errors.agentAddress = "Enter a valid Stellar account address.";
-  } else if (agent === params.adminAddress.trim()) {
-    errors.agentAddress = "The agent address must differ from the admin wallet.";
-  }
-
-  const dms = parseAmount(params.dmsDurationSecs, MAX_U64);
-  if (dms === null) {
-    errors.dmsDurationSecs = `Enter whole seconds from 300 to ${MAX_U64}.`;
-  } else if (dms < MIN_DMS_SECONDS) {
-    errors.dmsDurationSecs = `Set the dead-man grace to at least ${MIN_DMS_SECONDS} seconds.`;
-  }
-
-  const perTx = parseAmount(params.perTxCap, MAX_I128);
-  const window = parseAmount(params.windowCap, MAX_I128);
-  if (perTx === null || perTx <= 0n) {
-    errors.perTxCap = `Enter a positive whole-number cap no greater than ${MAX_I128}.`;
-  }
-  if (window === null || window <= 0n) {
-    errors.windowCap = `Enter a positive whole-number cap no greater than ${MAX_I128}.`;
-  } else if (perTx !== null && window < perTx) {
-    errors.windowCap = `The rolling-window cap must be at least the per-transaction cap (${perTx}).`;
-  }
-
-  if (!/^[0-9a-fA-F]{64}$/.test(params.agentPubkey.trim())) {
-    errors.agentPubkey = "Enter exactly 64 hexadecimal characters (32 bytes).";
-  }
-  return errors;
 }

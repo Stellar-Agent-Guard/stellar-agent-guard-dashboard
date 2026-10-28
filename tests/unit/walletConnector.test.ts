@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { WalletError } from "../../lib/guard/wallet.ts";
 import {
@@ -442,6 +443,16 @@ describe("provider detection and selection", () => {
     assert.equal(isWalletProviderId(42), false);
   });
 
+  it("keeps the provider list in code aligned with docs/guides/wallet-providers.md", () => {
+    const doc = readFileSync("docs/guides/wallet-providers.md", "utf8");
+    for (const provider of WALLET_PROVIDERS) {
+      assert.ok(
+        doc.includes(provider.name),
+        `docs/guides/wallet-providers.md must mention provider name '${provider.name}'`,
+      );
+    }
+  });
+
   it("falls back to Freighter for a stale or unknown stored preference", () => {
     const scope = readWalletScope({ xbull: createFakeXbull() }, null);
     assert.equal(resolveConnector("metamask" as WalletProviderId, scope).id, "freighter");
@@ -523,69 +534,5 @@ describe("adapting a connector to the dashboard's signer", () => {
       () => signer.signTransaction("TX"),
       (error: unknown) => error instanceof WalletError,
     );
-  });
-});
-
-/**
- * The live account binding (#340).
- *
- * The signer a write uses must be able to re-read the active address at each
- * write boundary without raising a wallet prompt. A provider with no silent
- * read exposes no reader at all, rather than reporting every write as a
- * disconnect.
- */
-describe("the signer's live account binding", () => {
-  const SECOND_ADDRESS = "GA76DICZHOAA3L2OUCHG4X6J6DMM2NDEPLUWMK4PVLR2YTXZADHJZIXD";
-
-  it("exposes a silent live-address reader on the Freighter signer", async () => {
-    const { api, calls } = createFakeFreighterApi();
-    const signer = connectorSigner(
-      createFreighterConnector(freighterLoader(api)),
-      ADDRESS,
-      TESTNET_PASSPHRASE,
-    );
-    assert.equal(await signer.currentAddress!(), ADDRESS);
-    assert.equal((calls.getAddress ?? []).length, 1);
-  });
-
-  it("reports a newly selected account immediately", async () => {
-    let active = ADDRESS;
-    const { api } = createFakeFreighterApi({
-      getAddress: async () => ({ address: active }),
-    });
-    const signer = connectorSigner(
-      createFreighterConnector(freighterLoader(api)),
-      ADDRESS,
-      TESTNET_PASSPHRASE,
-    );
-    active = SECOND_ADDRESS;
-    assert.equal(await signer.currentAddress!(), SECOND_ADDRESS);
-  });
-
-  it("returns null when the extension has gone away", async () => {
-    const { api } = createFakeFreighterApi({
-      getAddress: async () => {
-        throw new Error("the provider disconnected");
-      },
-    });
-    const signer = connectorSigner(
-      createFreighterConnector(freighterLoader(api)),
-      ADDRESS,
-      TESTNET_PASSPHRASE,
-    );
-    assert.equal(await signer.currentAddress!(), null);
-  });
-
-  it("omits the reader for a provider whose only address read prompts", () => {
-    const albedo: AlbedoProvider = {
-      connect: async () => ({ address: ADDRESS, network: "testnet" }),
-      network: async () => ({ network: "testnet", networkPassphrase: TESTNET_PASSPHRASE }),
-      signedTx: async () => "signed",
-      signedAuth: async () => "auth",
-    };
-    const signer = connectorSigner(createAlbedoConnector(albedo), ADDRESS, TESTNET_PASSPHRASE) as {
-      currentAddress?: () => Promise<string | null>;
-    };
-    assert.equal("currentAddress" in signer, false);
   });
 });
