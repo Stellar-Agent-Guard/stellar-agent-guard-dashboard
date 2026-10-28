@@ -763,7 +763,7 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     // locally computed hash on chain before any retry.
     return {
       kind: "unknown",
-      hash: localHash,
+      hash: Buffer.from(transaction.hash()).toString("hex"),
       feeStroops,
       detail: `the send request ended without a response (${stringifyError(
         error,

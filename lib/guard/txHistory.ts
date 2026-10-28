@@ -24,7 +24,7 @@ import {
 import { NETWORK } from "./network.ts";
 
 export type TxHistoryTerminalOutcome =
-  "confirmed" | "failed" | "cancelled" | "pre-submit-failure" | "submitted";
+  "confirmed" | "failed" | "cancelled" | "pre-submit-failure" | "submitted" | "unknown";
 
 export type TxHistoryStatus = TxHistoryTerminalOutcome;
 
@@ -125,6 +125,11 @@ const VALID_STATUSES = new Set<string>([
   "cancelled",
   "pre-submit-failure",
   "submitted",
+  // A submission whose outcome the console could not witness is recorded as
+  // "unknown". It is a status this console writes itself, so it must pass the
+  // read-side validation too — otherwise every reload would silently drop the
+  // very rows the operator needs in order to verify the hash on chain.
+  "unknown",
 ]);
 
 function isEntry(value: unknown): value is TxHistoryEntry {
