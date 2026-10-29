@@ -64,13 +64,22 @@ export function formatRemaining(
   return { text, expired: false };
 }
 
+/**
+ * Alias kept for consumers that import the unified countdown formatter by its
+ * formatter-module name. Behavior is identical to `formatRemaining`.
+ */
+export const formatCountdown = formatRemaining;
+
 export function formatTimeAgo(
   timestampSeconds: bigint | number,
   nowSeconds: bigint | number,
 ): string {
   const ts =
-    typeof timestampSeconds === "bigint" ? timestampSeconds : BigInt(Math.floor(timestampSeconds));
-  const now = typeof nowSeconds === "bigint" ? nowSeconds : BigInt(Math.floor(nowSeconds));
+    typeof timestampSeconds === "bigint"
+      ? timestampSeconds
+      : BigInt(Math.floor(timestampSeconds));
+  const now =
+    typeof nowSeconds === "bigint" ? nowSeconds : BigInt(Math.floor(nowSeconds));
   let diff = now - ts;
 
   if (diff < 0n) {
@@ -120,7 +129,10 @@ export interface EventTimestamp {
 }
 
 /** Formatters are expensive to build; one per requested zone is plenty. */
-const timestampFormatterCache = new Map<string | undefined, Intl.DateTimeFormat>();
+const timestampFormatterCache = new Map<
+  string | undefined,
+  Intl.DateTimeFormat
+>();
 
 function timestampFormatter(timeZone?: string): Intl.DateTimeFormat {
   let formatter = timestampFormatterCache.get(timeZone);
@@ -177,7 +189,9 @@ export function formatEventTimestamp(
   // as "UTC…" because that is the frame of reference operators compare in.
   const offsetName = part("timeZoneName");
   const zoneLabel =
-    offsetName === "GMT" || offsetName === "UTC" ? "UTC+00:00" : offsetName.replace(/^GMT/, "UTC");
+    offsetName === "GMT" || offsetName === "UTC"
+      ? "UTC+00:00"
+      : offsetName.replace(/^GMT/, "UTC");
 
   return { utc, local, zoneLabel };
 }
