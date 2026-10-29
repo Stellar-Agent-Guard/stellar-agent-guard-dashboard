@@ -240,6 +240,8 @@ export interface GuardContextValue {
   /** The snapshot field currently re-reading, if any. */
   retryingField: SnapshotField | null;
   feed: {
+    discontinuity: boolean;
+    affectedLedgers: { start: number; end: number } | undefined;
     watching: boolean;
     latestLedger: number | null;
     error: string | null;
