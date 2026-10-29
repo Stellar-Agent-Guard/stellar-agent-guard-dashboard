@@ -182,6 +182,13 @@ export class SorobanRpcMock {
   deliveredEvents = 0;
   /** Contracts created/frozen/… during the test, keyed by address. */
   readonly guards = new Map<string, GuardState>();
+  /**
+   * Which artifact this chain serves. Public so a spec can flip it mid-test —
+   * mismatched, then valid again — without reloading the page, which is exactly
+   * the recovery the deploy panel has to demonstrate (issue #351).
+   */
+  artifactMode: ArtifactMode;
+
   private readonly contractInstances = new Set<string>([PHASE1_ARTIFACT.guard]);
 
   private readonly capture: RpcCapture;
