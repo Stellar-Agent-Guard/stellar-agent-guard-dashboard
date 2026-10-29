@@ -22,6 +22,12 @@
  * alert rendered by `<SecretKeyGuard />`. The store is deliberately
  * framework-free so its semantics are unit-testable under node:test — the
  * same split as `useToast` and `useAnnounce`.
+ *
+ * The file also hosts the *label policy* for operator-authored text (issue
+ * #384) — the second place where what a field displays must equal what it
+ * contains. Both sections share one principle: a value that can display as
+ * something other than what it says is refused, with a reason the operator
+ * can act on.
  */
 
 /** The Stellar secret seed shape: `S` followed by 55 uppercase base32 characters. */
@@ -58,6 +64,65 @@ export function findSecretKeyInText(text: string): string | null {
  */
 export function sanitizeAddressInput(value: string): string {
   return findSecretKeyInText(value) === null ? value : "";
+}
+
+const LABEL_CHARACTER_NAMES = new Map<number, string>([
+  [0x00ad, "SOFT HYPHEN"],
+  [0x034f, "COMBINING GRAPHEME JOINER"],
+  [0x061c, "ARABIC LETTER MARK"],
+  [0x200b, "ZERO WIDTH SPACE"],
+  [0x200c, "ZERO WIDTH NON-JOINER"],
+  [0x200d, "ZERO WIDTH JOINER"],
+  [0x202a, "LEFT-TO-RIGHT EMBEDDING"],
+  [0x202b, "RIGHT-TO-LEFT EMBEDDING"],
+  [0x202c, "POP DIRECTIONAL FORMATTING"],
+  [0x202d, "LEFT-TO-RIGHT OVERRIDE"],
+  [0x202e, "RIGHT-TO-LEFT OVERRIDE"],
+  [0x2060, "WORD JOINER"],
+  [0x2066, "LEFT-TO-RIGHT ISOLATE"],
+  [0x2067, "RIGHT-TO-LEFT ISOLATE"],
+  [0x2068, "FIRST STRONG ISOLATE"],
+  [0x2069, "POP DIRECTIONAL ISOLATE"],
+  [0xfeff, "BOM"],
+]);
+
+export interface DisallowedLabelCharacter {
+  index: number;
+  code: string;
+  name: string;
+}
+
+export function findDisallowedLabelChar(value: string): DisallowedLabelCharacter | null {
+  let index = 0;
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    const isControl = /\p{Cc}/u.test(character) && !/[\t\n\r]/u.test(character);
+    const isInvisible = /[\p{Cf}\p{Zl}\p{Zp}]/u.test(character);
+    if (isControl || isInvisible) {
+      const code = `U+${codePoint.toString(16).toUpperCase().padStart(4, "0")}`;
+      const name =
+        LABEL_CHARACTER_NAMES.get(codePoint) ??
+        (codePoint === 0x2028
+          ? "LINE SEPARATOR"
+          : codePoint === 0x2029
+            ? "PARAGRAPH SEPARATOR"
+            : isControl
+              ? "CONTROL CHARACTER"
+              : "FORMAT CHARACTER");
+      return { index, code, name };
+    }
+    index += character.length;
+  }
+  return null;
+}
+
+export function validateLabel(value: string): { ok: true } | { ok: false; error: string } {
+  const disallowed = findDisallowedLabelChar(value);
+  if (!disallowed) return { ok: true };
+  return {
+    ok: false,
+    error: `Label contains ${disallowed.name} (${disallowed.code}) at position ${disallowed.index + 1}.`,
+  };
 }
 
 /**
