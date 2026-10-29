@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   MIN_DMS_SECONDS,
   validateInitParameters,
+  validateInitFormFields,
   type InitParameters,
 } from "../../lib/guard/initValidator.ts";
 
@@ -101,7 +102,13 @@ test("non-numeric input is reported, not thrown", () => {
 
 test("every failing rule is reported together so the operator fixes them in one pass", () => {
   const result = validateInitParameters(
-    params({ adminAddress: ADMIN, agentAddress: ADMIN, dmsDurationSecs: "10", perTxCap: "5000", windowCap: "0" }),
+    params({
+      adminAddress: ADMIN,
+      agentAddress: ADMIN,
+      dmsDurationSecs: "10",
+      perTxCap: "5000",
+      windowCap: "0",
+    }),
   );
   // Separation, DMS, window-covers and positive-caps all fail.
   assert.equal(result.blockers.length, 4);
@@ -114,4 +121,18 @@ test("huge caps are compared exactly with no float precision loss", () => {
   assert.equal(check(result, "window-covers-per-tx").passed, true);
   assert.equal(check(result, "spend-caps-positive").passed, true);
   assert.equal(result.canDeploy, true);
+});
+
+test("initialization rejects out-of-range caps and reports input-specific errors", () => {
+  const tooLarge = "170141183460469231731687303715884105728";
+  const paramsWithLargeCaps = params({ perTxCap: tooLarge, windowCap: tooLarge });
+  assert.equal(validateInitParameters(paramsWithLargeCaps).canDeploy, false);
+  assert.match(
+    validateInitFormFields({ ...paramsWithLargeCaps, agentPubkey: "not-hex" }).perTxCap ?? "",
+    /no greater than/,
+  );
+  assert.match(
+    validateInitFormFields({ ...paramsWithLargeCaps, agentPubkey: "not-hex" }).agentPubkey ?? "",
+    /64 hexadecimal characters/,
+  );
 });

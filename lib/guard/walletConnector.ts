@@ -71,6 +71,13 @@ export interface WalletConnector {
   connect(): Promise<WalletConnection>;
   getPublicKey(): Promise<string>;
   getNetwork(): Promise<WalletNetwork>;
+  /**
+   * Re-read the active address *without* prompting, or null when the provider
+   * is gone. Optional because a web wallet's only address read opens its
+   * pop-up; a connector without it simply has no live binding check, rather
+   * than reporting every write as a disconnect.
+   */
+  currentAddress?(): Promise<string | null>;
   signTransaction(transactionXdr: string, options?: SignOptions): Promise<string>;
   signAuthEntry(authEntryXdr: string, options?: SignOptions): Promise<string>;
 }
@@ -176,7 +183,9 @@ export class WalletUserRejectedError extends WalletError {
   readonly provider: WalletProviderId;
 
   constructor(provider: WalletProviderId, action: string) {
-    super(`You declined to ${action} in ${walletProviderDescriptor(provider).name}. Nothing was sent.`);
+    super(
+      `You declined to ${action} in ${walletProviderDescriptor(provider).name}. Nothing was sent.`,
+    );
     this.name = "WalletUserRejectedError";
     this.provider = provider;
   }
@@ -187,7 +196,9 @@ export class WalletUnsupportedError extends WalletError {
   readonly provider: WalletProviderId;
 
   constructor(provider: WalletProviderId, capability: string) {
-    super(`${walletProviderDescriptor(provider).name} does not support ${capability} in this browser.`);
+    super(
+      `${walletProviderDescriptor(provider).name} does not support ${capability} in this browser.`,
+    );
     this.name = "WalletUnsupportedError";
     this.provider = provider;
   }
@@ -208,25 +219,40 @@ function descriptorFor(id: WalletProviderId): WalletProviderDescriptor {
  * original message: a signing error the operator cannot read is worse than one
  * that names the wallet.
  */
-export function mapConnectorError(error: unknown, provider: WalletProviderId, action: string): WalletError {
+export function mapConnectorError(
+  error: unknown,
+  provider: WalletProviderId,
+  action: string,
+): WalletError {
   if (error instanceof WalletError) return error;
   const message = error instanceof Error ? error.message : String(error);
   const normalised = message.toLowerCase();
 
-  if (/not (be )?(found|installed)|no provider|undefined|is not available|could not connect/.test(normalised)) {
+  if (
+    /not (be )?(found|installed)|no provider|undefined|is not available|could not connect/.test(
+      normalised,
+    )
+  ) {
     return new WalletNotInstalledError(provider, message);
   }
   if (/reject|denied|declin|cancel|abort|user.*(close|dismiss)/.test(normalised)) {
     return new WalletUserRejectedError(provider, action);
   }
-  return new WalletError(`${walletProviderDescriptor(provider).name} could not ${action}: ${message}`);
+  return new WalletError(
+    `${walletProviderDescriptor(provider).name} could not ${action}: ${message}`,
+  );
 }
 
 /** Freighter reports failures in a field rather than by throwing; surface them. */
-function assertFreighterOk(result: { error?: { message?: string } | null } | null, action: string): void {
+function assertFreighterOk(
+  result: { error?: { message?: string } | null } | null,
+  action: string,
+): void {
   const error = result?.error;
   if (error) {
-    throw new WalletError(`Could not ${action} in Freighter: ${error.message ?? JSON.stringify(error)}`);
+    throw new WalletError(
+      `Could not ${action} in Freighter: ${error.message ?? JSON.stringify(error)}`,
+    );
   }
 }
 
@@ -261,7 +287,9 @@ export interface AlbedoProvider {
     onReady?: (response: { address: string; network?: string }) => void;
     [key: string]: unknown;
   }): Promise<{ address?: string; network?: string } | void>;
-  network(args?: Record<string, unknown>): Promise<{ network?: string; networkPassphrase?: string }>;
+  network(
+    args?: Record<string, unknown>,
+  ): Promise<{ network?: string; networkPassphrase?: string }>;
   signedTx(args: Record<string, unknown>): Promise<{ tx_xdr?: string; error?: string } | string>;
   signedAuth(args: Record<string, unknown>): Promise<{ auth?: string; error?: string } | string>;
 }
@@ -306,7 +334,8 @@ export function readWalletScope(
   win?: WalletWindowLike | null,
   freighterLoader: (() => Promise<FreighterApiModule>) | null = loadFreighterApi,
 ): WalletScope {
-  const scope = (win ?? (typeof window === "undefined" ? null : (window as unknown as WalletWindowLike))) ?? null;
+  const scope =
+    win ?? (typeof window === "undefined" ? null : (window as unknown as WalletWindowLike)) ?? null;
   return {
     freighterLoader,
     albedo: scope?.albedo ?? null,
@@ -354,7 +383,7 @@ export async function freighterIsAvailable(
 /** Network names as the providers spell them, mapped onto passphrases. */
 const NETWORK_ALIASES: Readonly<Record<string, string>> = {
   testnet: "testnet",
-  "testing": "testnet",
+  testing: "testnet",
   public: "public",
   mainnet: "public",
   futurenet: "futurenet",
@@ -416,7 +445,9 @@ function requireAddress(address: string | null | undefined, provider: WalletProv
 }
 
 /** Freighter, through the official npm API — the behaviour `wallet.ts` had, unchanged. */
-export function createFreighterConnector(loader: (() => Promise<FreighterApiModule>) | null): WalletConnector {
+export function createFreighterConnector(
+  loader: (() => Promise<FreighterApiModule>) | null,
+): WalletConnector {
   const id: WalletProviderId = "freighter";
   const api = async (): Promise<FreighterApiModule> => {
     if (!loader) throw new WalletNotInstalledError(id, "The Freighter API bundle is unavailable.");
@@ -442,11 +473,23 @@ export function createFreighterConnector(loader: (() => Promise<FreighterApiModu
       assertFreighterOk(result, "read the account address");
       return requireAddress(result.address, id);
     },
+    async currentAddress() {
+      // `getAddress` is silent after access was granted — no new prompt.
+      const freighter = await api();
+      const result = await freighter.getAddress();
+      assertFreighterOk(result, "read the account address");
+      return result.address ?? null;
+    },
     async getNetwork() {
       const freighter = await api();
       const details = await freighter.getNetworkDetails();
       assertFreighterOk(details, "read the wallet network");
-      return normalizeWalletNetwork({ name: details.network, passphrase: details.networkPassphrase });
+      return normalizeWalletNetwork({
+        ...(details.network === undefined ? {} : { name: details.network }),
+        ...(details.networkPassphrase === undefined
+          ? {}
+          : { passphrase: details.networkPassphrase }),
+      });
     },
     async signTransaction(transactionXdr, options) {
       const freighter = await api();
@@ -491,8 +534,16 @@ export function createXbullConnector(provider: XbullProvider | null): WalletConn
       try {
         const connected = await wallet.connect();
         const address =
-          typeof connected === "string" ? connected : requireAddress(connected.publicKey ?? connected.address, id);
-        const network = normalizeWalletNetwork({ name: typeof connected === "string" ? null : connected.network });
+          typeof connected === "string"
+            ? connected
+            : requireAddress(connected.publicKey ?? connected.address, id);
+        const network = normalizeWalletNetwork(
+          typeof connected === "string"
+            ? { name: null }
+            : connected.network === undefined
+              ? {}
+              : { name: connected.network },
+        );
         return { address, network: network.passphrase ? network : await this.getNetwork() };
       } catch (error) {
         throw mapConnectorError(error, id, "connect");
@@ -504,7 +555,9 @@ export function createXbullConnector(provider: XbullProvider | null): WalletConn
           return requireAddress(await wallet.getPublicKey(), id);
         }
         const connected = await wallet.connect();
-        return typeof connected === "string" ? connected : requireAddress(connected.publicKey ?? connected.address, id);
+        return typeof connected === "string"
+          ? connected
+          : requireAddress(connected.publicKey ?? connected.address, id);
       } catch (error) {
         throw mapConnectorError(error, id, "read the account address");
       }
@@ -517,10 +570,26 @@ export function createXbullConnector(provider: XbullProvider | null): WalletConn
         throw mapConnectorError(error, id, "read the wallet network");
       }
     },
+    // Only when the extension exposes a silent read; `connect()` would prompt,
+    // which a write boundary must never do.
+    ...(wallet.getPublicKey
+      ? {
+          async currentAddress(): Promise<string | null> {
+            try {
+              return (await wallet.getPublicKey!()) ?? null;
+            } catch {
+              return null;
+            }
+          },
+        }
+      : {}),
     async signTransaction(transactionXdr, options) {
       try {
         const signed = await wallet.signTransaction(transactionXdr, { ...(options ?? {}) });
-        const xdr = typeof signed === "string" ? signed : ((signed as { tx_xdr?: string } | null)?.tx_xdr ?? null);
+        const xdr =
+          typeof signed === "string"
+            ? signed
+            : ((signed as { tx_xdr?: string } | null)?.tx_xdr ?? null);
         if (!xdr) throw new WalletError("xBull returned no signed transaction");
         return xdr;
       } catch (error) {
@@ -528,10 +597,14 @@ export function createXbullConnector(provider: XbullProvider | null): WalletConn
       }
     },
     async signAuthEntry(authEntryXdr, options) {
-      if (!wallet.signAuthEntry) throw new WalletUnsupportedError(id, "Soroban authorization entries");
+      if (!wallet.signAuthEntry)
+        throw new WalletUnsupportedError(id, "Soroban authorization entries");
       try {
         const signed = await wallet.signAuthEntry(authEntryXdr, { ...(options ?? {}) });
-        const entry = typeof signed === "string" ? signed : ((signed as { auth?: string } | null)?.auth ?? null);
+        const entry =
+          typeof signed === "string"
+            ? signed
+            : ((signed as { auth?: string } | null)?.auth ?? null);
         if (!entry) throw new WalletUserRejectedError(id, "sign the authorization entry");
         return entry;
       } catch (error) {
@@ -558,28 +631,33 @@ export function createAlbedoConnector(provider: AlbedoProvider | null): WalletCo
     id,
     async connect() {
       try {
-        const answer = await new Promise<{ address?: string; network?: string }>((resolve, reject) => {
-          let settled = false;
-          const finish = (response: { address?: string; network?: string } | void) => {
-            if (settled || !response || typeof response !== "object") return;
-            settled = true;
-            resolve(response);
-          };
-          wallet
-                .connect({
-                  callback: (response: { address?: string; network?: string } | void) => finish(response),
-                  onReady: (response: { address: string; network?: string }) => finish(response),
-                })
-                .then(finish)
-                .catch((error: unknown) => {
-                  if (!settled) {
-                    settled = true;
-                    reject(error);
-                  }
-                });
-        });
+        const answer = await new Promise<{ address?: string; network?: string }>(
+          (resolve, reject) => {
+            let settled = false;
+            const finish = (response: { address?: string; network?: string } | void) => {
+              if (settled || !response || typeof response !== "object") return;
+              settled = true;
+              resolve(response);
+            };
+            wallet
+              .connect({
+                callback: (response: { address?: string; network?: string } | void) =>
+                  finish(response),
+                onReady: (response: { address: string; network?: string }) => finish(response),
+              })
+              .then(finish)
+              .catch((error: unknown) => {
+                if (!settled) {
+                  settled = true;
+                  reject(error);
+                }
+              });
+          },
+        );
         const address = requireAddress(answer.address, id);
-        const network = normalizeWalletNetwork({ name: answer.network });
+        const network = normalizeWalletNetwork(
+          answer.network === undefined ? {} : { name: answer.network },
+        );
         return { address, network: network.passphrase ? network : await this.getNetwork() };
       } catch (error) {
         throw mapConnectorError(error, id, "connect");
@@ -620,7 +698,8 @@ export function createAlbedoConnector(provider: AlbedoProvider | null): WalletCo
           if (!signed) throw new WalletUserRejectedError(id, "sign the authorization entry");
           return signed;
         }
-        if (signed.error) throw new WalletError(`Albedo refused the authorization entry: ${signed.error}`);
+        if (signed.error)
+          throw new WalletError(`Albedo refused the authorization entry: ${signed.error}`);
         if (!signed.auth) throw new WalletUserRejectedError(id, "sign the authorization entry");
         return signed.auth;
       } catch (error) {
@@ -646,7 +725,10 @@ export function createWalletConnector(id: WalletProviderId, scope: WalletScope):
  * The persisted choice is only a preference, so an unknown or stale value
  * falls back to Freighter rather than breaking the console on load.
  */
-export function resolveConnector(id: WalletProviderId | null | undefined, scope: WalletScope): WalletConnector {
+export function resolveConnector(
+  id: WalletProviderId | null | undefined,
+  scope: WalletScope,
+): WalletConnector {
   return createWalletConnector(isWalletProviderId(id) ? id : "freighter", scope);
 }
 
@@ -667,11 +749,26 @@ export function connectorSigner(
   networkPassphrase: string = NETWORK.passphrase,
 ): {
   address: string;
+  /** Present only when the provider has a silent live-address read. */
+  currentAddress?: () => Promise<string | null>;
   signTransaction(transactionXdr: string): Promise<string>;
   signAuthEntry(entryXdr: string): Promise<string>;
 } {
   return {
     address,
+    ...(connector.currentAddress
+      ? {
+          // A reader that throws means the provider is gone; submit.ts maps that
+          // to a phase-specific, recoverable interruption.
+          currentAddress: async (): Promise<string | null> => {
+            try {
+              return await connector.currentAddress!();
+            } catch {
+              return null;
+            }
+          },
+        }
+      : {}),
     async signTransaction(transactionXdr: string): Promise<string> {
       try {
         return await connector.signTransaction(transactionXdr, { networkPassphrase, address });

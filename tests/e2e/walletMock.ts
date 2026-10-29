@@ -29,6 +29,21 @@ import type { Page } from "@playwright/test";
 /** The account the mock wallet signs as. */
 export const MOCK_ADMIN_ADDRESS = "GD5S5O2MZ6FSMFH6QILG37KSQNRVR3RPSWBTTV4JOUJ7J6TWLLL5LAVS";
 
+/**
+ * How many signing requests the page has made against the mock wallet.
+ *
+ * Every `SUBMIT_*` message is one: those are the requests a real extension
+ * would show an approval prompt for, so a spec that must prove *no wallet
+ * prompt was reached* asserts this counter rather than inferring it from a
+ * disabled button (issue #351).
+ */
+export async function signRequestCount(page: Page): Promise<number> {
+  return await page.evaluate(() => {
+    const target = window as unknown as { __walletMockSignRequests?: number };
+    return target.__walletMockSignRequests ?? 0;
+  });
+}
+
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
 
 export interface WalletMockOptions {
@@ -37,11 +52,21 @@ export interface WalletMockOptions {
 }
 
 /** Install the Freighter message mock into the page before any app script runs. */
-export async function installFreighterMock(page: Page, options: WalletMockOptions = {}): Promise<void> {
+export async function installFreighterMock(
+  page: Page,
+  options: WalletMockOptions = {},
+): Promise<void> {
   const address = options.address ?? MOCK_ADMIN_ADDRESS;
   await page.addInitScript(
     ({ address, passphrase }: { address: string; passphrase: string }) => {
       const AUTHORIZED_KEY = "stellar-agent-guard.e2e.wallet-authorized";
+      const REJECT_NEXT_SIGN_KEY = "stellar-agent-guard.e2e.reject-next-sign";
+
+      const rejectNextSign = (): boolean => {
+        if (window.localStorage.getItem(REJECT_NEXT_SIGN_KEY) !== "1") return false;
+        window.localStorage.removeItem(REJECT_NEXT_SIGN_KEY);
+        return true;
+      };
 
       const isAuthorized = (): boolean => {
         try {
@@ -71,6 +96,17 @@ export async function installFreighterMock(page: Page, options: WalletMockOption
             { source: "FREIGHTER_EXTERNAL_MSG_RESPONSE", messagedId: data.messageId, ...payload },
             window.location.origin,
           );
+        };
+
+        /**
+         * Count the requests that would produce a signature. A write blocked
+         * before the wallet is prompted must leave this at zero — that is the
+         * difference between a control that is disabled and one that merely
+         * looks disabled (issue #351).
+         */
+        const countSignRequest = (): void => {
+          const target = window as unknown as { __walletMockSignRequests?: number };
+          target.__walletMockSignRequests = (target.__walletMockSignRequests ?? 0) + 1;
         };
 
         switch (data.type) {
@@ -110,18 +146,27 @@ export async function installFreighterMock(page: Page, options: WalletMockOption
             });
             return;
           case "SUBMIT_TRANSACTION":
+            if (rejectNextSign()) {
+              reply({ apiError: { code: -4, message: "User rejected the request" } });
+              return;
+            }
             reply({
               signedTransaction: data.transactionXdr ?? "",
               signerAddress: data.accountToSign || address,
             });
             return;
           case "SUBMIT_AUTH_ENTRY":
+            if (rejectNextSign()) {
+              reply({ apiError: { code: -4, message: "User rejected the request" } });
+              return;
+            }
             reply({
               signedAuthEntry: data.entryXdr ?? "",
               signerAddress: data.accountToSign || address,
             });
             return;
           case "SUBMIT_BLOB":
+            countSignRequest();
             reply({
               signedMessage: data.blob ?? "",
               signerAddress: data.accountToSign || address,

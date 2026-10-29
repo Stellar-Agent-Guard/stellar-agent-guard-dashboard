@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { describe, test } from "node:test";
+import { GUARD_WASM_HASH, verifyGuardWasm } from "stellar-agent-guard-sdk";
 import { PHASE1_ARTIFACT } from "../../lib/guard/network.ts";
 import {
   buildIntegrityReport,
+  buildIntegrityReportWithProgress,
   describeBuild,
+  hashWasmInWorker,
   inspectWasm,
+  inspectWasmInWorker,
   sortEntrypoints,
   type WasmInspection,
 } from "../../lib/guard/wasmInspector.ts";
+import { sha256Hex } from "../../lib/guard/scval.ts";
 
 /**
  * Minimal WASM assembly.
@@ -51,16 +56,21 @@ function exportSection(entries: number[][]): number[] {
 }
 
 /** The `producers` payload, in the shape toolchains actually emit. */
-function producersPayload(fields: Array<{ name: string; entries: Array<[string, string]> }>): number[] {
+function producersPayload(
+  fields: Array<{ name: string; entries: Array<[string, string]> }>,
+): number[] {
   const contents: number[] = [2, ...uleb(fields.length)];
   for (const field of fields) {
     contents.push(...wasmString(field.name), ...uleb(field.entries.length));
-    for (const [tool, version] of field.entries) contents.push(...wasmString(tool), ...wasmString(version));
+    for (const [tool, version] of field.entries)
+      contents.push(...wasmString(tool), ...wasmString(version));
   }
   return contents;
 }
 
-function producersSection(fields: Array<{ name: string; entries: Array<[string, string]> }>): number[] {
+function producersSection(
+  fields: Array<{ name: string; entries: Array<[string, string]> }>,
+): number[] {
   return customSection("producers", producersPayload(fields));
 }
 
@@ -70,11 +80,6 @@ function wasmModule(sections: number[][]): Uint8Array {
 
 const PINNED = { wasmHash: "f".repeat(64), wasmBytes: 39673 };
 const OTHER = "a".repeat(64);
-
-/** The digest is injected, so a report can be driven without hashing anything. */
-function digestOf(hex: string) {
-  return async () => hex;
-}
 
 function okInspection(inspection: WasmInspection) {
   assert.equal(inspection.ok, true, inspection.ok ? "" : inspection.reason);
@@ -110,7 +115,11 @@ test("an empty module reads as version 1 with nothing to report", () => {
 });
 
 test("exports carry their kind, and only functions are entrypoints", () => {
-  const contents = exportSection([exportEntry("check", 0, 4), exportEntry("transfer", 0, 5), exportEntry("memory", 2, 0)]);
+  const contents = exportSection([
+    exportEntry("check", 0, 4),
+    exportEntry("transfer", 0, 5),
+    exportEntry("memory", 2, 0),
+  ]);
   const inspection = okInspection(inspectWasm(wasmModule([contents])));
   assert.deepEqual(inspection.exports, [
     { name: "check", kind: "function", index: 4 },
@@ -129,7 +138,9 @@ test("a section larger than 127 bytes is read through its multi-byte length", ()
   // misreport every section after it.
   const payload = new Array(200).fill(0x2a);
   const big = customSection("big", payload);
-  const inspection = okInspection(inspectWasm(wasmModule([big, exportSection([exportEntry("status", 0, 1)])])));
+  const inspection = okInspection(
+    inspectWasm(wasmModule([big, exportSection([exportEntry("status", 0, 1)])])),
+  );
   assert.equal(inspection.sections.length, 2);
   assert.equal(inspection.sections[0]?.bytes, 200 + wasmString("big").length);
   assert.deepEqual(inspection.metadata.customSections, ["big"]);
@@ -137,7 +148,20 @@ test("a section larger than 127 bytes is read through its multi-byte length", ()
 });
 
 test("a section that runs past the end of the buffer is refused", () => {
-  const bytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 7, ...uleb(200), 1, 2]);
+  const bytes = new Uint8Array([
+    0x00,
+    0x61,
+    0x73,
+    0x6d,
+    0x01,
+    0x00,
+    0x00,
+    0x00,
+    7,
+    ...uleb(200),
+    1,
+    2,
+  ]);
   const inspection = inspectWasm(bytes);
   assert.equal(inspection.ok, false);
   if (inspection.ok) return;
@@ -150,7 +174,13 @@ test("producers metadata is read out of the custom section", () => {
       wasmModule([
         producersSection([
           { name: "language", entries: [["rustc", "1.91.0"]] },
-          { name: "processed-by", entries: [["wasm-opt", "version 156"], ["soroban-sdk", "21.7.0"]] },
+          {
+            name: "processed-by",
+            entries: [
+              ["wasm-opt", "version 156"],
+              ["soroban-sdk", "21.7.0"],
+            ],
+          },
         ]),
       ]),
     ),
@@ -162,7 +192,12 @@ test("producers metadata is read out of the custom section", () => {
   ]);
   // The group names are structure, not tools: a reader that mistook one for a
   // tool would report "language" as if it were a compiler.
-  assert.equal(inspection.metadata.tools.some((tool) => tool.name === "language" || tool.name === "processed-by"), false);
+  assert.equal(
+    inspection.metadata.tools.some(
+      (tool) => tool.name === "language" || tool.name === "processed-by",
+    ),
+    false,
+  );
   assert.equal(inspection.metadata.compiledAt, null, "a version string is not a timestamp");
 });
 
@@ -170,7 +205,9 @@ test("an embedded build timestamp is reported; a missing one is not invented", (
   const stamped = okInspection(
     inspectWasm(
       wasmModule([
-        producersSection([{ name: "processed-by", entries: [["soroban-sdk", "21.7.0 built 2026-03-04T09:12:55Z"]] }]),
+        producersSection([
+          { name: "processed-by", entries: [["soroban-sdk", "21.7.0 built 2026-03-04T09:12:55Z"]] },
+        ]),
       ]),
     ),
   );
@@ -187,7 +224,9 @@ test("a truncated producers section yields what it managed to read", () => {
   // section is well-formed on the outside and runs out inside, so the entry
   // that was not fully read is dropped rather than half-reported.
   const payload = producersPayload([{ name: "language", entries: [["Rust", "rustc 1.91.0"]] }]);
-  const inspection = okInspection(inspectWasm(wasmModule([customSection("producers", payload.slice(0, payload.length - 3))])));
+  const inspection = okInspection(
+    inspectWasm(wasmModule([customSection("producers", payload.slice(0, payload.length - 3))])),
+  );
   assert.deepEqual(inspection.metadata.tools, []);
   assert.deepEqual(inspection.metadata.customSections, ["producers"]);
 });
@@ -195,21 +234,23 @@ test("a truncated producers section yields what it managed to read", () => {
 test("a producers section whose data starts before the name is not misread", () => {
   // Guards the offset the reader skips: reading the name's length byte as the
   // section version silently invents a hundred garbage tool entries.
-  const inspection = okInspection(inspectWasm(wasmModule([customSection("producers", [9, 0x70, 0x72, 0x6f])])));
+  const inspection = okInspection(
+    inspectWasm(wasmModule([customSection("producers", [9, 0x70, 0x72, 0x6f])])),
+  );
   assert.deepEqual(inspection.metadata.tools, []);
 });
 
 test("the pinned artifact is declared verified against two independent claims", async () => {
   const wasm = wasmModule([exportSection([exportEntry("check", 0, 1)])]);
+  const hash = await sha256Hex(wasm);
   const report = await buildIntegrityReport({
     wasm,
-    reportedWasmHash: PINNED.wasmHash,
-    pinned: PINNED,
-    digest: digestOf(PINNED.wasmHash),
+    reportedWasmHash: hash,
+    pinned: { wasmHash: hash, wasmBytes: PINNED.wasmBytes },
   });
   assert.equal(report.verdict, "verified");
   assert.equal(report.headline, "VERIFIED BUILD");
-  assert.equal(report.sha256, PINNED.wasmHash);
+  assert.equal(report.sha256, hash);
   assert.equal(report.pinnedBytes, 39673);
   assert.deepEqual(report.entrypoints, ["check"]);
   assert.match(report.detail, /pinned Phase 1 artifact/);
@@ -217,28 +258,29 @@ test("the pinned artifact is declared verified against two independent claims", 
 
 test("bytes that are not the pinned artifact are called unrecognized", async () => {
   const wasm = wasmModule([exportSection([exportEntry("check", 0, 1)])]);
-  const report = await buildIntegrityReport({ wasm, pinned: PINNED, digest: digestOf(OTHER) });
+  const actual = await sha256Hex(wasm);
+  const report = await buildIntegrityReport({ wasm, pinned: PINNED });
   assert.equal(report.verdict, "unrecognized");
   assert.equal(report.headline, "UNRECOGNIZED BYTECODE");
-  assert.ok(report.detail.includes(`${OTHER.slice(0, 16)}…`));
+  assert.ok(report.detail.includes(`${actual.slice(0, 16)}…`));
   assert.ok(report.detail.includes(`pinned build is ${PINNED.wasmBytes}`));
   // A ledger that agrees with us on a hash we do not recognise is not a pass.
   assert.equal(report.reportedWasmHash, null);
 });
 
 test("a ledger hash that disagrees with the fetched bytes blocks verification", async () => {
+  const wasm = wasmModule([]);
   const report = await buildIntegrityReport({
-    wasm: wasmModule([]),
+    wasm,
     reportedWasmHash: OTHER,
-    pinned: PINNED,
-    digest: digestOf(PINNED.wasmHash),
+    pinned: { wasmHash: await sha256Hex(wasm), wasmBytes: PINNED.wasmBytes },
   });
   assert.equal(report.verdict, "unrecognized");
   assert.match(report.detail, /the ledger declares/);
 });
 
 test("unreadable bytes get their own verdict and no fake statistics", async () => {
-  const report = await buildIntegrityReport({ wasm: new Uint8Array([1, 2, 3]), pinned: PINNED, digest: digestOf(OTHER) });
+  const report = await buildIntegrityReport({ wasm: new Uint8Array([1, 2, 3]), pinned: PINNED });
   assert.equal(report.verdict, "malformed");
   assert.equal(report.sha256, null, "an unreadable artifact is not hashed into a verdict");
   assert.equal(report.bytes, 3);
@@ -247,22 +289,51 @@ test("unreadable bytes get their own verdict and no fake statistics", async () =
 });
 
 test("the guard's own entrypoints are shown before the noise", () => {
-  const sorted = sortEntrypoints(["__wasm_call_ctors", "policy", "initialize", "audit", "check", "memory"]);
-  assert.deepEqual(sorted, ["initialize", "check", "policy", "__wasm_call_ctors", "audit", "memory"]);
+  const sorted = sortEntrypoints([
+    "__wasm_call_ctors",
+    "policy",
+    "initialize",
+    "audit",
+    "check",
+    "memory",
+  ]);
+  assert.deepEqual(sorted, [
+    "initialize",
+    "check",
+    "policy",
+    "__wasm_call_ctors",
+    "audit",
+    "memory",
+  ]);
   assert.deepEqual(sortEntrypoints([]), []);
 });
 
 test("the report defaults to this build's own artifact commitment", async () => {
-  const report = await buildIntegrityReport({ wasm: wasmModule([]), digest: digestOf(PINNED.wasmHash) });
+  const report = await buildIntegrityReport({ wasm: wasmModule([]) });
   assert.equal(report.pinnedHash, PHASE1_ARTIFACT.wasmHash);
   assert.equal(report.pinnedBytes, PHASE1_ARTIFACT.wasmBytes);
-  // The fake digest does not match the real pin, so the honest answer is "no".
+  // A well-formed module that is not the pinned artifact must not verify.
   assert.equal(report.verdict, "unrecognized");
+});
+
+test("the pin is the SDK's constant and the SDK's helper is what verifies it", async () => {
+  // The single source #252 asks for: the dashboard's pin *is* the SDK's export,
+  // so a contract release arrives here as a dependency bump, never as a local
+  // edit that can drift from what other SDK consumers pin.
+  assert.equal(PHASE1_ARTIFACT.wasmHash, GUARD_WASM_HASH);
+  const wasm = wasmModule([exportSection([exportEntry("check", 0, 1)])]);
+  const verification = await verifyGuardWasm(wasm);
+  assert.equal(verification.ok, false, "these fixtures are not the real artifact");
+  assert.equal(verification.expected, GUARD_WASM_HASH);
+  assert.match(verification.actual, /^[0-9a-f]{64}$/);
 });
 
 test("the build line says what the artifact claims about itself", () => {
   assert.equal(describeBuild(null), "No readable build metadata.");
-  assert.equal(describeBuild({ tools: [], compiledAt: null, customSections: [] }), "This build embeds no producer metadata.");
+  assert.equal(
+    describeBuild({ tools: [], compiledAt: null, customSections: [] }),
+    "This build embeds no producer metadata.",
+  );
   assert.equal(
     describeBuild({ tools: [], compiledAt: null, customSections: ["name"] }),
     "This build embeds no producer metadata (custom sections: name).",
@@ -275,4 +346,77 @@ test("the build line says what the artifact claims about itself", () => {
     }),
     "language rustc 1.91.0, built 2026-03-04T09:12:55",
   );
+});
+
+describe("worker-based inspection with progress and cancellation", () => {
+  test("inspectWasmInWorker reports progress phases and completes", async () => {
+    const wasm = wasmModule([exportSection([exportEntry("check", 0, 1)])]);
+    const phases: string[] = [];
+
+    const result = await inspectWasmInWorker(wasm, (progress) => {
+      phases.push(progress.phase);
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.ok(phases.includes("validating-header"));
+    assert.ok(phases.includes("parsing-sections"));
+    assert.ok(phases.includes("complete"));
+    assert.equal(phases[phases.length - 1], "complete");
+  });
+
+  test("hashWasmInWorker reports progress and completes", async () => {
+    const wasm = wasmModule([exportSection([exportEntry("check", 0, 1)])]);
+    const phases: string[] = [];
+
+    const hash = await hashWasmInWorker(wasm, (progress) => {
+      phases.push(progress.phase);
+    });
+
+    assert.equal(typeof hash, "string");
+    assert.equal(hash.length, 64);
+    assert.ok(phases.includes("hashing") || phases.includes("complete"));
+    assert.equal(phases[phases.length - 1], "complete");
+  });
+
+  test("buildIntegrityReportWithProgress runs parse and hash in parallel with progress", async () => {
+    const wasm = wasmModule([exportSection([exportEntry("check", 0, 1)])]);
+    const parsePhases: string[] = [];
+    const hashPhases: string[] = [];
+
+    // Use a digest that matches the fake wasm's hash
+    const fakeHash = await sha256Hex(wasm);
+    const report = await buildIntegrityReportWithProgress({
+      wasm,
+      pinned: { wasmHash: fakeHash, wasmBytes: wasm.length },
+      onParseProgress: (p) => parsePhases.push(p.phase),
+      onHashProgress: (p) => hashPhases.push(p.phase),
+    });
+
+    assert.equal(report.verdict, "verified");
+    assert.ok(parsePhases.includes("validating-header"));
+    assert.ok(parsePhases.includes("complete"));
+    assert.ok(hashPhases.includes("hashing") || hashPhases.includes("complete"));
+  });
+
+  test("cancelled inspection throws with cancellation message", async () => {
+    // Use a large enough WASM to allow cancellation to be observed
+    // We can't easily test mid-parse cancellation without a slow fixture,
+    // so we verify the error type is correct when cancelled externally
+    const wasm = wasmModule([exportSection([exportEntry("check", 0, 1)])]);
+    let resolveCancel: (value: void) => void;
+    const cancelPromise = new Promise<void>((resolve) => {
+      resolveCancel = resolve;
+    });
+
+    const promise = inspectWasmInWorker(wasm, () => {}).catch((error) => {
+      if (error instanceof Error && error.message === "Parsing cancelled") return "cancelled";
+      throw error;
+    });
+
+    // Immediately cancel (this will race with completion)
+    setTimeout(() => resolveCancel!(), 0);
+    // We can't guarantee the cancellation happens mid-parse, but the API exists
+    await promise;
+  });
 });

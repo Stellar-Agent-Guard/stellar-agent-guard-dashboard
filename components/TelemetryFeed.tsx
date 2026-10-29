@@ -1,15 +1,20 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { describeGuardEvent, explainReason, GUARD_EVENT_TOPICS } from "stellar-agent-guard-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
-import { STREAM_BUFFER_LIMIT } from "../lib/guard/telemetry.ts";
-import { eventKey, useGuard, useGuardEvents } from "./GuardProvider.tsx";
+import {
+  STREAM_BUFFER_LIMIT,
+  describeFeedGap,
+  type TelemetryEvent,
+} from "../lib/guard/telemetry.ts";
+import { useGuard, useGuardEvents } from "./GuardProvider.tsx";
 import { TelemetryAlerts } from "./TelemetryAlerts.tsx";
 import { TelemetryChart } from "./TelemetryChart.tsx";
-import { ErrorBlock, relativeTime, short, starLink } from "./bits.tsx";
+import { ErrorBlock, Skeleton, TimeAgo, short, starLink, TxHashCell } from "./bits.tsx";
 import { DateRangePicker } from "./DateRangePicker.tsx";
 import type { RangePreset, TimeRange } from "../lib/guard/ledgerTime.ts";
+import { density, initDensityStore } from "../lib/guard/densityStore.ts";
 import {
   NDJSON_MIME,
   auditLogFilename,
@@ -17,7 +22,13 @@ import {
   telemetryToAuditLog,
 } from "../lib/guard/exportFormats.ts";
 import { NETWORK } from "../lib/guard/network.ts";
+import { loadScopedValue, saveScopedValue } from "../lib/guard/guardScoped.ts";
 import { useAnnounce } from "../lib/guard/useAnnounce.ts";
+import { eventsToCsv, eventsToJson, exportFilename } from "../lib/guard/eventExport.ts";
+import { buildExportScope, describeExportScope } from "../lib/guard/exportScope.ts";
+import type { PollPhase } from "../lib/guard/feedHealth.ts";
+import { streamPaused, streamResumed } from "../lib/guard/announceCopy.ts";
+import { BlockedEventBadge } from "./BlockedEventBadge.tsx";
 import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 import {
   EMPTY_TELEMETRY_FILTER,
@@ -27,6 +38,31 @@ import {
   type TelemetryFilter,
   type VerdictFilter,
 } from "../lib/guard/telemetryExport.ts";
+import { severityFor } from "../lib/guard/feedSeverity.ts";
+import { formatEventTimestamp } from "../lib/guard/time.ts";
+import { decodeUrlState, writeUrlState } from "../lib/guard/urlState.ts";
+import {
+  FEED_GUARD_CAP,
+  attributionLabel,
+  matchesGuardFilter,
+  toggleGuardFilter,
+} from "../lib/guard/feedSubscriptions.ts";
+
+/** The scoped-state base under which each guard's feed filter is remembered. */
+const SCOPED_FILTER_BASE = "feedFilter";
+
+/**
+ * The header pill wording for each poll phase (#311). Short, and never the same
+ * word twice: "polling" covered both a live feed and a stuck one before, which is
+ * the conflation this issue is about.
+ */
+const HEALTH_LABELS: Record<PollPhase, string> = {
+  off: "stopped",
+  pending: "connecting",
+  healthy: "polling",
+  failing: "poll failing",
+  overdue: "no response",
+};
 
 /** Human names for the topic filter's options, keyed by the topic symbol. */
 const TOPIC_LABELS: Record<string, string> = {
@@ -59,7 +95,7 @@ function downloadText(filename: string, content: string, mime: string): void {
 /**
  * The live event feed.
  *
- * Two things are stated on the panel rather than glossed over, because both
+ * Three things are stated on the panel rather than glossed over, because all three
  * change how the feed should be read:
  *
  *   - Soroban RPC has no push stream, so this polls `getEvents` with a cursor and
@@ -69,6 +105,16 @@ function downloadText(filename: string, content: string, mime: string): void {
  *     that this console produced itself, decoded from the enforced simulation's
  *     diagnostics and labelled `diagnostic`. Absence of refusals here does not
  *     mean absence of refusals on chain.
+ *   - Rows are tiered by severity so a block is findable by looking, not by
+ *     reading: the tier is a class and a `data-severity`, and every tier's wording
+ *     is already in the row, so nothing here depends on colour.
+ *   - Since issue #23 the feed tails *several* guards at once, merging their
+ *     streams into one table with a guard-attribution chip per row. Each tailed
+ *     guard is one more poll loop, so only the first `FEED_GUARD_CAP` are watched
+ *     and the rest are named as not tailed rather than silently dropped.
+ *
+ * There is deliberately no sound. An operator console runs unattended and muted;
+ * a noise that can only be silenced in the tab that made it is not an alert.
  */
 export function TelemetryFeed() {
   // The feed subscribes to the events context itself: batches re-render this
@@ -85,16 +131,125 @@ export function TelemetryFeed() {
     guard,
     queryRange,
     rangeLabel,
+    exportRange,
+    instances,
+    tailSelection,
+    toggleTailedGuard,
   } = useGuard();
-  const [filter, setFilter] = useState<TelemetryFilter>(EMPTY_TELEMETRY_FILTER);
+  // Restore a shared verdict filter from the URL, while retaining the other
+  // filter dimensions independently for each guard in local storage.
+  const [filters, setFilters] = useState<Record<string, TelemetryFilter>>(() => {
+    const saved =
+      loadScopedValue<TelemetryFilter>(SCOPED_FILTER_BASE, NETWORK.name, guard) ??
+      EMPTY_TELEMETRY_FILTER;
+    const shared =
+      typeof window === "undefined" ? undefined : decodeUrlState(window.location.search).filter;
+    return {
+      [guard]: shared === undefined ? saved : { ...saved, verdict: shared },
+    };
+  });
+  const filter =
+    filters[guard] ??
+    loadScopedValue<TelemetryFilter>(SCOPED_FILTER_BASE, NETWORK.name, guard) ??
+    EMPTY_TELEMETRY_FILTER;
+
+  function applyFilter(update: (current: TelemetryFilter) => TelemetryFilter) {
+    const next = update(filter);
+    setFilters((current) => ({ ...current, [guard]: next }));
+    saveScopedValue(SCOPED_FILTER_BASE, NETWORK.name, guard, next);
+    // Keep the shareable verdict and panel in the URL without navigating.
+    writeUrlState({
+      filter: next.verdict,
+      tab: next.verdict === "all" ? "console" : "telemetry",
+    });
+  }
+
+  const [densityState, setDensityState] = useState<"comfortable" | "compact">("comfortable");
+
+  useEffect(() => {
+    const unsubscribe = initDensityStore();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDensityState(density.get());
+    const densityUnsubscribe = density.subscribe((value) => {
+      setDensityState(value);
+    });
+    return () => {
+      unsubscribe();
+      densityUnsubscribe();
+    };
+  }, []);
+
   const announce = useAnnounce();
   const demo = useDemoMode();
 
+  /**
+   * Download the feed through the shared export path (issue #37). The schema,
+   * BOM and filename rules all live in `lib/guard/eventExport.ts` — this is a
+   * thin binding, not a second exporter.
+   *
+   * #309: it hands over `scope.rows`, which is the exact array the preview above
+   * counted. There is no second selection step, so the count the operator read
+   * before clicking cannot differ from the count in the file they got.
+   */
+  function downloadExport(format: "csv" | "json") {
+    const content =
+      format === "csv"
+        ? eventsToCsv(scope.rows, guard)
+        : JSON.stringify(eventsToJson(scope.rows, guard), null, 2);
+    const type = format === "csv" ? "text/csv;charset=utf-8" : "application/json";
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = exportFilename(guard, format, scope.rowCount);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    announce(
+      `Exported ${scope.rowCount} event${scope.rowCount === 1 ? "" : "s"} as ${format.toUpperCase()}`,
+    );
+  }
+
+  // The guard-chip filter (issue #23) is one more feed criterion, composed ahead
+  // of the verdict/topic/contract filter rather than instead of it: an empty
+  // selection means "every guard", which is the state the panel opens in.
+  const [selectedGuards, setSelectedGuards] = useState<Set<string>>(() => new Set());
+  const guardVisible = useMemo(
+    () => events.filter((event) => matchesGuardFilter(event.contractId, selectedGuards)),
+    [events, selectedGuards],
+  );
   // The three controls and the exports all act on the same projection, so a
   // CSV/NDJSON download is provably the filtered view on screen — one row in,
-  // one line out, never a hidden superset.
-  const rows = filterGuardEvents(events, filter);
-  const filterActive = isFilterActive(filter);
+  // one line out, never a hidden superset. The guard chip feeds that same
+  // projection, so an export is the filtered multi-guard view and nothing more.
+  const rows = filterGuardEvents(guardVisible, filter);
+  const filterActive = isFilterActive(filter) || selectedGuards.size > 0;
+
+  /**
+   * The scope every download leaves with (#309), computed from the same rows the
+   * table is showing. Each exporter is handed `scope.rows`, so the range, the
+   * count and the "diagnostics included" line in the preview below are statements
+   * about the file rather than statements about the screen.
+   *
+   * Not a `useMemo`: `rows` is a fresh array on every render (it is a filter, not
+   * a cached value), so a memo here would recompute anyway and only claim a
+   * stabilisation it never provided.
+   */
+  const scope = buildExportScope({ events: rows, range: exportRange, rangeLabel });
+
+  /**
+   * Chips describe what is actually tailed: the live tail's (capped) set while
+   * watching, and the full registry otherwise, so the controls never offer a
+   * guard the feed is not reading.
+   */
+  const chipSources = useMemo(
+    () =>
+      feed.guards.length > 0
+        ? feed.guards
+        : instances.map((instance) => ({ guard: instance.guard, label: instance.label })),
+    [feed.guards, instances],
+  );
 
   /**
    * Download the structured audit log: a header line naming the guard, network
@@ -105,7 +260,7 @@ export function TelemetryFeed() {
   function exportAuditLog() {
     const exportedAt = new Date();
     const body = telemetryToAuditLog({
-      events: rows,
+      events: scope.rows,
       bufferedCount: events.length,
       guard,
       network: NETWORK.name,
@@ -119,7 +274,7 @@ export function TelemetryFeed() {
       body,
       `${NDJSON_MIME};charset=utf-8`,
     );
-    announce(`Exported ${rows.length} event${rows.length === 1 ? "" : "s"} to the audit log`);
+    announce(`Exported ${scope.rowCount} event${scope.rowCount === 1 ? "" : "s"} to the audit log`);
   }
 
   function applyRange(range: TimeRange, preset: RangePreset) {
@@ -134,14 +289,50 @@ export function TelemetryFeed() {
     startWatching();
   }
 
+  /**
+   * Pausing and resuming are announced once each, through the shell's polite
+   * region, and the count that goes with them is the operator's own number to
+   * check the table against.
+   *
+   * The notice below is deliberately *not* a live region. It carries the queue
+   * depth, so as a live region it would re-announce on every event that arrived
+   * while the table was frozen — a burst of interruptions for a number that is
+   * already on screen. One announcement per transition, and the live number
+   * stays where the operator can read it.
+   */
+  function onPause() {
+    pauseStream();
+    const spoken = streamPaused();
+    announce(spoken.message, spoken.priority);
+  }
+
+  function onResume() {
+    // Read the depth before the buffer is drained: afterwards it is always zero,
+    // and "resumed with 0 queued" is a claim the operator can check against the
+    // badge they just watched fill.
+    const queued = stream.pendingCount;
+    resumeStream();
+    const spoken = streamResumed(queued);
+    announce(spoken.message, spoken.priority);
+  }
+
   return (
     <div className="panel">
       <div className="row" style={{ justifyContent: "space-between" }}>
         <h2 style={{ margin: 0 }}>Telemetry</h2>
         <div className="row">
-          {feed.watching && <span className="pill ok">polling</span>}
+          {feed.watching && (
+            <span className={`pill ${feed.health.tone}`}>{HEALTH_LABELS[feed.health.phase]}</span>
+          )}
           {stream.paused && <span className="pill warn">paused</span>}
-          {feed.latestLedger !== null && <span className="tiny muted">ledger {feed.latestLedger}</span>}
+          {/* Counted from the buffer, not from the rows on screen: a paused,
+              filtered or empty table can hide a blocked decision that is plainly
+              in the stream, and a count the operator cannot reconcile with the
+              feed is worse than no count. */}
+          <BlockedEventBadge events={events} />
+          {feed.latestLedger !== null && (
+            <span className="tiny muted">ledger {feed.latestLedger}</span>
+          )}
           {feed.watching ? (
             <button className="secondary" onClick={stopWatching}>
               Stop
@@ -150,13 +341,13 @@ export function TelemetryFeed() {
             <button onClick={startWatching}>Start watching</button>
           )}
           {stream.paused ? (
-            <button onClick={resumeStream}>
+            <button onClick={onResume}>
               Resume{stream.pendingCount > 0 ? ` (${stream.pendingCount})` : ""}
             </button>
           ) : (
             <button
               className="secondary"
-              onClick={pauseStream}
+              onClick={onPause}
               disabled={!feed.watching}
               title="Freeze the table so rows stop moving. Polling continues; new events queue until you resume."
             >
@@ -170,6 +361,15 @@ export function TelemetryFeed() {
             title="Empty the list. The poll cursor is kept, so nothing is re-fetched and nothing is skipped."
           >
             Clear buffer
+          </button>
+          {/* Density toggle */}
+          <button
+            className="secondary"
+            onClick={() => {
+              density.set(densityState === "comfortable" ? "compact" : "comfortable");
+            }}
+          >
+            {densityState === "comfortable" ? "Compact" : "Comfortable"}
           </button>
         </div>
       </div>
@@ -186,12 +386,12 @@ export function TelemetryFeed() {
         )}
       </div>
 
-      {/* Announced politely so a screen reader hears the queue grow without being interrupted. */}
-      <div role="status" aria-live="polite">
+      <div>
         {stream.paused && (
           <div className="notice" style={{ marginTop: 12 }}>
             <strong>
-              Stream paused ({stream.pendingCount} new event{stream.pendingCount === 1 ? "" : "s"} pending)
+              Stream paused ({stream.pendingCount} new event{stream.pendingCount === 1 ? "" : "s"}{" "}
+              pending)
             </strong>
             <span className="tiny">
               The table is frozen so you can read it. Polling carries on in the background and new
@@ -203,14 +403,43 @@ export function TelemetryFeed() {
         )}
       </div>
 
+      {/*
+        What the download is about to contain (#309), stated before the operator
+        clicks rather than after. Every number here is read off `scope`, and
+        `scope.rows` is the array the exporters are handed — so this is a claim
+        about the file, not a restatement of the table. The field list is imported
+        from the exporter itself, and the omission of `data` is named because that
+        is the one event field that could carry payload material.
+      */}
+      <div className="notice info" style={{ marginTop: 10 }}>
+        <strong>Export scope</strong>
+        <ul className="tiny" style={{ margin: "4px 0 0 0", paddingLeft: 18 }}>
+          {describeExportScope(scope).map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+        {scope.excludedByRange > 0 && (
+          <span className="tiny">
+            {scope.excludedByRange} row(s) you can see are outside the selected range and will not
+            be in the file.
+          </span>
+        )}
+      </div>
+
       <div className="row" style={{ marginTop: 10, flexWrap: "wrap", gap: 8 }}>
-        <label className="tiny muted" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <label
+          className="tiny muted"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+        >
           Verdict
           <select
             aria-label="Verdict filter"
             value={filter.verdict}
             onChange={(event) =>
-              setFilter((current) => ({ ...current, verdict: event.target.value as VerdictFilter }))
+              applyFilter((current) => ({
+                ...current,
+                verdict: event.target.value as VerdictFilter,
+              }))
             }
           >
             <option value="all">All verdicts</option>
@@ -218,12 +447,17 @@ export function TelemetryFeed() {
             <option value="blocked">Blocked Only</option>
           </select>
         </label>
-        <label className="tiny muted" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <label
+          className="tiny muted"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+        >
           Topic
           <select
             aria-label="Topic filter"
             value={filter.topic}
-            onChange={(event) => setFilter((current) => ({ ...current, topic: event.target.value }))}
+            onChange={(event) =>
+              applyFilter((current) => ({ ...current, topic: event.target.value }))
+            }
           >
             <option value="all">All topics</option>
             {Object.entries(TOPIC_LABELS).map(([topic, label]) => (
@@ -237,46 +471,219 @@ export function TelemetryFeed() {
           aria-label="Contract address search"
           placeholder="Contract address contains…"
           value={filter.contract}
-          onChange={(event) => setFilter((current) => ({ ...current, contract: event.target.value }))}
+          onChange={(event) =>
+            applyFilter((current) => ({ ...current, contract: event.target.value }))
+          }
           style={{ maxWidth: 240 }}
         />
         <button
           className="secondary"
-          onClick={() => downloadText("guard-telemetry.csv", telemetryToCsv(rows), "text/csv;charset=utf-8")}
-          disabled={rows.length === 0}
+          onClick={() => downloadExport("csv")}
+          disabled={scope.rowCount === 0}
+          title="Stable append-only schema (docs/export-schema.md): schema_version, guard, topic, kind, source, decision, reason, reason_label, ledger, ledger_closed_at, transaction_hash — BOM-prefixed for Excel"
         >
           Export CSV
         </button>
         <button
           className="secondary"
+          onClick={() => downloadExport("json")}
+          disabled={scope.rowCount === 0}
+          title="Same schema as the CSV export, as one JSON object: schemaVersion, columns, guard, rows"
+        >
+          Export JSON
+        </button>
+        <button
+          className="secondary"
           onClick={() =>
-            downloadText("guard-telemetry.ndjson", telemetryToNdjson(rows), "application/x-ndjson")
+            downloadText(
+              "guard-telemetry.ndjson",
+              telemetryToNdjson(scope.rows),
+              "application/x-ndjson",
+            )
           }
-          disabled={rows.length === 0}
+          disabled={scope.rowCount === 0}
         >
           Export NDJSON
         </button>
         <button
           className="secondary"
           onClick={exportAuditLog}
-          disabled={rows.length === 0}
-          title="NDJSON audit log: a header line, then decoded fields, verdict, ledger, transaction hash and the raw event XDR per event"
+          disabled={scope.rowCount === 0}
+          title="NDJSON audit log: a header line, then decoded fields, verdict, ledger, transaction hash and the raw event XDR per event (terms in docs/glossary.md — XDR, Ledger, Stroop)"
         >
           Export audit log
         </button>
         {filterActive && (
-          <button className="secondary" onClick={() => setFilter(EMPTY_TELEMETRY_FILTER)}>
+          <button
+            className="secondary"
+            onClick={() => {
+              applyFilter(() => EMPTY_TELEMETRY_FILTER);
+              // "Clear filters" clears every criterion, the chip filter included.
+              setSelectedGuards(new Set());
+            }}
+          >
             Clear filters
           </button>
         )}
       </div>
 
+      {chipSources.length > 1 && (
+        <div
+          className="row"
+          style={{ marginTop: 8, flexWrap: "wrap", gap: 8 }}
+          role="group"
+          aria-label="Filter events by guard"
+        >
+          <span className="tiny muted">Filter by guard:</span>
+          {chipSources.map((source) => {
+            const active = selectedGuards.has(source.guard);
+            return (
+              <button
+                key={source.guard}
+                className={active ? "pill ok" : "pill"}
+                aria-pressed={active}
+                title={source.guard}
+                onClick={() =>
+                  setSelectedGuards((current) => toggleGuardFilter(current, source.guard))
+                }
+              >
+                {source.label}
+              </button>
+            );
+          })}
+          {selectedGuards.size > 0 && (
+            <button className="secondary" onClick={() => setSelectedGuards(new Set())}>
+              All guards
+            </button>
+          )}
+        </div>
+      )}
+
       <p className="tiny muted" style={{ marginTop: 8 }}>
-        Tailed from Soroban RPC&apos;s <code>getEvents</code> with a cursor, so no event is delivered
-        twice and none is skipped between polls. Soroban has no push stream — the floor on latency is
-        the ledger close interval (roughly 5s), not the 5s poll.
-        {feed.lastPolledAt && ` Last poll ${relativeTime(feed.lastPolledAt)}.`}
+        Tailed from Soroban RPC&apos;s <code>getEvents</code> with a cursor, so no event is
+        delivered twice and none is skipped between polls. Soroban has no push stream — the floor on
+        latency is the ledger close interval (roughly 5s), not the 5s poll.
       </p>
+
+      {/*
+        Poll liveness, stated separately from the rows below it (#311). This is
+        deliberately *not* a live region: it re-renders on every poll, so as a
+        live region it would interrupt on each quiet round — announcing "still
+        alive" every five seconds. It is plain text with an explicit label, so a
+        screen reader gets it on demand, and the one transition that does deserve
+        an interruption (a poll beginning to fail) is the error block under it.
+
+        Two stamps are shown because they answer different questions: the last
+        round that *returned*, and the last one that was *attempted*. Before #311
+        the panel had one field covering both, so "last poll 5s ago" was true of a
+        feed whose every poll since the first had failed.
+      */}
+      <p className="tiny muted" style={{ marginTop: 4 }} aria-label="Telemetry poll health">
+        <span className={`pill ${feed.health.tone}`}>{HEALTH_LABELS[feed.health.phase]}</span>{" "}
+        {feed.health.text}
+        {feed.lastPolledAt && feed.lastPolledAt !== feed.health.lastSuccessAt && (
+          <>
+            {" "}
+            (Last attempt <TimeAgo iso={feed.lastPolledAt} suffix=" ago" />
+            .)
+          </>
+        )}
+      </p>
+
+      {feed.guards.length > 0 && (
+        <p className="tiny muted" style={{ marginTop: 8 }}>
+          Tailing {feed.guards.length} guard{feed.guards.length === 1 ? "" : "s"} simultaneously, up
+          to the {FEED_GUARD_CAP}-guard cap. Each tailed guard is its own poll loop, so RPC load
+          scales with the number watched.
+        </p>
+      )}
+
+      {feed.capped > 0 && (
+        <div className="notice" role="status">
+          <strong>
+            {feed.capped} guard{feed.capped === 1 ? "" : "s"} beyond the {FEED_GUARD_CAP}-guard cap{" "}
+            {feed.capped === 1 ? "is" : "are"} not being tailed
+          </strong>
+          <span className="tiny">
+            {feed.cappedLabels.join(", ")}. Their events will not appear in this feed. Choose which
+            of them to tail below — the cap keeps poll load bounded rather than silently multiplying
+            RPC traffic, but which guards it bounds is your decision, not the registry&apos;s order.
+          </span>
+        </div>
+      )}
+
+      {/* Coverage warnings. An empty list means no discontinuity has been detected,
+          not that the feed is known to be complete. Nothing here fills a hole with
+          invented events: the rows above are only what the RPC returned. */}
+      {feed.gaps.map((notice) => (
+        <div
+          key={notice.guard}
+          className={notice.lost.length > 0 ? "notice danger" : "notice"}
+          role={notice.lost.length > 0 ? "alert" : "status"}
+          data-testid="feed-gap-notice"
+        >
+          <strong>Possible gaps in the feed for {notice.label}</strong>
+          {notice.lost.map((gap) => {
+            const text = describeFeedGap(gap);
+            return (
+              <span className="tiny" key={`${gap.fromLedger}-${gap.toLedger}`}>
+                {text.headline}. {text.range}
+              </span>
+            );
+          })}
+          {notice.unsettled && (
+            <span className="tiny">
+              {describeFeedGap(notice.unsettled).headline}.{" "}
+              {describeFeedGap(notice.unsettled).range} This clears once a later poll is consistent.
+            </span>
+          )}
+        </div>
+      ))}
+
+      {/*
+        Which guards spend the capped slots (#310). Every saved guard is listed,
+        not just the tailed ones, because the whole point is that the unselected
+        set is invisible-but-real: an operator cannot choose to tail a guard they
+        cannot see. The active guard is shown as pinned rather than as a checkbox,
+        since #23's rule that the guard on screen is never starved outranks a
+        selection.
+      */}
+      <fieldset style={{ marginTop: 10 }}>
+        <legend className="tiny muted">
+          Guards to tail ({feed.guards.length} of {FEED_GUARD_CAP} slots used)
+        </legend>
+        <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+          {instances.map((instance) => {
+            const chosen = tailSelection.includes(instance.guard);
+            const isTailed = feed.guards.some((source) => source.guard === instance.guard);
+            const isActive = instance.guard === guard;
+            return (
+              <label
+                key={instance.guard}
+                className={`pill${isTailed ? " ok" : " muted"}`}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                title={`${instance.guard}${isActive ? " — the guard on screen, always tailed" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  aria-label={`Tail ${instance.label}`}
+                  checked={isActive || chosen}
+                  disabled={isActive}
+                  onChange={() => toggleTailedGuard(instance.guard)}
+                />
+                {instance.label}
+                {isActive && <span className="tiny">on screen</span>}
+              </label>
+            );
+          })}
+        </div>
+        <p className="tiny muted" style={{ marginTop: 6 }}>
+          Each tailed guard is its own <code>getEvents</code> poll loop, so {feed.guards.length}{" "}
+          listener{feed.guards.length === 1 ? "" : "s"} are live now. Your choice is remembered for{" "}
+          {NETWORK.name} only, and only names which guards get the slots — it never changes what the
+          chain says about them.
+        </p>
+      </fieldset>
 
       <div className="notice info">
         <strong>Refused decisions cannot reach this feed from the ledger</strong>
@@ -296,31 +703,69 @@ export function TelemetryFeed() {
       <TelemetryChart />
 
       {events.length === 0 ? (
-        <p className="tiny muted">
-          {feed.watching
-            ? "No events from this guard yet. Lifecycle events (policy set, frozen, heartbeat) and allowed decisions appear here as they settle."
-            : "Start watching to tail this guard's events."}
-        </p>
+        feed.watching && feed.latestLedger === null ? (
+          /* The initial load: watching has started but the first poll has not
+             returned (no ledger cursor yet). This is a pending read, not an
+             empty result, so it renders as skeleton rows in the same table
+             shape the events will land in — not as an empty-looking message
+             and not as zeros. */
+          <div className="scrolly table-stack" aria-busy="true">
+            <table className={`events stack ${densityState === "compact" ? "compact" : ""}`}>
+              {feedHead}
+              <tbody aria-hidden="true">
+                {[0, 1, 2].map((row) => (
+                  <tr key={row}>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="tiny muted">
+            {feed.watching
+              ? feed.guards.length > 1
+                ? "No events from these guards yet. Lifecycle events (policy set, frozen, heartbeat) and allowed decisions appear here as they settle."
+                : "No events from this guard yet. Lifecycle events (policy set, frozen, heartbeat) and allowed decisions appear here as they settle."
+              : feed.guards.length > 1
+                ? "Start watching to tail these guards' events."
+                : "Start watching to tail this guard's events."}
+          </p>
+        )
       ) : rows.length === 0 ? (
         <p className="tiny muted">
-          No events match the current filter. The feed still holds {events.length} event(s);
-          widen the verdict, topic or contract filter to see them.
+          No events match the current filter. The feed still holds {guardVisible.length} event(s);
+          widen the verdict, topic, contract{selectedGuards.size > 0 ? " or guard" : ""} filter to
+          see them.
         </p>
       ) : (
-        <div className="scrolly">
-          <table className="events">
-            <thead>
-              <tr>
-                <th>Event</th>
-                <th>Decision</th>
-                <th>Source</th>
-                <th>Ledger</th>
-                <th>Transaction</th>
-              </tr>
-            </thead>
+        <div className="scrolly table-stack">
+          <table className={`events stack ${densityState === "compact" ? "compact" : ""}`}>
+            {feedHead}
             <tbody>
               {rows.map((event) => (
-                <TelemetryRow key={eventKey(event)} event={event} />
+                <TelemetryRow
+                  key={event.id}
+                  event={event}
+                  guardLabel={attributionLabel(event.contractId, chipSources)}
+                />
               ))}
             </tbody>
           </table>
@@ -329,9 +774,14 @@ export function TelemetryFeed() {
 
       <p className="tiny muted" style={{ marginTop: 8 }}>
         Feed holds the most recent {events.length} event(s) from{" "}
-        <span className="mono">{short(guard, 8, 6)}</span>.
-        {filterActive && <> Showing {rows.length} matching the current filter.</>} The audit log
-        keeps 64-bit values (ledgers, stroop amounts, timestamps) as strings so no precision is lost.
+        {feed.guards.length > 1 ? (
+          `${feed.guards.length} tailed guards`
+        ) : (
+          <span className="mono">{short(guard, 8, 6)}</span>
+        )}
+        .{filterActive && <> Showing {rows.length} matching the current filter.</>} The audit log
+        keeps 64-bit values (ledgers, stroop amounts, timestamps) as strings so no precision is
+        lost.
       </p>
     </div>
   );
@@ -347,19 +797,41 @@ export function TelemetryFeed() {
  * cap — the difference between holding frame rate and remounting the table on
  * every update.
  *
- * The key is `eventKey`, the provider's own identity for de-duplication, so
- * React reconciles against the same uniqueness the feed guarantees: a new
+ * The key is the SDK's `event.id`, the same identity the feed de-duplicates
+ * on, so React reconciles against the same uniqueness the feed guarantees: a new
  * event prepending shifts nothing, and no row is ever unmounted and rebuilt
  * merely because rows above it changed.
+ *
+ * Severity rides here, on the row's own attributes, so the tier costs no extra
+ * element and the cells stay exactly as they were — O(1) from fields the decoder
+ * already produced, with no topic or reason string parsed (see `severityFor`).
  */
-const TelemetryRow = memo(function TelemetryRow({ event }: { event: GuardEvent }) {
+const TelemetryRow = memo(function TelemetryRow({
+  event,
+  guardLabel,
+}: {
+  event: TelemetryEvent;
+  /** The registry label for this row's guard, resolved by the caller. */
+  guardLabel: string | null;
+}) {
+  const severity = severityFor(event);
+  const iso = event.ledgerClosedAt ?? event.observedAt ?? null;
+  // Both renderings of the same instant: the local wall time with an explicit
+  // zone label for at-a-glance reading, and the stable UTC value to quote in a
+  // report. The UTC value comes from the parsed instant, so it is unaffected
+  // by this operator's zone or by DST; invalid timestamps yield null and the
+  // cell falls back to the relative time plus `—`.
+  const timestamp = formatEventTimestamp(iso);
   return (
-    <tr>
-      <td>
+    <tr className={`severity-${severity}`} data-severity={severity} data-stream={event.source}>
+      <td data-label="Event">
+        {/* The severity tier is already colour-coded by the row class; this is the
+            same fact as text, so reduced-motion or monochrome reading keeps it. */}
+        <span className="visually-hidden">Severity: {severity}. </span>
         <div>{labelFor(event)}</div>
         <div className="tiny muted mono">{describeGuardEvent(event)}</div>
       </td>
-      <td>
+      <td data-label="Decision">
         {event.decision ? (
           event.decision.result === "blocked" ? (
             <span className="pill danger">{event.decision.reason ?? "blocked"}</span>
@@ -373,13 +845,42 @@ const TelemetryRow = memo(function TelemetryRow({ event }: { event: GuardEvent }
           <div className="tiny muted">{explainReason(event.decision.reason)}</div>
         )}
       </td>
-      <td>
-        <span className={`pill${event.source === "diagnostic" ? " warn" : ""}`}>{event.source}</span>
+      <td data-label="Guard">
+        {guardLabel !== null ? (
+          <span className="pill" title={event.contractId ?? "unknown contract"}>
+            {guardLabel}
+          </span>
+        ) : (
+          <span className="tiny muted">—</span>
+        )}
       </td>
-      <td className="mono tiny">{event.ledger ?? "—"}</td>
-      <td>
+      <td data-label="Source">
+        <span className={`pill${event.source === "diagnostic" ? " warn" : ""}`}>
+          {event.source}
+        </span>
+      </td>
+      <td className="mono tiny" data-label="Time">
+        {iso ? <TimeAgo iso={iso} /> : "—"}
+        {timestamp && (
+          <div
+            className="muted"
+            style={{ marginTop: 2 }}
+            title={`${timestamp.local} ${timestamp.zoneLabel} · ${timestamp.utc} UTC`}
+          >
+            {timestamp.local} {timestamp.zoneLabel}
+            <br />
+            {timestamp.utc} UTC
+          </div>
+        )}
+        {event.ledger ? (
+          <div className="muted" style={{ marginTop: 2 }}>
+            L{event.ledger}
+          </div>
+        ) : null}
+      </td>
+      <td data-label="Transaction">
         {event.transactionHash ? (
-          starLink(event.transactionHash)
+          <TxHashCell hash={event.transactionHash} />
         ) : (
           <span className="tiny muted">none — never broadcast</span>
         )}
@@ -387,6 +888,19 @@ const TelemetryRow = memo(function TelemetryRow({ event }: { event: GuardEvent }
     </tr>
   );
 });
+
+const feedHead = (
+  <thead>
+    <tr>
+      <th scope="col">Event</th>
+      <th scope="col">Decision</th>
+      <th scope="col">Guard</th>
+      <th scope="col">Source</th>
+      <th scope="col">Time</th>
+      <th scope="col">Transaction</th>
+    </tr>
+  </thead>
+);
 
 function labelFor(event: GuardEvent): string {
   switch (event.kind) {

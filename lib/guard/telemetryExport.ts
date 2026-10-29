@@ -9,6 +9,7 @@
  */
 
 import type { GuardEvent } from "stellar-agent-guard-sdk";
+import { neutralizeFormulaCell } from "./csv.ts";
 
 export type VerdictFilter = "all" | "allowed" | "blocked";
 
@@ -36,7 +37,10 @@ export const EMPTY_TELEMETRY_FILTER: TelemetryFilter = {
  * "Blocked Only" both exclude it rather than pretending it carries a verdict.
  */
 // Generic so a richer event (one carrying its raw XDR) survives filtering intact.
-export function filterGuardEvents<T extends GuardEvent>(events: readonly T[], filter: TelemetryFilter): T[] {
+export function filterGuardEvents<T extends GuardEvent>(
+  events: readonly T[],
+  filter: TelemetryFilter,
+): T[] {
   const contract = filter.contract.trim().toLowerCase();
   return events.filter((event) => {
     if (filter.verdict !== "all" && event.decision?.result !== filter.verdict) return false;
@@ -100,7 +104,10 @@ function rowCells(event: GuardEvent): string[] {
 /** The events as CSV: fixed header, one row per event, trailing newline. */
 export function telemetryToCsv(events: GuardEvent[]): string {
   const lines = [csvRow([...TELEMETRY_CSV_COLUMNS])];
-  for (const event of events) lines.push(csvRow(rowCells(event)));
+  for (const event of events) {
+    const cells = rowCells(event).map(neutralizeFormulaCell);
+    lines.push(csvRow(cells));
+  }
   return `${lines.join("\n")}\n`;
 }
 

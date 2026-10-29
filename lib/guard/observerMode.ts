@@ -70,7 +70,17 @@ export interface WriteControlState {
  */
 export function writeControlState(
   wallet: ObserverWalletState | null | undefined,
-  options: { busy?: boolean; extraDisabled?: boolean; label?: string } = {},
+  options: {
+    busy?: boolean;
+    extraDisabled?: boolean;
+    label?: string;
+    /**
+     * The live read this write depends on could not complete (offline, or the
+     * RPC read failed). The sentence is shown as the reason, so the control
+     * explains itself rather than merely being inert (issue #348).
+     */
+    preflightUnavailable?: string | null;
+  } = {},
 ): WriteControlState {
   const label = options.label ?? "this action";
   if (isObserverSession(wallet)) {
@@ -78,6 +88,13 @@ export function writeControlState(
   }
   if (options.busy) {
     return { disabled: true, title: `${capitalize(label)} is already in progress.`, reason: null };
+  }
+  if (options.preflightUnavailable) {
+    return {
+      disabled: true,
+      title: options.preflightUnavailable,
+      reason: options.preflightUnavailable,
+    };
   }
   if (options.extraDisabled) {
     return { disabled: true, title: "This action is unavailable right now.", reason: null };
@@ -99,9 +116,7 @@ function capitalize(value: string): string {
  * session keeps reading as itself. Returning `undefined` here would hand the
  * problem to the SDK's error path and make the console look broken.
  */
-export function readSourceFor(
-  wallet: ObserverWalletState | null | undefined,
-): string {
+export function readSourceFor(wallet: ObserverWalletState | null | undefined): string {
   return isObserverSession(wallet) ? READ_SOURCE_FALLBACK : (wallet?.address as string);
 }
 

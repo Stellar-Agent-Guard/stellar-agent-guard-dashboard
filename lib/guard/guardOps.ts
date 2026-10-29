@@ -8,7 +8,7 @@
  */
 
 import { Account, Address, Operation, TransactionBuilder, rpc, xdr } from "@stellar/stellar-sdk";
-import type { GuardStatus, PolicyConfig } from "stellar-agent-guard-sdk";
+import { verifyGuardWasm, type GuardStatus, type PolicyConfig } from "stellar-agent-guard-sdk";
 import { NETWORK, PHASE1_ARTIFACT } from "./network.ts";
 import { buildPolicyConfig, type PolicyDraft } from "./policyForm.ts";
 import {
@@ -17,21 +17,27 @@ import {
   readPolicy,
   readStatus,
   readWindow,
+  stringifyError,
   verifyWasmIdentity,
   type ReadResult,
   type WasmIdentity,
   type WindowState,
 } from "./chain.ts";
 import {
+  INCLUSION_FEE,
+  assembleFromSimulation,
+  buildInitialEnvelope,
   describeRejectedResult,
+  diagnosticEventsOf,
   invokeWithWallet,
+  writeBoundary,
   type InvokeResult,
   type WalletSigner,
 } from "./submit.ts";
-import { addressToScVal, hexToBytes, sha256Hex } from "./scval.ts";
+import { addressToScVal, hexToBytes } from "./scval.ts";
 import { announce } from "./useAnnounce.ts";
 import { recordTx } from "./txHistory.ts";
-import { assertCorrectNetwork, NetworkMismatchError } from "./networkGuard.ts";
+import { contractAlreadyDeployed } from "./saltGenerator.ts";
 
 // ── Artifact identity ──────────────────────────────────────────────────────
 
@@ -187,6 +193,14 @@ export async function submitOperation(params: {
     };
   }
 
+  // A deploy or an upload is reviewed on the panel before this runs, and the
+  // wallet can move to another account while that panel is open. The boundary
+  // is re-read here exactly as it is for a contract call, so a deployment can
+  // never be signed — or broadcast — by an account other than the one that was
+  // on screen (issue #349).
+  const beforeEnvelope = await writeBoundary(signer, "envelope");
+  if (beforeEnvelope) return beforeEnvelope;
+
   announce("Please approve transaction in Freighter");
   const signedXdr = await signer.signTransaction(prepared.toXDR());
   const transaction = TransactionBuilder.fromXDR(signedXdr, passphrase);
@@ -194,6 +208,9 @@ export async function submitOperation(params: {
   // The envelope's fee field carries inclusion fee + resource fee — exactly
   // what the network will charge for this transaction.
   const feeStroops = transaction.fee;
+
+  const beforeSend = await writeBoundary(signer, "submission");
+  if (beforeSend) return beforeSend;
 
   const sent = await server.sendTransaction(transaction);
   if (sent.status === "ERROR") {
@@ -214,7 +231,14 @@ export async function submitOperation(params: {
     if (!result) continue;
     if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
       const ledger = (result as { ledger?: number }).ledger ?? null;
-      recordTx({ hash: sent.hash, operation: label, status: "confirmed", feeStroops });
+      recordTx({
+        hash: sent.hash,
+        operation: label,
+        status: "confirmed",
+        feeStroops,
+        networkName: NETWORK.name,
+        networkPassphrase: passphrase,
+      });
       announce(
         ledger !== null
           ? `Transaction confirmed on ledger ${ledger}`
@@ -230,7 +254,14 @@ export async function submitOperation(params: {
       };
     }
     if (result.status === rpc.Api.GetTransactionStatus.FAILED) {
-      recordTx({ hash: sent.hash, operation: label, status: "failed", feeStroops });
+      recordTx({
+        hash: sent.hash,
+        operation: label,
+        status: "failed",
+        feeStroops,
+        networkName: NETWORK.name,
+        networkPassphrase: passphrase,
+      });
       announce("Transaction failed on chain");
       return {
         kind: "failed",
@@ -239,12 +270,18 @@ export async function submitOperation(params: {
           result,
         )})`,
         feeStroops,
-        diagnosticEvents:
-          (result as { diagnosticEventsXdr?: unknown[] }).diagnosticEventsXdr ?? [],
+        diagnosticEvents: (result as { diagnosticEventsXdr?: unknown[] }).diagnosticEventsXdr ?? [],
       };
     }
   }
-  recordTx({ hash: sent.hash, operation: label, status: "failed", feeStroops });
+  recordTx({
+    hash: sent.hash,
+    operation: label,
+    status: "failed",
+    feeStroops,
+    networkName: NETWORK.name,
+    networkPassphrase: passphrase,
+  });
   announce("Transaction failed on chain");
   return {
     kind: "failed",
@@ -295,6 +332,13 @@ export interface DeployOutcome {
   steps: DeployStep[];
   /** The deployed instance's identity, re-read from the chain after the create. */
   identity: WasmIdentity | null;
+  /**
+   * Why the post-deploy read produced no identity, or null when it was never
+   * reached, or when it succeeded. Kept separate from `identity` so a transport
+   * failure is reported as an unavailable read rather than as a wrong artifact —
+   * and so the deployment receipt can record a failed read explicitly.
+   */
+  readError: string | null;
   /** True only when the created instance runs the pinned artifact. */
   verified: boolean;
 }
@@ -303,6 +347,23 @@ export class GuardOperationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "GuardOperationError";
+  }
+}
+
+async function assertDeploymentAddressAvailable(
+  server: rpc.Server,
+  address: string,
+): Promise<void> {
+  const lookup = await contractAlreadyDeployed(server, address);
+  if (lookup.error) {
+    throw new GuardOperationError(
+      `could not inspect predicted address ${address}: ${lookup.error}; refusing to deploy`,
+    );
+  }
+  if (lookup.exists) {
+    throw new GuardOperationError(
+      `predicted address ${address} already exists; change the deployer or salt before deploying again`,
+    );
   }
 }
 
@@ -330,24 +391,25 @@ export async function deployGuard(params: {
     params.onStep?.(step);
   };
 
-  const artifact = await checkArtifact(server);
-  if (!artifact.ok) throw new GuardOperationError(artifact.detail);
-
   const predicted = await predictContractId({
     deployerPublicKey: signer.address,
     salt,
-    passphrase: params.passphrase,
+    ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
   });
+  await assertDeploymentAddressAvailable(server, predicted);
+
+  const artifact = await checkArtifact(server);
+  if (!artifact.ok) throw new GuardOperationError(artifact.detail);
 
   // ── Ensure the exact bytecode is a live code entry ─────────────────────
   const present = await artifactCodePresent(server, PHASE1_ARTIFACT.wasmHash);
   if (!present.ok) throw new GuardOperationError(`could not read the code entry: ${present.error}`);
   if (!present.value) {
     const wasm = await fetchContractWasm(server, PHASE1_ARTIFACT.guard);
-    const fetchedHash = await sha256Hex(wasm);
-    if (fetchedHash !== PHASE1_ARTIFACT.wasmHash) {
+    const verification = await verifyGuardWasm(wasm, PHASE1_ARTIFACT.wasmHash);
+    if (!verification.ok) {
       throw new GuardOperationError(
-        `refusing to upload: fetched bytes hash to ${fetchedHash}, not the pinned ${PHASE1_ARTIFACT.wasmHash}`,
+        `refusing to upload: fetched bytes hash to ${verification.actual}, not the pinned ${verification.expected}`,
       );
     }
     const upload = await submitOperation({
@@ -355,14 +417,15 @@ export async function deployGuard(params: {
       signer,
       operation: Operation.uploadContractWasm({ wasm }),
       label: "upload_contract_wasm",
-      passphrase: params.passphrase,
+      ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
     });
     record(`upload_contract_wasm (${PHASE1_ARTIFACT.wasmBytes} bytes)`, upload);
     if (upload.kind !== "submitted") {
-      return { guard: predicted, steps, identity: null, verified: false };
+      return { guard: predicted, steps, identity: null, readError: null, verified: false };
     }
   }
 
+  await assertDeploymentAddressAvailable(server, predicted);
   const create = await submitOperation({
     server,
     signer,
@@ -373,24 +436,34 @@ export async function deployGuard(params: {
       constructorArgs: [],
     }),
     label: "create_custom_contract",
-    ...(params.passphrase !== undefined
-      ? { passphrase: params.passphrase }
-      : {}),
+    ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
   });
   record(
     `create_custom_contract (wasm ${PHASE1_ARTIFACT.wasmHash.slice(0, 12)}…) → ${predicted}`,
     create,
   );
   if (create.kind !== "submitted") {
-    return { guard: predicted, steps, identity: null, verified: false };
+    return { guard: predicted, steps, identity: null, readError: null, verified: false };
   }
 
-  const identity = await verifyWasmIdentity(server, predicted);
+  // A read failure after a submitted create is not the same fact as a wrong
+  // artifact. Catch it so the operator keeps the transaction references and the
+  // receipt can say "unavailable" instead of losing the whole outcome when the
+  // RPC hiccups at the last step.
+  let identity: WasmIdentity | null = null;
+  let readError: string | null = null;
+  try {
+    identity = await verifyWasmIdentity(server, predicted);
+  } catch (error) {
+    readError = error instanceof Error ? error.message : String(error);
+  }
   return {
     guard: predicted,
     steps,
     identity,
+    readError,
     verified:
+      identity !== null &&
       identity.fetchedSha256 === PHASE1_ARTIFACT.wasmHash &&
       identity.bytes === PHASE1_ARTIFACT.wasmBytes,
   };
@@ -421,9 +494,7 @@ export async function initializeGuard(params: {
     fn: "initialize",
     args: [addressToScVal(params.signer.address), xdr.ScVal.scvBytes(pubkey)],
     signer: params.signer,
-    ...(params.passphrase !== undefined
-  ? { passphrase: params.passphrase }
-  : {}),
+    ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
   });
 }
 
@@ -435,25 +506,18 @@ export async function installPolicy(params: {
   draft: PolicyDraft;
   passphrase?: string;
   exportOnly?: boolean;
-}): Promise<
-  { kind: "invalid"; issues: string[] } | { kind: "invoked"; result: InvokeResult }
-> {
+}): Promise<{ kind: "invalid"; issues: string[] } | { kind: "invoked"; result: InvokeResult }> {
   const built = buildPolicyConfig(params.draft);
-  if (!built.ok) return { kind: "invalid", issues: built.issues.map((i) => `${i.field}: ${i.message}`) };
+  if (!built.ok)
+    return { kind: "invalid", issues: built.issues.map((i) => `${i.field}: ${i.message}`) };
   const result = await invokeWithWallet({
     server: params.server,
     contract: params.guard,
     fn: "set_policy",
     args: [built.scval],
     signer: params.signer,
-        ...(params.passphrase !== undefined
-      ? { passphrase: params.passphrase }
-      : {}),
-    ...(params.exportOnly !== undefined
-      ? { exportOnly: params.exportOnly }
-      : {}),
-  : {}),
-
+    ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
+    ...(params.exportOnly !== undefined ? { exportOnly: params.exportOnly } : {}),
   });
   return { kind: "invoked", result };
 }
@@ -472,13 +536,175 @@ export function freezeGuard(params: {
     fn: "freeze",
     args: [],
     signer: params.signer,
-    ...(params.passphrase !== undefined
-  ? { passphrase: params.passphrase }
-  : {}),
-...(params.exportOnly !== undefined
-  ? { exportOnly: params.exportOnly }
-  : {}),
+    ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
+    ...(params.exportOnly !== undefined ? { exportOnly: params.exportOnly } : {}),
   });
+}
+
+// ── Freeze dry run ─────────────────────────────────────────────────────────
+
+/** One authorization the host recorded for a simulated call. */
+export interface SimulatedAuthorization {
+  /**
+   * `source_account` rides on the transaction envelope's signature; `address`
+   * needs its own `signAuthEntry` signature. `unsupported` is a credential kind
+   * this dashboard cannot satisfy.
+   */
+  kind: "source_account" | "address" | "unsupported";
+  /** The `G…`/`C…` that must authorize, when the host names one. */
+  address: string | null;
+}
+
+export interface FreezeSimulation {
+  kind: "simulated";
+  /** Always true: this came from a read-only simulation, never a broadcast. */
+  dryRun: true;
+  fn: "freeze";
+  /** Authorizations the host requires before the call could be submitted. */
+  authorizations: SimulatedAuthorization[];
+  /** How many of those need a separate auth-entry signature. */
+  separateSignaturesRequired: number;
+  /** Resource fee (CPU, ledger I/O, events) the call would cost, in stroops. */
+  resourceFeeStroops: string;
+  /** Inclusion fee floor applied to the envelope, in stroops. */
+  inclusionFeeStroops: string;
+  /** Total fee the network would charge, in stroops. */
+  totalFeeStroops: string;
+  /** Ledger keys in the simulated footprint. */
+  footprintEntries: number;
+  /** Ledger the simulation ran against, when the RPC reports one. */
+  latestLedger: number | null;
+}
+
+export interface FreezeSimulationRefused {
+  kind: "refused";
+  dryRun: true;
+  detail: string;
+  diagnosticEvents: unknown[];
+}
+
+export type FreezeSimulationResult = FreezeSimulation | FreezeSimulationRefused;
+
+/** The `G…`/`C…` inside an address credential, or `null` when unreadable. */
+function addressOfCredential(credentials: xdr.SorobanAddressCredentials): string | null {
+  try {
+    return Address.fromScAddress(credentials.address).toString();
+  } catch {
+    return null;
+  }
+}
+
+/** Classify one recorded authorization into the operator's terms. */
+export function describeAuthorization(
+  entry: xdr.SorobanAuthorizationEntry,
+): SimulatedAuthorization {
+  const credentials = entry.credentials;
+  if (credentials.type === "sorobanCredentialsSourceAccount") {
+    return { kind: "source_account", address: null };
+  }
+  if (credentials.type === "sorobanCredentialsAddress") {
+    return { kind: "address", address: addressOfCredential(credentials.address) };
+  }
+  if (credentials.type === "sorobanCredentialsAddressV2") {
+    return { kind: "address", address: addressOfCredential(credentials.addressV2) };
+  }
+  return { kind: "unsupported", address: null };
+}
+
+/**
+ * Dry-run the emergency freeze: simulate `freeze()` and report what it would
+ * take, without signing or broadcasting anything.
+ *
+ * This runs exactly one recording-mode `simulateTransaction` and then assembles
+ * the priced envelope to read its fees. Recording mode does not enforce auth, so
+ * the call is *not* executed — but it does report which authorizations the host
+ * wants, what the footprint touches, and what the resources cost, which is what
+ * an operator wants to check before committing to a real freeze.
+ *
+ * The crucial property is what this function does *not* call: no
+ * `signAuthEntry`, no `signTransaction`, no `sendTransaction`. A dry run that
+ * prompted a wallet would be worse than no dry run at all, so that guarantee is
+ * structural here and pinned by `tests/unit/panicSimulation.test.ts`.
+ */
+export async function simulateFreeze(params: {
+  server: rpc.Server;
+  signer: WalletSigner;
+  guard: string;
+  passphrase?: string;
+}): Promise<FreezeSimulationResult> {
+  const passphrase = params.passphrase ?? NETWORK.passphrase;
+  const { server, signer } = params;
+
+  let account: Account;
+  try {
+    account = await server.getAccount(signer.address);
+  } catch (error) {
+    return {
+      kind: "refused",
+      dryRun: true,
+      detail: `could not load account ${signer.address} from the network (is the wallet on the right network, and is the account funded?): ${stringifyError(error)}`,
+      diagnosticEvents: [],
+    };
+  }
+
+  const operation = Operation.invokeContractFunction({
+    contract: params.guard,
+    function: "freeze",
+    args: [],
+  });
+  // The admin is a plain account, not the guard's own `__check_auth` caller, so
+  // no guard storage keys are merged into the footprint — RPC preflight prices
+  // exactly what `freeze()` touches.
+  const envelope = buildInitialEnvelope({
+    source: new Account(signer.address, account.sequenceNumber()),
+    operation,
+    passphrase,
+    guard: null,
+  });
+
+  let simulation: rpc.Api.SimulateTransactionResponse;
+  try {
+    simulation = await server.simulateTransaction(envelope);
+  } catch (error) {
+    return {
+      kind: "refused",
+      dryRun: true,
+      detail: `the dry-run simulation could not be completed: ${stringifyError(error)}`,
+      diagnosticEvents: [],
+    };
+  }
+
+  if (rpc.Api.isSimulationError(simulation)) {
+    return {
+      kind: "refused",
+      dryRun: true,
+      detail: stringifyError(simulation.error),
+      diagnosticEvents: diagnosticEventsOf(simulation),
+    };
+  }
+
+  const success = simulation as rpc.Api.SimulateTransactionSuccessResponse;
+  const authorizations = (success.result?.auth ?? []).map(describeAuthorization);
+  const assembled = assembleFromSimulation({
+    simulation: success,
+    source: new Account(signer.address, account.sequenceNumber()),
+    operation,
+    passphrase,
+    guard: null,
+  });
+
+  return {
+    kind: "simulated",
+    dryRun: true,
+    fn: "freeze",
+    authorizations,
+    separateSignaturesRequired: authorizations.filter((entry) => entry.kind === "address").length,
+    resourceFeeStroops: assembled.resourceFee.toString(),
+    inclusionFeeStroops: INCLUSION_FEE,
+    totalFeeStroops: assembled.transaction.fee,
+    footprintEntries: assembled.footprintKeys,
+    latestLedger: success.latestLedger ?? null,
+  };
 }
 
 /**
@@ -503,12 +729,8 @@ export function unfreezeGuard(params: {
     fn: "unfreeze",
     args: [],
     signer: params.signer,
-   ...(params.passphrase !== undefined
-  ? { passphrase: params.passphrase }
-  : {}),
-...(params.exportOnly !== undefined
-  ? { exportOnly: params.exportOnly }
-  : {}),
+    ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
+    ...(params.exportOnly !== undefined ? { exportOnly: params.exportOnly } : {}),
   });
 }
 
@@ -526,12 +748,8 @@ export function revokePolicy(params: {
     fn: "revoke_policy",
     args: [],
     signer: params.signer,
-    ...(params.passphrase !== undefined
-  ? { passphrase: params.passphrase }
-  : {}),
-...(params.exportOnly !== undefined
-  ? { exportOnly: params.exportOnly }
-  : {}),
+    ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
+    ...(params.exportOnly !== undefined ? { exportOnly: params.exportOnly } : {}),
   });
 }
 
@@ -558,7 +776,7 @@ export async function rotateAgentKey(params: {
     fn: "rotate_agent_key",
     args: [xdr.ScVal.scvBytes(pubkey)],
     signer: params.signer,
-    passphrase: params.passphrase,
+    ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
   });
 }
 
@@ -581,21 +799,36 @@ export interface GuardSnapshot {
   identity: ReadResult<WasmIdentity>;
 }
 
+/**
+ * Stamp a successful read with when it completed.
+ *
+ * The printed report must be able to say which sections were live reads and when
+ * each one returned; one batch timestamp would silently imply that a section
+ * which failed and was retried was as fresh as the others. Failures carry no
+ * timestamp because nothing was read.
+ */
+async function stamped<T>(read: Promise<ReadResult<T>>): Promise<ReadResult<T>> {
+  const result = await read;
+  return result.ok ? { ...result, readAt: new Date().toISOString() } : result;
+}
+
 export async function readGuardSnapshot(
   server: rpc.Server,
   guard: string,
   source?: string,
 ): Promise<GuardSnapshot> {
   const [status, policy, window, identity] = await Promise.all([
-    readStatus(server, guard, source),
-    readPolicy(server, guard, source),
-    readWindow(server, guard),
-    verifyWasmIdentity(server, guard)
-      .then((value): ReadResult<WasmIdentity> => ({ ok: true, value }))
-      .catch((error): ReadResult<WasmIdentity> => ({
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      })),
+    stamped(readStatus(server, guard, source)),
+    stamped(readPolicy(server, guard, source)),
+    stamped(readWindow(server, guard)),
+    stamped(
+      verifyWasmIdentity(server, guard)
+        .then((value): ReadResult<WasmIdentity> => ({ ok: true, value }))
+        .catch((error): ReadResult<WasmIdentity> => ({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        })),
+    ),
   ]);
   return { guard, fetchedAt: new Date().toISOString(), status, policy, window, identity };
 }

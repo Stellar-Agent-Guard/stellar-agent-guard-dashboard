@@ -2,6 +2,9 @@
 
 import { useState } from "react";
 import { toastStore, useToast, type Toast } from "../lib/guard/useToast.ts";
+import { classifyFailure } from "../lib/guard/recoveryGuidance.ts";
+import { RecoveryGuidanceBlock } from "./RecoveryGuidance.tsx";
+import { redactDiagnostics } from "../lib/guard/inputSanitizer.ts";
 
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -36,9 +39,16 @@ function ErrorDetails({ toast }: { toast: Toast }) {
   ]
     .filter((part): part is string => part !== null)
     .join("\n");
+  // Guidance is additive: the raw message above stays exactly as reported.
+  const guidance = classifyFailure({
+    message: toast.error.message,
+    context: toast.error.context ?? "read",
+    ...(toast.error.stage !== undefined ? { stage: toast.error.stage } : {}),
+  });
 
   return (
     <div className="toast-details">
+      <RecoveryGuidanceBlock guidance={guidance} />
       <button
         type="button"
         className="tiny toast-details-toggle"
@@ -54,7 +64,7 @@ function ErrorDetails({ toast }: { toast: Toast }) {
             type="button"
             className="tiny toast-copy"
             onClick={() => {
-              void copyText(raw).then((ok) => {
+              void copyText(redactDiagnostics(raw)).then((ok) => {
                 setCopied(ok);
                 if (ok) window.setTimeout(() => setCopied(false), 1500);
               });

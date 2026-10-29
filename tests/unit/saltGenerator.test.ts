@@ -6,6 +6,10 @@ import { NETWORK, PHASE1_ARTIFACT, SALT_BYTES } from "../../lib/guard/network.ts
 import {
   contractAlreadyDeployed,
   createSaltAddressPredictor,
+  deployPredictionChanges,
+  deployPredictionKey,
+  deployPredictionProblem,
+  describeDeployPrediction,
   expectedAttemptsFor,
   formatExpectedAttempts,
   formatSalt,
@@ -15,12 +19,14 @@ import {
   randomSalt,
   searchVanitySalt,
   validateVanityPattern,
+  type DeployPredictionInputs,
   type RandomFiller,
   type VanityProgress,
 } from "../../lib/guard/saltGenerator.ts";
 import { predictContractId } from "../../lib/guard/chain.ts";
 
 const DEPLOYER = "GD5S5O2MZ6FSMFH6QILG37KSQNRVR3RPSWBTTV4JOUJ7J6TWLLL5LAVS";
+const OTHER_DEPLOYER = "GAOBCRXTCO4ZCBNHALJUMJJ5JDXNOUZ7U6VZJX4UBTXAHQEO66IPU6PH";
 const HEX_SALT = "0123456789abcdef".repeat(4); // exactly 64 characters
 
 /** A filler that writes a fixed byte each time, so "random" is reproducible. */
@@ -44,8 +50,14 @@ function hexPair(bytes: Uint8Array): string {
  * second opinion about what `predictContractId` should return.
  */
 function contractIdPerSpec(deployer: string, salt: Uint8Array, passphrase: string): string {
-  const u32 = (value: number): number[] => [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
-  const hash = (bytes: Uint8Array): Uint8Array => new Uint8Array(createHash("sha256").update(bytes).digest());
+  const u32 = (value: number): number[] => [
+    (value >>> 24) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 8) & 0xff,
+    value & 0xff,
+  ];
+  const hash = (bytes: Uint8Array): Uint8Array =>
+    new Uint8Array(createHash("sha256").update(bytes).digest());
 
   const pubkey = StrKey.decodeEd25519PublicKey(deployer);
   const networkId = hash(new TextEncoder().encode(passphrase));
@@ -146,7 +158,10 @@ test("address derivation matches the Soroban contract-id specification", async (
   assert.equal(preview.address, expected);
 
   // The same value the deploy flow compares against after signing.
-  assert.equal(await predictContractId({ deployerPublicKey: DEPLOYER, salt: salt.bytes }), expected);
+  assert.equal(
+    await predictContractId({ deployerPublicKey: DEPLOYER, salt: salt.bytes }),
+    expected,
+  );
 });
 
 test("a different salt or network moves the predicted address", async () => {
@@ -159,6 +174,75 @@ test("a different salt or network moves the predicted address", async () => {
   const otherNet = contractIdPerSpec(DEPLOYER, saltA, "Test SDF Future Network ; October 2022");
   assert.notEqual(otherNet, addressA, "the passphrase is inside the preimage");
   assert.equal(isContractAddress(otherNet), true);
+});
+
+// ── Issue #364: the prediction is bound to deployer, salt and network ───────
+
+function predictionInputs(overrides: Partial<DeployPredictionInputs> = {}): DeployPredictionInputs {
+  return {
+    deployerPublicKey: DEPLOYER,
+    saltHex: HEX_SALT,
+    networkName: NETWORK.name,
+    networkPassphrase: NETWORK.passphrase,
+    ...overrides,
+  };
+}
+
+test("the same deployer, salt and network are one prediction; changing either input is detected", async () => {
+  const base = predictionInputs();
+  assert.equal(deployPredictionKey(base), deployPredictionKey({ ...base }));
+  assert.deepEqual(deployPredictionChanges(base, { ...base }), []);
+
+  assert.deepEqual(deployPredictionChanges(base, predictionInputs({ saltHex: "11".repeat(32) })), [
+    "salt",
+  ]);
+  assert.deepEqual(
+    deployPredictionChanges(base, predictionInputs({ deployerPublicKey: OTHER_DEPLOYER })),
+    ["deployer"],
+  );
+  assert.deepEqual(deployPredictionChanges(base, predictionInputs({ networkName: "futurenet" })), [
+    "network",
+  ]);
+  assert.deepEqual(
+    deployPredictionChanges(base, predictionInputs({ networkPassphrase: "another passphrase" })),
+    ["network"],
+  );
+
+  // Different deployers with the same salt are different addresses; the key
+  // change above is not cosmetic.
+  const salt = parseSalt(HEX_SALT, "hex");
+  assert.equal(salt.ok, true);
+  if (!salt.ok) return;
+  const addressA = await predictContractId({ deployerPublicKey: DEPLOYER, salt: salt.bytes });
+  const addressB = await predictContractId({
+    deployerPublicKey: OTHER_DEPLOYER,
+    salt: salt.bytes,
+  });
+  assert.notEqual(addressA, addressB);
+});
+
+test("invalid prediction inputs are named before an address is shown", () => {
+  assert.match(
+    deployPredictionProblem(predictionInputs({ deployerPublicKey: "not-a-key" })) ?? "",
+    /deployer is not a valid Stellar account address/,
+  );
+  assert.match(
+    deployPredictionProblem(predictionInputs({ saltHex: "abcd" })) ?? "",
+    /exactly 32 bytes/,
+  );
+  assert.match(
+    deployPredictionProblem(predictionInputs({ networkName: "" })) ?? "",
+    /network name and passphrase/,
+  );
+  assert.equal(deployPredictionProblem(predictionInputs()), null);
+});
+
+test("the explanation states the derivation and refuses to claim uniqueness", () => {
+  const text = describeDeployPrediction(predictionInputs());
+  assert.match(text, /sha256\(network id \+ deployer/);
+  assert.match(text, /same deployer, salt and network always produce the same address/);
+  assert.match(text, /prediction, not a reservation/);
+  assert.match(text, /does not claim the address is unique or unused/);
 });
 
 test("a derivation failure is shown, not thrown at the operator", async () => {
@@ -180,7 +264,11 @@ test("a reusable predictor pins the deployer and varies only the salt", async ()
     deployerPublicKey: DEPLOYER,
     passphrase: "some network",
     predict: async (params) => {
-      seen.push({ salt: hexPair(params.salt), deployer: params.deployerPublicKey, passphrase: params.passphrase });
+      seen.push({
+        salt: hexPair(params.salt),
+        deployer: params.deployerPublicKey,
+        passphrase: params.passphrase,
+      });
       return `C${params.salt[0]}`;
     },
   });
@@ -197,7 +285,10 @@ test("an unreachable vanity pattern is refused before any attempt is spent", () 
   assert.equal(validateVanityPattern("cab77", "suffix"), null, "case is cosmetic");
   assert.match(validateVanityPattern("  ", "prefix") ?? "", /Enter the text/);
   assert.match(validateVanityPattern("A".repeat(13), "prefix") ?? "", /out of reach/);
-  assert.match(validateVanityPattern("A".repeat(13), "prefix") ?? "", /each character is 1 chance in 32/);
+  assert.match(
+    validateVanityPattern("A".repeat(13), "prefix") ?? "",
+    /each character is 1 chance in 32/,
+  );
   // Strkey base32 is A-Z plus 2-7: the digits 0, 1, 8 and 9 do not exist in it.
   assert.match(validateVanityPattern("AB08", "prefix") ?? "", /base32/);
   assert.match(validateVanityPattern("A B", "suffix") ?? "", /base32/);
@@ -218,8 +309,15 @@ test("a vanity search returns the salt whose address really matches", async () =
   if (outcome.status !== "found") return;
   assert.equal(outcome.attempts, 3);
   assert.equal(outcome.address, makeAddress("CAB77"));
-  assert.equal(hexPair(outcome.salt), "33".repeat(SALT_BYTES), "the salt reported is the one that produced the address");
-  assert.deepEqual(progress.map((entry) => entry.attempts), [3]);
+  assert.equal(
+    hexPair(outcome.salt),
+    "33".repeat(SALT_BYTES),
+    "the salt reported is the one that produced the address",
+  );
+  assert.deepEqual(
+    progress.map((entry) => entry.attempts),
+    [3],
+  );
 });
 
 test("a suffix pattern is matched at the end of the address", async () => {
@@ -275,7 +373,10 @@ test("the closest candidate is the best partial match, not the largest string", 
   assert.equal(outcome.reason, "exhausted");
   assert.equal(progress.length, 1, "progress is reported once per 64 attempts");
   assert.equal(progress[0]?.attempts, 64);
-  assert.ok(progress[0]?.closest.startsWith("CQA"), `expected the 2-character match, got ${progress[0]?.closest}`);
+  assert.ok(
+    progress[0]?.closest.startsWith("CQA"),
+    `expected the 2-character match, got ${progress[0]?.closest}`,
+  );
 });
 
 test("an invalid pattern never calls the predictor", async () => {
@@ -312,12 +413,23 @@ test("a salt reused from an earlier deploy is caught before signing", async () =
   const free = await contractAlreadyDeployed(
     {
       getContractInstance: async () => {
-        throw new Error("not found");
+        throw Object.assign(new Error("not found"), { code: 404 });
       },
     },
     guard,
   );
   assert.deepEqual(free, { exists: false, detail: null });
+
+  const unavailable = await contractAlreadyDeployed(
+    {
+      getContractInstance: async () => {
+        throw Object.assign(new Error("RPC unavailable"), { code: 503 });
+      },
+    },
+    guard,
+  );
+  assert.equal(unavailable.exists, false);
+  assert.match(unavailable.error ?? "", /RPC unavailable/);
 });
 
 test("an address that has not been derived yet is not a collision", async () => {
@@ -340,7 +452,10 @@ test("contract addresses are told apart from account addresses", () => {
   assert.equal(isContractAddress(PHASE1_ARTIFACT.guard), true);
   assert.equal(isContractAddress(` ${PHASE1_ARTIFACT.token} `), true);
   assert.equal(isContractAddress(DEPLOYER), false);
-  assert.equal(isContractAddress("CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU8"), false);
+  assert.equal(
+    isContractAddress("CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU8"),
+    false,
+  );
 });
 
 /** A 56-character strkey-shaped string with the given head. */

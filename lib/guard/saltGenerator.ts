@@ -13,10 +13,11 @@
  * deploy will produce", and those are exactly the kind of definitions that drift.
  */
 
+import { toHex } from "./scval.ts";
 import { StrKey } from "@stellar/stellar-sdk";
 import { predictContractId } from "./chain.ts";
 import { SALT_BYTES } from "./network.ts";
-import { bytesToHex, hexToBytes } from "./scval.ts";
+import { hexToBytes } from "./scval.ts";
 
 export type SaltEncoding = "hex" | "utf8";
 
@@ -28,7 +29,9 @@ function defaultRandomFiller(): RandomFiller {
   if (typeof globalThis.crypto?.getRandomValues === "function") {
     return (target) => globalThis.crypto.getRandomValues(target);
   }
-  throw new Error("no source of randomness available: neither crypto.getRandomValues nor an injected one");
+  throw new Error(
+    "no source of randomness available: neither crypto.getRandomValues nor an injected one",
+  );
 }
 
 /** A fresh 32-byte salt, the shape the contract expects. */
@@ -62,7 +65,10 @@ export function parseSalt(raw: string, encoding: SaltEncoding): SaltParse {
   if (encoding === "hex") {
     const clean = trimmed.replace(/^0x/i, "");
     if (!/^[0-9a-fA-F]+$/.test(clean)) {
-      return { ok: false, message: "Hex salt: use 0-9 and a-f only (optionally prefixed with 0x)." };
+      return {
+        ok: false,
+        message: "Hex salt: use 0-9 and a-f only (optionally prefixed with 0x).",
+      };
     }
     if (clean.length !== SALT_BYTES * 2) {
       return {
@@ -91,7 +97,83 @@ export function parseSalt(raw: string, encoding: SaltEncoding): SaltParse {
 
 /** The salt as lowercase hex, for display and for the address preview key. */
 export function formatSalt(bytes: Uint8Array): string {
-  return bytesToHex(bytes);
+  return toHex(bytes);
+}
+
+/**
+ * Every input that determines the predicted address.
+ *
+ * The address is `sha256(network id ‖ deployer ‖ salt)`, so these four values
+ * are the whole derivation. Keeping them together lets the UI state what the
+ * prediction is bound to and detect an obsolete preview instead of showing an
+ * address for the salt the operator just replaced.
+ */
+export interface DeployPredictionInputs {
+  deployerPublicKey: string;
+  /** The exact 32-byte salt, lowercase hex. */
+  saltHex: string;
+  networkName: string;
+  networkPassphrase: string;
+}
+
+/** A stable key for "was this prediction computed from these inputs?". */
+export function deployPredictionKey(inputs: DeployPredictionInputs): string {
+  return [
+    inputs.deployerPublicKey,
+    inputs.saltHex,
+    inputs.networkName,
+    inputs.networkPassphrase,
+  ].join("\u0000");
+}
+
+/**
+ * Which inputs changed between two predictions. Empty means the prediction is
+ * still current; otherwise the caller marks it obsolete and recomputes.
+ */
+export function deployPredictionChanges(
+  previous: DeployPredictionInputs,
+  current: DeployPredictionInputs,
+): Array<"deployer" | "salt" | "network"> {
+  const changes: Array<"deployer" | "salt" | "network"> = [];
+  if (previous.deployerPublicKey !== current.deployerPublicKey) changes.push("deployer");
+  if (previous.saltHex !== current.saltHex) changes.push("salt");
+  if (
+    previous.networkName !== current.networkName ||
+    previous.networkPassphrase !== current.networkPassphrase
+  ) {
+    changes.push("network");
+  }
+  return changes;
+}
+
+/**
+ * The one-paragraph explanation shown beside the prediction.
+ *
+ * It states the derivation and its limits in the same breath: a prediction is
+ * deterministic, but it is not a reservation and says nothing about whether the
+ * address is unique or still free. Only the chain read can report a collision.
+ */
+export function describeDeployPrediction(inputs: DeployPredictionInputs): string {
+  return (
+    `Derived from sha256(network id + deployer ${inputs.deployerPublicKey} + salt ${inputs.saltHex}) ` +
+    `on ${inputs.networkName}. The same deployer, salt and network always produce the same address; ` +
+    "changing either the deployer or the salt changes it. This is a prediction, not a reservation: " +
+    "it does not claim the address is unique or unused — only a chain read can report a collision."
+  );
+}
+
+/** Why these inputs cannot produce a prediction, or null when they can. */
+export function deployPredictionProblem(inputs: DeployPredictionInputs): string | null {
+  if (!StrKey.isValidEd25519PublicKey(inputs.deployerPublicKey.trim())) {
+    return "The deployer is not a valid Stellar account address, so no address can be derived.";
+  }
+  if (!/^[0-9a-f]{64}$/i.test(inputs.saltHex.trim())) {
+    return `The salt must be exactly ${SALT_BYTES} bytes (${SALT_BYTES * 2} hex characters).`;
+  }
+  if (inputs.networkName.trim() === "" || inputs.networkPassphrase.trim() === "") {
+    return "The network name and passphrase are part of the derivation and must be set.";
+  }
+  return null;
 }
 
 export type AddressPreview = { ok: true; address: string } | { ok: false; message: string };
@@ -103,18 +185,16 @@ export type AddressPreview = { ok: true; address: string } | { ok: false; messag
  * re-hashing the passphrase per candidate, and so tests can drive the shape
  * without a chain.
  */
-export async function predictSaltAddress(
-  params: {
+export async function predictSaltAddress(params: {
+  deployerPublicKey: string;
+  salt: Uint8Array;
+  passphrase?: string;
+  predict?: (params: {
     deployerPublicKey: string;
     salt: Uint8Array;
     passphrase?: string;
-    predict?: (params: {
-      deployerPublicKey: string;
-      salt: Uint8Array;
-      passphrase?: string;
-    }) => Promise<string>;
-  },
-): Promise<AddressPreview> {
+  }) => Promise<string>;
+}): Promise<AddressPreview> {
   const predict = params.predict ?? predictContractId;
   try {
     return { ok: true, address: await predict(params) };
@@ -147,7 +227,7 @@ export function createSaltAddressPredictor(params: {
     predict({
       deployerPublicKey: params.deployerPublicKey,
       salt,
-      passphrase: params.passphrase,
+      ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
     });
 }
 
@@ -224,7 +304,11 @@ export async function searchVanitySalt(request: VanityRequest): Promise<VanityOu
     const matched =
       request.position === "prefix" ? address.startsWith(pattern) : address.endsWith(pattern);
     if (matched) {
-      request.onProgress?.({ attempts: attempt, closest: address, elapsedMs: Date.now() - started });
+      request.onProgress?.({
+        attempts: attempt,
+        closest: address,
+        elapsedMs: Date.now() - started,
+      });
       return { status: "found", salt, address, attempts: attempt };
     }
     const affinity = affinityOf(address, pattern, request.position);
@@ -281,7 +365,7 @@ export interface InstanceReader {
 export async function contractAlreadyDeployed(
   server: InstanceReader,
   address: string,
-): Promise<{ exists: boolean; detail: string | null }> {
+): Promise<{ exists: boolean; detail: string | null; error?: string }> {
   const trimmed = address.trim();
   if (!isContractAddress(trimmed)) {
     return { exists: false, detail: `${trimmed} is not a contract address yet` };
@@ -289,9 +373,15 @@ export async function contractAlreadyDeployed(
   try {
     await server.getContractInstance(trimmed);
     return { exists: true, detail: "a contract already lives at this address" };
-  } catch {
-    // Soroban RPC answers 404 for an unknown contract; either way the address is free.
-    return { exists: false, detail: null };
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+    if (code === 404) return { exists: false, detail: null };
+    return {
+      exists: false,
+      detail: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 

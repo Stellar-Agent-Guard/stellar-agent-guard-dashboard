@@ -14,6 +14,7 @@
  * telling the truth, this test goes red even when the mock is happy.
  */
 
+import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { StrKey } from "@stellar/stellar-sdk";
 import { installFreighterMock, MOCK_ADMIN_ADDRESS } from "./walletMock.ts";
@@ -25,8 +26,7 @@ const AGENT_ADDRESS = StrKey.encodeEd25519PublicKey(new Uint8Array(32).fill(7));
 /** The agent's raw 32-byte Ed25519 key, hex (never the G… strkey form). */
 const AGENT_PUBKEY_HEX = "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0";
 
-const AGENT_PUBKEY_PLACEHOLDER =
-  "53b093e0281a2d8f4276b77fd21e3380b3329f09097ace3d9e60cf0f2f9039e2";
+const AGENT_PUBKEY_PLACEHOLDER = "53b093e0281a2d8f4276b77fd21e3380b3329f09097ace3d9e60cf0f2f9039e2";
 
 /** Enter the deploy step's parameters, the ones `initialize` will be audited against. */
 async function fillInitParameters(page: Page): Promise<void> {
@@ -57,8 +57,12 @@ async function ensureWalletConnected(page: Page): Promise<void> {
   }
   await expect(connected).toBeVisible();
   // The full address rides on the truncated text's `title`, as it does for an
-  // operator hovering the account that is about to sign.
-  await expect(page.getByTitle(MOCK_ADMIN_ADDRESS)).toBeVisible();
+  // operator hovering the account that is about to sign. Scoped to the wallet
+  // row: the deploy panel also titles the deployer address, so a page-wide
+  // title lookup matches both and violates strict mode.
+  await expect(
+    page.locator("div.row").filter({ has: connected }).getByTitle(MOCK_ADMIN_ADDRESS),
+  ).toBeVisible();
 }
 
 /**
@@ -92,9 +96,9 @@ test.describe("guard lifecycle: deploy → configure → freeze → unfreeze", (
     // The artifact gate: deployment is only permitted once the chain's own
     // bytes hash to the pinned Phase 1 artifact.
     await expect(page.getByText("deploy is permitted")).toBeVisible();
-    await expect(
-      page.locator(".stat", { hasText: "Identity" }).locator(".v"),
-    ).toHaveText("matches");
+    await expect(page.locator(".stat", { hasText: "Identity" }).locator(".v")).toHaveText(
+      "matches",
+    );
 
     // Parameters are entered *before* anything is signed, so the pre-flight
     // checklist is green by the time the wallet is prompted.
@@ -124,6 +128,46 @@ test.describe("guard lifecycle: deploy → configure → freeze → unfreeze", (
     await expect(outcome.locator(".tiny.mono")).toHaveText(predicted);
     await expect(outcome.getByText("submitted").first()).toBeVisible();
 
+    // The handoff record (#396) is built from the same outcome, and its verified
+    // claim is the live read — not the fact that a transaction was submitted.
+    const receiptPanel = page.locator(".notice.info", {
+      hasText: "Deployment verification receipt",
+    });
+    await expect(receiptPanel).toBeVisible();
+    await expect(receiptPanel).toContainText("Verification: verified");
+    const downloadPromise = page.waitForEvent("download");
+    await receiptPanel.getByRole("button", { name: "Download receipt" }).click();
+    const download = await downloadPromise;
+    const receiptPath = await download.path();
+    expect(receiptPath).not.toBeNull();
+    const receipt = JSON.parse(readFileSync(receiptPath!, "utf8")) as {
+      kind: string;
+      schemaVersion: number;
+      generator: { provenance: string };
+      disclaimer: string;
+      network: { name: string };
+      addresses: { predicted: string; deployed: string };
+      artifact: { pinnedHash: string; pinnedBytes: number };
+      verification: { status: string; verified: boolean };
+      transactions: Array<{ outcome: string; hash: string | null }>;
+    };
+    expect(receipt.kind).toBe("stellar-agent-guard.deployment-receipt");
+    expect(receipt.schemaVersion).toBe(1);
+    expect(receipt.generator.provenance).toBe("client-generated");
+    expect(receipt.disclaimer).toMatch(/not a signed credential/i);
+    expect(receipt.network.name).toBe("testnet");
+    expect(receipt.addresses.predicted).toBe(predicted);
+    expect(receipt.addresses.deployed).toBe(predicted);
+    expect(receipt.verification.status).toBe("verified");
+    expect(receipt.verification.verified).toBe(true);
+    expect(receipt.artifact.pinnedBytes).toBeGreaterThan(0);
+    expect(receipt.transactions.some((tx) => tx.outcome === "submitted")).toBe(true);
+    // Nothing a key, an envelope or a wallet session would look like.
+    const serialised = JSON.stringify(receipt);
+    expect(serialised).not.toMatch(/"S[A-Z2-7]{55}"/);
+    expect(serialised).not.toMatch(/AAAAAg[A-Za-z0-9+/=]{16,}/);
+    expect(serialised).not.toMatch(/freighter|sessionToken|secretKey|signedXdr/i);
+
     // ── Step 2: initialize with the parameters entered above ───────────────
     await page.getByRole("button", { name: "Sign and initialize" }).click();
     await expect(page.getByText("initialize landed on chain")).toBeVisible({ timeout: 60_000 });
@@ -143,6 +187,11 @@ test.describe("guard lifecycle: deploy → configure → freeze → unfreeze", (
     await expect(policyPanel.locator(".error")).toHaveCount(0);
 
     await policyPanel.getByRole("button", { name: "Sign and install policy" }).click();
+    // The diff is the operator's last look before the wallet prompt, so it has to
+    // be acknowledged explicitly before anything is signed.
+    const policyDiff = page.getByRole("dialog", { name: "Policy changes" });
+    await expect(policyDiff).toBeVisible();
+    await policyDiff.getByRole("button", { name: "Confirm and sign" }).click();
     await expect(page.getByText("set_policy landed on chain")).toBeVisible({ timeout: 60_000 });
 
     // The form re-seeds from what the chain now reports — the receipt is the
@@ -203,7 +252,9 @@ test.describe("guard lifecycle: deploy → configure → freeze → unfreeze", (
     await expect(page.getByText("Unfreeze confirmed on chain")).toBeVisible({ timeout: 60_000 });
     await expect(adminFreeze.locator(".v")).toHaveText("clear");
     await expect(adminFreeze.locator(".v")).toHaveClass(/ok/);
-    await expect(page.getByText("Chain currently reports:").locator(".pill.ok")).toHaveText("clear");
+    await expect(page.getByText("Chain currently reports:").locator(".pill.ok")).toHaveText(
+      "clear",
+    );
     await expect(freezeButton).toBeEnabled();
 
     // The mock chain really did apply the writes, in order — this is the

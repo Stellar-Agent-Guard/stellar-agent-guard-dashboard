@@ -51,32 +51,56 @@ export const EMPTY_DRAFT: PolicyDraft = {
   dmsGraceSecs: "",
 };
 
+const MAX_POLICY_CAP = (1n << 127n) - 1n;
+const MAX_POLICY_SECONDS = (1n << 64n) - 1n;
+
 export interface FieldIssue {
   field: keyof PolicyDraft;
   message: string;
 }
 
 export type ValidationResult =
-  | { ok: true; config: PolicyConfig; scval: xdr.ScVal }
-  | { ok: false; issues: FieldIssue[] };
+  { ok: true; config: PolicyConfig; scval: xdr.ScVal } | { ok: false; issues: FieldIssue[] };
 
-function parseCap(value: string, field: keyof PolicyDraft, label: string, issues: FieldIssue[]): bigint {
+function parseCap(
+  value: string,
+  field: keyof PolicyDraft,
+  label: string,
+  issues: FieldIssue[],
+): bigint {
   const trimmed = value.trim();
   if (trimmed === "") return 0n;
   if (!/^\d+$/.test(trimmed)) {
-    issues.push({ field, message: `${label} must be a whole number of units, or blank to disable` });
+    issues.push({
+      field,
+      message: `${label} must be a whole number of units, or blank to disable`,
+    });
     return 0n;
   }
   try {
-    // BigInt parses arbitrary precision, so an i128 cap larger than 2^53 survives.
-    return BigInt(trimmed);
+    const parsed = BigInt(trimmed);
+    const maximum =
+      field === "perTxCap" || field === "windowCap" ? MAX_POLICY_CAP : MAX_POLICY_SECONDS;
+    if (parsed > maximum) {
+      issues.push({
+        field,
+        message: `${label} exceeds the maximum supported value of ${maximum}`,
+      });
+      return 0n;
+    }
+    return parsed;
   } catch {
     issues.push({ field, message: `${label} is not a valid integer` });
     return 0n;
   }
 }
 
-function parseAddresses(value: string, field: keyof PolicyDraft, label: string, issues: FieldIssue[]): string[] {
+function parseAddresses(
+  value: string,
+  field: keyof PolicyDraft,
+  label: string,
+  issues: FieldIssue[],
+): string[] {
   const out: string[] = [];
   for (const line of value.split(/[\n,]/)) {
     const trimmed = line.trim();
@@ -129,7 +153,13 @@ export function buildPolicyConfig(draft: PolicyDraft): ValidationResult {
       });
       continue;
     }
-    const fns = tail && tail.trim() !== "" ? tail.split(",").map((fn) => fn.trim()).filter(Boolean) : null;
+    const fns =
+      tail && tail.trim() !== ""
+        ? tail
+            .split(",")
+            .map((fn) => fn.trim())
+            .filter(Boolean)
+        : null;
     protocols.push({ contract: head, fns });
   }
 
@@ -171,6 +201,21 @@ export function buildPolicyConfig(draft: PolicyDraft): ValidationResult {
   return { ok: true, config, scval: policyToScVal(config) };
 }
 
+/** Return the first actionable validation message for each affected field. */
+export function validatePolicyDraftFields(draft: PolicyDraft): Record<string, string> {
+  const result = buildPolicyConfig(draft);
+  if (result.ok) return {};
+
+  const errors: Record<string, string> = {};
+  for (const issue of result.issues) errors[issue.field] ??= issue.message;
+  return errors;
+}
+
+/** Compare complete policy drafts without narrowing their string-backed values. */
+export function policyDraftsEqual(left: PolicyDraft, right: PolicyDraft): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function splitOnce(value: string, separator: string): [string, string] {
   const index = value.indexOf(separator);
   if (index < 0) return [value, ""];
@@ -188,7 +233,9 @@ export function draftFromConfig(config: PolicyConfig): PolicyDraft {
     recipients: config.recipients.join("\n"),
     allowAnyRecipient: config.allow_any_recipient,
     protocols: config.protocols
-      .map((rule) => (rule.fns && rule.fns.length > 0 ? `${rule.contract}:${rule.fns.join(",")}` : rule.contract))
+      .map((rule) =>
+        rule.fns && rule.fns.length > 0 ? `${rule.contract}:${rule.fns.join(",")}` : rule.contract,
+      )
       .join("\n"),
     activeFrom: renderBigint(config.active_from),
     activeUntil: renderBigint(config.active_until),
