@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { deadManRemaining, describePolicy, isDeadManFrozen } from "stellar-agent-guard-sdk";
 import { useGuard } from "./GuardProvider.tsx";
@@ -21,6 +21,7 @@ import { StorageExplorerButton } from "./StorageExplorer.tsx";
 import { WebhookAlertBridge } from "./WebhookAlertBridge.tsx";
 import { WebhookSettingsButton } from "./WebhookSettings.tsx";
 import { PHASE1_ARTIFACT, NETWORK } from "../lib/guard/network.ts";
+import { buildReadDiagnostic } from "../lib/rpc/timeouts.ts";
 import { configureHref } from "../lib/guard/deeplink.ts";
 import { NO_POLICY_CONSEQUENCE, policyStateFrom } from "../lib/guard/policyState.ts";
 import { compilePrintReport } from "../lib/guard/printReport.ts";
@@ -33,9 +34,32 @@ import {
   type SimulationScenario,
   type SimulationState,
 } from "../lib/guard/dmsSimulator.ts";
-import { evaluateDmsAlert, formatDmsDuration, type DmsAlert } from "../lib/guard/dmsAlert.ts";
+import {
+  evaluateDmsAlert,
+  formatDmsDuration,
+  projectDmsAlert,
+  type DmsAlert,
+} from "../lib/guard/dmsAlert.ts";
+import { resolveReferenceTime, type LedgerClockReading } from "../lib/guard/ledgerTime.ts";
 import { calculateVelocity } from "../lib/guard/velocity.ts";
 import { useStatusTransitionAnnouncer } from "../lib/guard/statusTransitions.ts";
+import { usePrivacy } from "../lib/guard/privacyStore.ts";
+
+/**
+ * The banner's own clock tick.
+ *
+ * Scoped to the banner (mounted only while a countdown is running) so a
+ * once-a-second update cannot re-render the whole state panel. Every render
+ * reads the clock inside this hook, never during someone else's render.
+ */
+function useNowSecs(): number {
+  const [nowSecs, setNowSecs] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const id = window.setInterval(() => setNowSecs(Math.floor(Date.now() / 1000)), 1_000);
+    return () => window.clearInterval(id);
+  }, []);
+  return nowSecs;
+}
 
 /**
  * The proactive dead-man-switch deadline banner, shown above the on-chain
@@ -46,37 +70,117 @@ import { useStatusTransitionAnnouncer } from "../lib/guard/statusTransitions.ts"
  * remaining time, time since the last heartbeat, and the estimated calendar
  * moment of expiration. Every number comes from the snapshot's ledger clock,
  * never the browser's, because that is the clock the contract judges.
+ *
+ * Between polls the countdown advances against a resolved reference time
+ * (issue #388): a fresh ledger reading keeps the countdown chain-derived and
+ * exact, while a stale reading freezes at the last chain value and is marked
+ * with its age instead of asserting an expiry the chain has not confirmed.
  */
-function DmsAlertBanner({ alert }: { alert: DmsAlert }) {
+function DmsAlertBanner({
+  alert,
+  reading,
+}: {
+  alert: DmsAlert;
+  /** The ledger clock at read time; null when no status read succeeded. */
+  reading: LedgerClockReading | null;
+}) {
+  const nowSecs = useNowSecs();
+  const reference = useMemo(() => resolveReferenceTime(reading, nowSecs), [reading, nowSecs]);
+  const projected = projectDmsAlert(alert, reference);
+  // A chain reading that outlived the freshness bound is a stale read (#389):
+  // the projection already freezes its numbers at the last chain value and
+  // refuses to state an exact expiry; this flag adds the explicit "stale read"
+  // note so the operator knows to refresh rather than read the figures as a
+  // fresh deadline.
+  const stale = reference.source === "ledger" && !reference.authoritative;
+
   const details: string[] = [];
-  if (alert.remainingSecs !== null && alert.totalSecs !== null) {
-    const pct = Math.max(0, Math.round(alert.fractionRemaining! * 100));
+  if (projected.remainingSecs !== null && alert.totalSecs !== null) {
+    const pct = Math.max(0, Math.round((projected.fractionRemaining ?? 0) * 100));
     details.push(
-      alert.level === "expired"
-        ? `deadline missed by ${formatDmsDuration(-alert.remainingSecs)}`
-        : `${formatDmsDuration(alert.remainingSecs)} of grace left (${pct}%)`,
+      projected.level === "expired"
+        ? `deadline missed by ${formatDmsDuration(-projected.remainingSecs)}`
+        : `${formatDmsDuration(projected.remainingSecs)} of grace left (${pct}%)`,
     );
   }
   if (alert.elapsedSecs !== null) {
     details.push(`last heartbeat ${formatDmsDuration(Math.max(0, alert.elapsedSecs))} ago`);
   }
+  // The reference's age and source are always stated: an operator must be able
+  // to see whether the countdown in front of them is chain-verified or an
+  // estimate over an old read (issue #388).
+  if (projected.exact) {
+    details.push(
+      `chain time read ${formatDmsDuration(projected.ageSecs ?? 0)} ago — expiry is chain-verified`,
+    );
+  } else if (projected.source === "ledger") {
+    details.push(
+      `estimate: chain time is ${formatDmsDuration(projected.ageSecs ?? 0)} old — the deadline may already have passed`,
+    );
+  } else {
+    details.push("no chain time available — countdown runs on the browser clock, not the ledger");
+  }
   if (alert.expiresAtMs !== null) {
-    const prefix = alert.level === "expired" ? "deadline was ≈" : "expires ≈";
+    const prefix = !projected.exact
+      ? "last chain-derived deadline ≈"
+      : projected.level === "expired"
+        ? "deadline was ≈"
+        : "expires ≈";
     details.push(`${prefix} ${new Date(alert.expiresAtMs).toLocaleString()}`);
   }
 
   const title =
-    alert.level === "expired"
+    projected.level === "expired"
       ? "Dead-man switch expired — the agent missed its heartbeat; agent activity is blocked until the heartbeat resumes"
-      : alert.level === "critical"
+      : projected.level === "critical"
         ? "Dead-man switch critical — heartbeat deadline imminent"
         : "Dead-man switch warning — heartbeat deadline approaching";
 
   return (
-    <div className={`dms-banner no-print ${alert.level}`} role="alert">
+    <div className={`dms-banner no-print ${projected.level}`} role="alert">
       <strong>{title}</strong>
       {details.length > 0 && <span className="detail">{details.join(" · ")}</span>}
+      {stale && (
+        <span className="detail" data-testid="dms-stale-note">
+          stale read — these figures are from the last successful ledger read, not a new one; they
+          are not a fresh deadline. Refresh to re-read the chain.
+        </span>
+      )}
     </div>
+  );
+}
+
+/**
+ * Copyable failure context (issue #347).
+ *
+ * A bare RPC error is hard to report and easy to over-share, so each failed read
+ * contributes a four-line diagnostic — operation, endpoint origin, network and
+ * correlation time — with signed payloads and credentials already removed by
+ * the chain layer. It is a report about a failure, never a stand-in for a value.
+ */
+function ReadDiagnostics({ entries }: { entries: Array<{ label: string; text: string }> }) {
+  if (entries.length === 0) return null;
+  return (
+    <section className="no-print" aria-label="Read diagnostics" style={{ marginTop: 16 }}>
+      <h3 style={{ marginTop: 0 }}>
+        Diagnostics for the failed {entries.length === 1 ? "read" : "reads"}
+      </h3>
+      <p className="tiny muted">
+        Safe to paste into a report: the operation, endpoint origin, network and correlation time.
+        Signed XDR, authorization payloads and key material are removed.
+      </p>
+      {entries.map((entry) => (
+        <div key={entry.label} style={{ marginTop: 8 }}>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <span className="tiny">{entry.label}</span>
+            <CopyButton value={entry.text} label={`${entry.label} diagnostics`} />
+          </div>
+          <pre className="mono tiny" style={{ whiteSpace: "pre-wrap", margin: 0 }}>
+            {entry.text}
+          </pre>
+        </div>
+      ))}
+    </section>
   );
 }
 
@@ -99,14 +203,41 @@ function DmsAlertBanner({ alert }: { alert: DmsAlert }) {
  * results in a `simulatedStatus` projection and stamps a striped watermark
  * across the panel, so no write path can be reached while it is active.
  */
+/** A printable allowlist: null is an unavailable read, never an empty list. */
+function printAllowlist(items: string[] | null): string {
+  if (items === null) return "Unavailable — the policy read failed";
+  return items.length === 0 ? "None" : items.join(", ");
+}
+
+/** A printable read outcome, with the reason when there is no value. */
+function printReadOutcome(read: {
+  state: "read" | "empty" | "failed";
+  detail: string | null;
+}): string {
+  if (read.state === "failed") return `Unavailable${read.detail ? ` — ${read.detail}` : ""}`;
+  if (read.state === "empty") return "Read succeeded; no entry (not a failure)";
+  return "Read successfully";
+}
+
 export function StatusPanel() {
-  const { snapshot, snapshotError, refreshing, refresh, guard, wallet, retryRead, retryingField } =
-    useGuard();
+  const {
+    snapshot,
+    snapshotError,
+    refreshing,
+    refresh,
+    guard,
+    wallet,
+    retryRead,
+    retryingField,
+    lastRefresh,
+  } = useGuard();
 
   useStatusTransitionAnnouncer(snapshot);
 
   const printReport = snapshot
-    ? compilePrintReport(snapshot, NETWORK.name, wallet?.address || "Disconnected")
+    ? compilePrintReport(snapshot, NETWORK.name, wallet?.address || "Disconnected", {
+        networkPassphrase: NETWORK.passphrase,
+      })
     : null;
   // Derived from this render's read, never from an event: a revoke done here, in
   // another tab, or by the agent's own tooling shows up on the next poll. An
@@ -121,6 +252,21 @@ export function StatusPanel() {
       ? evaluateDmsAlert(snapshot.status.value, snapshot.policy.ok ? snapshot.policy.value : null)
       : null;
 
+  // The ledger clock at the moment of the read (`status().now`) paired with
+  // when the read happened: the anchor the banner's countdown is judged
+  // against (issue #388). Chain state stays authoritative; the browser clock
+  // only measures how old the reading is.
+  const ledgerReading = useMemo<LedgerClockReading | null>(
+    () =>
+      snapshot && snapshot.status.ok
+        ? {
+            ledgerNowSecs: Number(snapshot.status.value.now),
+            readAtSecs: Math.floor(Date.parse(snapshot.fetchedAt) / 1000),
+          }
+        : null,
+    [snapshot],
+  );
+
   // The panel is `aria-busy` exactly while the first read is in flight (no
   // snapshot yet, no failure yet). A background refresh is NOT busy: the values
   // on screen are the previous successful read (stale-while-revalidate), so
@@ -130,10 +276,39 @@ export function StatusPanel() {
   // Watermark only: the panel gains the striped training tint while a rehearsal
   // is running. Read from the store as a snapshot, never as a ref.
   const rehearsalActive = useRehearsalActive();
+  const { masked } = usePrivacy();
+
+  // Safe failure context (issue #347). The chain layer attaches a diagnostic to
+  // each failed read; a refresh that never produced a snapshot contributes one
+  // built from the configured endpoint. Nothing here carries chain values, so a
+  // diagnostic can never be mistaken for state.
+  const readDiagnostics: Array<{ label: string; text: string }> = [];
+  if (snapshot) {
+    const results = [
+      ["status()", snapshot.status],
+      ["policy()", snapshot.policy],
+      ["window", snapshot.window],
+      ["wasm identity", snapshot.identity],
+    ] as const;
+    for (const [label, result] of results) {
+      if (!result.ok && result.diagnostic) readDiagnostics.push({ label, text: result.diagnostic });
+    }
+  } else if (snapshotError) {
+    readDiagnostics.push({
+      label: "guard snapshot",
+      text: buildReadDiagnostic({
+        operation: "readSnapshot",
+        endpoint: NETWORK.rpcUrl,
+        network: NETWORK.name,
+      }).text,
+    });
+  }
 
   return (
     <>
-      {dmsAlert && dmsAlert.level !== "none" && <DmsAlertBanner alert={dmsAlert} />}
+      {dmsAlert && dmsAlert.level !== "none" && (
+        <DmsAlertBanner alert={dmsAlert} reading={ledgerReading} />
+      )}
       <div
         className={`panel${rehearsalActive ? " sim-active" : ""}`}
         aria-busy={initialLoadPending}
@@ -147,6 +322,13 @@ export function StatusPanel() {
                 read <TimeAgo iso={snapshot.fetchedAt} />
               </span>
             )}
+            {(!snapshot || snapshotError) && lastRefresh != null && (
+              <span className="tiny muted">
+                {snapshotError ? "error state" : "stale since "}
+                {lastRefresh != null && new Date(lastRefresh).toLocaleTimeString()}
+              </span>
+            )}
+            {refreshing && !snapshot && <span className="tiny muted">loading...</span>}
             <StorageExplorerButton />
             <WebhookSettingsButton />
             <WebhookAlertBridge />
@@ -164,7 +346,10 @@ export function StatusPanel() {
         </div>
 
         <p className="tiny muted" style={{ marginTop: 10 }}>
-          <span className="mono">{guard}</span> <CopyButton value={guard} label="guard address" />
+          <span className="mono" aria-label={masked ? "Masked guard address" : undefined}>
+            {masked ? "••••••••••••••••" : guard}
+          </span>{" "}
+          <CopyButton value={guard} label="guard address" />
         </p>
 
         <RehearsalModeToggle />
@@ -251,10 +436,13 @@ export function StatusPanel() {
                     <>
                       <h4 style={{ marginTop: 20 }}>Spending Velocity</h4>
                       <div className="grid">
-                        <Stat label="1m Velocity" value={metrics.spend1m.toString()} />
+                        <Stat
+                          label="1m Velocity"
+                          value={masked ? "••••••" : metrics.spend1m.toString()}
+                        />
                         <Stat
                           label="15m Velocity"
-                          value={metrics.spend15m.toString()}
+                          value={masked ? "••••••" : metrics.spend15m.toString()}
                           tone={isCritical ? "danger" : undefined}
                           note={
                             exhaust !== null
@@ -262,7 +450,10 @@ export function StatusPanel() {
                               : undefined
                           }
                         />
-                        <Stat label="1h Velocity" value={metrics.spend1h.toString()} />
+                        <Stat
+                          label="1h Velocity"
+                          value={masked ? "••••••" : metrics.spend1h.toString()}
+                        />
                       </div>
                       {cap > 0n && (
                         <div style={{ marginTop: 12 }}>
@@ -312,7 +503,7 @@ export function StatusPanel() {
                     <div className="grid">
                       <Stat
                         label="Spent in window"
-                        value={window.total.toString()}
+                        value={masked ? "••••••" : window.total.toString()}
                         note={pct === null ? "no window cap set" : `${pct}% of the ${cap} cap`}
                       />
                       <Stat
@@ -349,14 +540,22 @@ export function StatusPanel() {
                     <div className="grid">
                       <Stat
                         label="Per-transaction cap"
-                        value={policy.per_tx_cap === 0n ? "off" : policy.per_tx_cap.toString()}
+                        value={
+                          masked
+                            ? "••••••"
+                            : policy.per_tx_cap === 0n
+                              ? "off"
+                              : policy.per_tx_cap.toString()
+                        }
                       />
                       <Stat
                         label="Rolling cap"
                         value={
-                          policy.window_cap === 0n
-                            ? "off"
-                            : `${policy.window_cap} / ${policy.window_secs}s`
+                          masked
+                            ? "••••••"
+                            : policy.window_cap === 0n
+                              ? "off"
+                              : `${policy.window_cap} / ${policy.window_secs}s`
                         }
                       />
                       <Stat
@@ -450,17 +649,29 @@ export function StatusPanel() {
           </>
         )}
 
+        <ReadDiagnostics entries={readDiagnostics} />
+
         {printReport && (
           <div className="print-only print-report">
             <h2>Compliance Audit Report</h2>
+            <p className="tiny">
+              Captured by the Stellar Agent Guard dashboard. The values below are only as current as
+              the reads listed in the provenance section; re-read the chain before relying on this
+              page.
+            </p>
             <p>
-              <strong>Timestamp:</strong> {printReport.timestamp}
+              <strong>Captured at:</strong> {printReport.capturedAt}
             </p>
             <p>
               <strong>Network:</strong> {printReport.network}
             </p>
             <p>
-              <strong>Contract ID:</strong> <span className="mono">{printReport.contractId}</span>
+              <strong>Network passphrase:</strong>{" "}
+              <span className="mono">{printReport.networkPassphrase || "Not recorded"}</span>
+            </p>
+            <p>
+              <strong>Guard contract ID:</strong>{" "}
+              <span className="mono">{printReport.contractId}</span>
             </p>
             <p>
               <strong>Bytecode Hash:</strong>{" "}
@@ -478,9 +689,20 @@ export function StatusPanel() {
             <div>
               <strong>Allowlists:</strong>
               <ul>
-                <li>Assets: {printReport.allowlists.assets.join(", ") || "None"}</li>
-                <li>Recipients: {printReport.allowlists.recipients.join(", ") || "None"}</li>
-                <li>Protocols: {printReport.allowlists.protocols.join(", ") || "None"}</li>
+                <li>Assets: {printAllowlist(printReport.allowlists.assets)}</li>
+                <li>Recipients: {printAllowlist(printReport.allowlists.recipients)}</li>
+                <li>Protocols: {printAllowlist(printReport.allowlists.protocols)}</li>
+              </ul>
+            </div>
+            <div>
+              <strong>Read provenance:</strong>
+              <ul>
+                {printReport.reads.map((read) => (
+                  <li key={read.key}>
+                    {read.label}: {printReadOutcome(read)} —{" "}
+                    {read.readAt ? `read at ${read.readAt}` : "no successful read to timestamp"}
+                  </li>
+                ))}
               </ul>
             </div>
           </div>

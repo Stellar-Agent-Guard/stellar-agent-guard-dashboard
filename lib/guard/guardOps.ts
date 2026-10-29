@@ -8,8 +8,7 @@
  */
 
 import { Account, Address, Operation, TransactionBuilder, rpc, xdr } from "@stellar/stellar-sdk";
-import { sha256Hex } from "./scval.ts";
-import type { GuardStatus, PolicyConfig } from "stellar-agent-guard-sdk";
+import { verifyGuardWasm, type GuardStatus, type PolicyConfig } from "stellar-agent-guard-sdk";
 import { NETWORK, PHASE1_ARTIFACT } from "./network.ts";
 import { buildPolicyConfig, type PolicyDraft } from "./policyForm.ts";
 import {
@@ -31,12 +30,14 @@ import {
   describeRejectedResult,
   diagnosticEventsOf,
   invokeWithWallet,
+  writeBoundary,
   type InvokeResult,
   type WalletSigner,
 } from "./submit.ts";
 import { addressToScVal, hexToBytes } from "./scval.ts";
 import { announce } from "./useAnnounce.ts";
 import { recordTx } from "./txHistory.ts";
+import { contractAlreadyDeployed } from "./saltGenerator.ts";
 
 // ── Artifact identity ──────────────────────────────────────────────────────
 
@@ -174,6 +175,14 @@ export async function submitOperation(params: {
     };
   }
 
+  // A deploy or an upload is reviewed on the panel before this runs, and the
+  // wallet can move to another account while that panel is open. The boundary
+  // is re-read here exactly as it is for a contract call, so a deployment can
+  // never be signed — or broadcast — by an account other than the one that was
+  // on screen (issue #349).
+  const beforeEnvelope = await writeBoundary(signer, "envelope");
+  if (beforeEnvelope) return beforeEnvelope;
+
   announce("Please approve transaction in Freighter");
   const signedXdr = await signer.signTransaction(prepared.toXDR());
   const transaction = TransactionBuilder.fromXDR(signedXdr, passphrase);
@@ -181,6 +190,9 @@ export async function submitOperation(params: {
   // The envelope's fee field carries inclusion fee + resource fee — exactly
   // what the network will charge for this transaction.
   const feeStroops = transaction.fee;
+
+  const beforeSend = await writeBoundary(signer, "submission");
+  if (beforeSend) return beforeSend;
 
   const sent = await server.sendTransaction(transaction);
   if (sent.status === "ERROR") {
@@ -201,7 +213,14 @@ export async function submitOperation(params: {
     if (!result) continue;
     if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
       const ledger = (result as { ledger?: number }).ledger ?? null;
-      recordTx({ hash: sent.hash, operation: label, status: "confirmed", feeStroops });
+      recordTx({
+        hash: sent.hash,
+        operation: label,
+        status: "confirmed",
+        feeStroops,
+        networkName: NETWORK.name,
+        networkPassphrase: passphrase,
+      });
       announce(
         ledger !== null
           ? `Transaction confirmed on ledger ${ledger}`
@@ -217,7 +236,14 @@ export async function submitOperation(params: {
       };
     }
     if (result.status === rpc.Api.GetTransactionStatus.FAILED) {
-      recordTx({ hash: sent.hash, operation: label, status: "failed", feeStroops });
+      recordTx({
+        hash: sent.hash,
+        operation: label,
+        status: "failed",
+        feeStroops,
+        networkName: NETWORK.name,
+        networkPassphrase: passphrase,
+      });
       announce("Transaction failed on chain");
       return {
         kind: "failed",
@@ -230,7 +256,14 @@ export async function submitOperation(params: {
       };
     }
   }
-  recordTx({ hash: sent.hash, operation: label, status: "failed", feeStroops });
+  recordTx({
+    hash: sent.hash,
+    operation: label,
+    status: "failed",
+    feeStroops,
+    networkName: NETWORK.name,
+    networkPassphrase: passphrase,
+  });
   announce("Transaction failed on chain");
   return {
     kind: "failed",
@@ -281,6 +314,13 @@ export interface DeployOutcome {
   steps: DeployStep[];
   /** The deployed instance's identity, re-read from the chain after the create. */
   identity: WasmIdentity | null;
+  /**
+   * Why the post-deploy read produced no identity, or null when it was never
+   * reached, or when it succeeded. Kept separate from `identity` so a transport
+   * failure is reported as an unavailable read rather than as a wrong artifact —
+   * and so the deployment receipt can record a failed read explicitly.
+   */
+  readError: string | null;
   /** True only when the created instance runs the pinned artifact. */
   verified: boolean;
 }
@@ -289,6 +329,23 @@ export class GuardOperationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "GuardOperationError";
+  }
+}
+
+async function assertDeploymentAddressAvailable(
+  server: rpc.Server,
+  address: string,
+): Promise<void> {
+  const lookup = await contractAlreadyDeployed(server, address);
+  if (lookup.error) {
+    throw new GuardOperationError(
+      `could not inspect predicted address ${address}: ${lookup.error}; refusing to deploy`,
+    );
+  }
+  if (lookup.exists) {
+    throw new GuardOperationError(
+      `predicted address ${address} already exists; change the deployer or salt before deploying again`,
+    );
   }
 }
 
@@ -316,24 +373,25 @@ export async function deployGuard(params: {
     params.onStep?.(step);
   };
 
-  const artifact = await checkArtifact(server);
-  if (!artifact.ok) throw new GuardOperationError(artifact.detail);
-
   const predicted = await predictContractId({
     deployerPublicKey: signer.address,
     salt,
     ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
   });
+  await assertDeploymentAddressAvailable(server, predicted);
+
+  const artifact = await checkArtifact(server);
+  if (!artifact.ok) throw new GuardOperationError(artifact.detail);
 
   // ── Ensure the exact bytecode is a live code entry ─────────────────────
   const present = await artifactCodePresent(server, PHASE1_ARTIFACT.wasmHash);
   if (!present.ok) throw new GuardOperationError(`could not read the code entry: ${present.error}`);
   if (!present.value) {
     const wasm = await fetchContractWasm(server, PHASE1_ARTIFACT.guard);
-    const fetchedHash = await sha256Hex(wasm);
-    if (fetchedHash !== PHASE1_ARTIFACT.wasmHash) {
+    const verification = await verifyGuardWasm(wasm, PHASE1_ARTIFACT.wasmHash);
+    if (!verification.ok) {
       throw new GuardOperationError(
-        `refusing to upload: fetched bytes hash to ${fetchedHash}, not the pinned ${PHASE1_ARTIFACT.wasmHash}`,
+        `refusing to upload: fetched bytes hash to ${verification.actual}, not the pinned ${verification.expected}`,
       );
     }
     const upload = await submitOperation({
@@ -345,10 +403,11 @@ export async function deployGuard(params: {
     });
     record(`upload_contract_wasm (${PHASE1_ARTIFACT.wasmBytes} bytes)`, upload);
     if (upload.kind !== "submitted") {
-      return { guard: predicted, steps, identity: null, verified: false };
+      return { guard: predicted, steps, identity: null, readError: null, verified: false };
     }
   }
 
+  await assertDeploymentAddressAvailable(server, predicted);
   const create = await submitOperation({
     server,
     signer,
@@ -366,15 +425,27 @@ export async function deployGuard(params: {
     create,
   );
   if (create.kind !== "submitted") {
-    return { guard: predicted, steps, identity: null, verified: false };
+    return { guard: predicted, steps, identity: null, readError: null, verified: false };
   }
 
-  const identity = await verifyWasmIdentity(server, predicted);
+  // A read failure after a submitted create is not the same fact as a wrong
+  // artifact. Catch it so the operator keeps the transaction references and the
+  // receipt can say "unavailable" instead of losing the whole outcome when the
+  // RPC hiccups at the last step.
+  let identity: WasmIdentity | null = null;
+  let readError: string | null = null;
+  try {
+    identity = await verifyWasmIdentity(server, predicted);
+  } catch (error) {
+    readError = error instanceof Error ? error.message : String(error);
+  }
   return {
     guard: predicted,
     steps,
     identity,
+    readError,
     verified:
+      identity !== null &&
       identity.fetchedSha256 === PHASE1_ARTIFACT.wasmHash &&
       identity.bytes === PHASE1_ARTIFACT.wasmBytes,
   };
@@ -710,21 +781,36 @@ export interface GuardSnapshot {
   identity: ReadResult<WasmIdentity>;
 }
 
+/**
+ * Stamp a successful read with when it completed.
+ *
+ * The printed report must be able to say which sections were live reads and when
+ * each one returned; one batch timestamp would silently imply that a section
+ * which failed and was retried was as fresh as the others. Failures carry no
+ * timestamp because nothing was read.
+ */
+async function stamped<T>(read: Promise<ReadResult<T>>): Promise<ReadResult<T>> {
+  const result = await read;
+  return result.ok ? { ...result, readAt: new Date().toISOString() } : result;
+}
+
 export async function readGuardSnapshot(
   server: rpc.Server,
   guard: string,
   source?: string,
 ): Promise<GuardSnapshot> {
   const [status, policy, window, identity] = await Promise.all([
-    readStatus(server, guard, source),
-    readPolicy(server, guard, source),
-    readWindow(server, guard),
-    verifyWasmIdentity(server, guard)
-      .then((value): ReadResult<WasmIdentity> => ({ ok: true, value }))
-      .catch((error): ReadResult<WasmIdentity> => ({
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      })),
+    stamped(readStatus(server, guard, source)),
+    stamped(readPolicy(server, guard, source)),
+    stamped(readWindow(server, guard)),
+    stamped(
+      verifyWasmIdentity(server, guard)
+        .then((value): ReadResult<WasmIdentity> => ({ ok: true, value }))
+        .catch((error): ReadResult<WasmIdentity> => ({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        })),
+    ),
   ]);
   return { guard, fetchedAt: new Date().toISOString(), status, policy, window, identity };
 }

@@ -34,7 +34,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -179,7 +179,6 @@ jobs:
           name: bundle-size-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ steps.wait.outputs.run-id }}
-        continue-on-error: true
 
       - name: Post or update the PR comment
         if: always()
@@ -203,8 +202,7 @@ jobs:
                 marker,
                 "## Bundle size report",
                 "",
-                "The bundle-size analysis run did not produce a report" +
-                  `${process.env.conclusion === "timeout" ? " (timed out waiting for it)" : ""}.`,
+                "The bundle-size analysis run did not produce a report" + reason + ".",
                 "Check the `bundle-size` workflow logs on this pull request.",
               ].join("\n");
             }

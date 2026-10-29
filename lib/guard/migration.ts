@@ -79,6 +79,46 @@ function foldKey(key: string): string {
   return KEY_ALIASES[cleaned] ?? key.toLowerCase();
 }
 
+/**
+ * Conversion status for a single policy field during migration.
+ *
+ * - "copied": field was present in source with correct type, copied as-is
+ * - "transformed": field was present but required type conversion (e.g., string -> bigint)
+ * - "defaulted": field was missing in source, default value (0/false/empty) will be used
+ * - "unsupported": field exists in source but has no target counterpart, will be dropped
+ * - "unchanged": field was present and matches exactly (same value, same type)
+ * - "type-error": field was present but had wrong type, migration blocked
+ * - "missing-required": required field missing from source, migration blocked
+ */
+export type FieldConversionStatus =
+  | "copied"
+  | "transformed"
+  | "defaulted"
+  | "unsupported"
+  | "unchanged"
+  | "type-error"
+  | "missing-required";
+
+/** Detailed conversion result for a single field. */
+export interface FieldConversion {
+  /** Target field name (e.g., "per_tx_cap"). */
+  targetField: string;
+  /** Human-readable label for the operator. */
+  label: string;
+  /** Source field name that mapped to this target (may differ due to folding). */
+  sourceField: string | null;
+  /** Raw source value before any conversion. */
+  sourceValue: unknown;
+  /** Converted value that will be installed (null if blocked). */
+  convertedValue: unknown;
+  /** Conversion status. */
+  status: FieldConversionStatus;
+  /** Human-readable explanation of the conversion. */
+  detail: string;
+  /** Whether this field is required by the target schema. */
+  required: boolean;
+}
+
 export interface CompatibilityReport {
   /** A migration can be prepared: every target field is present and typed. */
   ok: boolean;
@@ -91,6 +131,8 @@ export interface CompatibilityReport {
   /** Present but the wrong shape (a cap that is a string, an allowlist that is not a list). */
   typeIssues: string[];
   notes: string[];
+  /** Field-by-field conversion details for the review step. */
+  fieldConversions: FieldConversion[];
 }
 
 /**
@@ -106,8 +148,19 @@ export function validateSourcePolicy(source: unknown): CompatibilityReport {
   const renamed: Array<{ from: string; to: string }> = [];
   const typeIssues: string[] = [];
   const notes: string[] = [];
+  const fieldConversions: FieldConversion[] = [];
 
   if (source === null || typeof source !== "object" || Array.isArray(source)) {
+    const conversions: FieldConversion[] = TARGET_POLICY_FIELDS.map((field) => ({
+      targetField: field.name,
+      label: field.label,
+      sourceField: null,
+      sourceValue: undefined,
+      convertedValue: null,
+      status: "missing-required" as FieldConversionStatus,
+      detail: "Required field missing: source is not a readable policy object",
+      required: field.required,
+    }));
     return {
       ok: false,
       missing: TARGET_POLICY_FIELDS.map((field) => field.name),
@@ -115,6 +168,7 @@ export function validateSourcePolicy(source: unknown): CompatibilityReport {
       renamed: [],
       typeIssues: [],
       notes: ["The source returned no policy object: it is unreadable, not empty."],
+      fieldConversions: conversions,
     };
   }
 
@@ -139,10 +193,112 @@ export function validateSourcePolicy(source: unknown): CompatibilityReport {
     const entry = mapped.get(field.name);
     if (!entry) {
       missing.push(field.name);
+      fieldConversions.push({
+        targetField: field.name,
+        label: field.label,
+        sourceField: null,
+        sourceValue: undefined,
+        convertedValue: null,
+        status: "missing-required",
+        detail: `Required field missing from source; will default to ${field.required ? "zero/false/empty (blocking migration)" : "zero/false/empty"}`,
+        required: field.required,
+      });
       continue;
     }
-    const issue = checkType(field.name, entry.value);
-    if (issue) typeIssues.push(issue);
+
+    const typeIssue = checkType(field.name, entry.value);
+    if (typeIssue) {
+      typeIssues.push(typeIssue);
+      fieldConversions.push({
+        targetField: field.name,
+        label: field.label,
+        sourceField: entry.from,
+        sourceValue: entry.value,
+        convertedValue: null,
+        status: "type-error",
+        detail: typeIssue,
+        required: field.required,
+      });
+      continue;
+    }
+
+    // Determine the converted value
+    let convertedValue: unknown;
+    const isCapField = new Set([
+      "per_tx_cap",
+      "window_secs",
+      "window_cap",
+      "active_from",
+      "active_until",
+      "dms_grace_secs",
+    ]).has(field.name);
+
+    if (isCapField) {
+      const value = entry.value;
+      if (typeof value === "bigint") convertedValue = value;
+      else if (typeof value === "number") convertedValue = BigInt(Math.trunc(value));
+      else if (typeof value === "string" && /^\d+$/.test(value.trim()))
+        convertedValue = BigInt(value.trim());
+      else convertedValue = 0n;
+    } else if (field.name === "assets" || field.name === "recipients") {
+      const value = entry.value;
+      convertedValue = Array.isArray(value)
+        ? value.filter((v): v is string => typeof v === "string")
+        : [];
+    } else if (field.name === "protocols") {
+      const value = entry.value;
+      convertedValue = Array.isArray(value)
+        ? value
+            .filter(
+              (rule): rule is { contract: string; fns: string[] | null } =>
+                typeof rule === "object" &&
+                rule !== null &&
+                typeof (rule as any).contract === "string",
+            )
+            .map((rule) => ({
+              contract: rule.contract,
+              fns: Array.isArray(rule.fns)
+                ? rule.fns.filter((fn): fn is string => typeof fn === "string")
+                : null,
+            }))
+        : [];
+    } else {
+      // boolean fields: accept both boolean and string "true"/"false"
+      if (typeof entry.value === "string") {
+        convertedValue = entry.value === "true";
+      } else {
+        convertedValue = entry.value === true;
+      }
+    }
+
+    // Determine if the value was transformed (only if conversion actually changes the value)
+    const wasTransformed =
+      (typeof entry.value === "string" && isCapField) ||
+      (typeof entry.value === "number" && isCapField) ||
+      (Array.isArray(entry.value) &&
+        (field.name === "assets" || field.name === "recipients") &&
+        !entry.value.every((item) => typeof item === "string")) ||
+      (Array.isArray(entry.value) &&
+        field.name === "protocols" &&
+        !entry.value.every(
+          (rule) =>
+            typeof rule === "object" && rule !== null && typeof (rule as any).contract === "string",
+        )) ||
+      (typeof entry.value === "string" &&
+        (field.name === "paused" || field.name === "allow_any_recipient"));
+
+    fieldConversions.push({
+      targetField: field.name,
+      label: field.label,
+      sourceField: entry.from,
+      sourceValue: entry.value,
+      convertedValue,
+      status: wasTransformed ? "transformed" : "copied",
+      detail: wasTransformed
+        ? `Converted from ${typeof entry.value} (${JSON.stringify(entry.value).slice(0, 50)}) to ${typeof convertedValue}`
+        : "Copied as-is",
+      required: field.required,
+    });
   }
 
   const protocols = mapped.get("protocols")?.value;
@@ -155,6 +311,20 @@ export function validateSourcePolicy(source: unknown): CompatibilityReport {
     );
   }
 
+  // Add unrecognised fields as unsupported conversions
+  for (const unrecKey of unrecognised) {
+    fieldConversions.push({
+      targetField: unrecKey,
+      label: unrecKey,
+      sourceField: unrecKey,
+      sourceValue: raw[unrecKey],
+      convertedValue: null,
+      status: "unsupported",
+      detail: "No matching field in this build's policy schema; will be dropped",
+      required: false,
+    });
+  }
+
   return {
     ok: missing.length === 0 && typeIssues.length === 0,
     missing,
@@ -162,6 +332,7 @@ export function validateSourcePolicy(source: unknown): CompatibilityReport {
     renamed,
     typeIssues,
     notes,
+    fieldConversions,
   };
 }
 
@@ -181,7 +352,7 @@ function checkType(name: string, value: unknown): string | null {
     return `${name}: expected a whole number of units, got ${describe(value)}`;
   }
   if (listFields.has(name)) {
-    if (Array.isArray(value) && value.every((item) => typeof item === "string")) return null;
+    if (Array.isArray(value)) return null;
     return `${name}: expected a list of addresses, got ${describe(value)}`;
   }
   if (name === "protocols") {
@@ -190,6 +361,7 @@ function checkType(name: string, value: unknown): string | null {
   }
   if (name === "paused" || name === "allow_any_recipient") {
     if (typeof value === "boolean") return null;
+    if (typeof value === "string" && (value === "true" || value === "false")) return null;
     return `${name}: expected true or false, got ${describe(value)}`;
   }
   return null;
@@ -267,6 +439,123 @@ export type MigrationPlan =
       dropped: string[];
     }
   | { ok: false; report: CompatibilityReport; message: string };
+
+/** The network a migration preview was built for. */
+export interface MigrationNetwork {
+  name: string;
+  passphrase: string;
+}
+
+/** The destination identity a preview is bound to. */
+export interface MigrationScope {
+  destination: string;
+  network: MigrationNetwork;
+}
+
+/**
+ * A source read together with the destination it was reviewed for.
+ *
+ * The source policy and the destination account are two different chain facts.
+ * Reading the source once and then switching the active guard would otherwise
+ * leave a plan that looks reviewed but was never reviewed *for that guard*.
+ * Binding the read to this scope is what makes that stale plan detectable
+ * instead of merely old.
+ */
+export interface MigrationPreview {
+  destination: string;
+  network: MigrationNetwork;
+  /** When the source and destination reads that produced this plan completed. */
+  readAt: string;
+  plan: MigrationPlan;
+}
+
+/** Build the record the review step displays and the submit guard checks. */
+export function buildMigrationPreview(params: {
+  plan: MigrationPlan;
+  destination: string;
+  network: MigrationNetwork;
+  readAt?: string;
+}): MigrationPreview {
+  return {
+    plan: params.plan,
+    destination: params.destination.trim(),
+    network: { ...params.network },
+    readAt: params.readAt ?? new Date().toISOString(),
+  };
+}
+
+export type PreviewValidity = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Is this preview still about the destination the operator is looking at?
+ *
+ * Deliberately strict: a different network *name* or passphrase is just as much
+ * a different target as a different address. A preview that survived either
+ * change would carry a policy read from one account into another.
+ */
+export function migrationPreviewValidity(
+  preview: MigrationPreview,
+  current: MigrationScope,
+): PreviewValidity {
+  const destination = current.destination.trim();
+  if (preview.destination === "") {
+    return {
+      ok: false,
+      reason: "The preview has no destination address.",
+    };
+  }
+  if (destination === "") {
+    return {
+      ok: false,
+      reason: `The destination is now empty; the preview was built for ${preview.destination}. Re-read the source and destination before applying.`,
+    };
+  }
+  if (destination !== preview.destination) {
+    return {
+      ok: false,
+      reason: `The destination changed from ${preview.destination} to ${destination}. Re-read the source and destination before applying.`,
+    };
+  }
+  if (current.network.name !== preview.network.name) {
+    return {
+      ok: false,
+      reason: `The network changed from ${preview.network.name} to ${current.network.name}. Re-read the source and destination before applying.`,
+    };
+  }
+  if (current.network.passphrase !== preview.network.passphrase) {
+    return {
+      ok: false,
+      reason:
+        "The network passphrase changed. A policy read for one network cannot authorize a write on another; re-read before applying.",
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * The single submit gate: a portable plan, read for this exact destination and
+ * network. The UI calls this both to enable the button and again immediately
+ * before invoking the wallet, so a switch in another tab cannot slip through.
+ */
+export function canSubmitMigrationPreview(
+  preview: MigrationPreview,
+  current: MigrationScope,
+): PreviewValidity {
+  const scope = migrationPreviewValidity(preview, current);
+  if (!scope.ok) return scope;
+  if (!preview.plan.ok) {
+    return {
+      ok: false,
+      reason: "The preview is not a directly portable policy.",
+    };
+  }
+  return { ok: true };
+}
+
+/** A readable statement of what the preview is bound to, for the review step. */
+export function describeMigrationScope(preview: MigrationPreview): string {
+  return `${preview.destination} on ${preview.network.name}`;
+}
 
 /**
  * Read a source policy and prepare the target's `set_policy` payload.

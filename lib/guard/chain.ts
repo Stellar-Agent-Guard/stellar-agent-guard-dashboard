@@ -1,4 +1,9 @@
-import { getCachedByteLength, getCachedHash, setCachedHash } from "./bytecodeCache.ts";
+import {
+  getCachedByteLength,
+  getCachedHash,
+  invalidateCachedHash,
+  setCachedHash,
+} from "./bytecodeCache.ts";
 /**
  * Read-only access to a guard deployment, straight off Soroban RPC.
  *
@@ -38,13 +43,59 @@ import {
   decodePolicy,
 } from "stellar-agent-guard-sdk";
 import { withTimeout, DashboardReadError } from "./timeout.ts";
+import { buildReadDiagnostic, redactDiagnosticText } from "../rpc/timeouts.ts";
 
 export function createServer(rpcUrl: string = NETWORK.rpcUrl): rpc.Server {
   return new rpc.Server(rpcUrl);
 }
 
-/** A read succeeded, or it produced a real error. There is deliberately no third case. */
-export type ReadResult<T> = { ok: true; value: T } | { ok: false; error: string };
+/**
+ * A read succeeded, or it produced a real error. There is deliberately no third
+ * case. A failure may carry a safe diagnostic (issue #347): the operation,
+ * endpoint origin, network and time, with signed payloads and credentials
+ * removed, ready to copy into a report.
+ */
+export type ReadResult<T> =
+  | {
+      ok: true;
+      value: T;
+      /**
+       * When this specific read completed. Optional because pure unit fixtures
+       * and older callers may not carry a clock; a report falls back to the
+       * snapshot's batch timestamp rather than inventing one.
+       */
+      readAt?: string;
+    }
+  | { ok: false; error: string; diagnostic?: string };
+
+/** The endpoint a server was constructed with, for diagnostics. */
+function endpointOf(server: rpc.Server): string {
+  const endpoint = (server as unknown as { serverURL?: URL | string }).serverURL;
+  return endpoint instanceof URL ? endpoint.toString() : String(endpoint ?? "");
+}
+
+/**
+ * Turn a failed read into a `ReadResult` failure with a safe, copyable
+ * diagnostic. The error text is redacted as well, because the panel may show
+ * it and an RPC or wallet error can echo a signed payload or a URL token.
+ */
+function readFailure(
+  server: rpc.Server,
+  operation: string,
+  error: unknown,
+): { ok: false; error: string; diagnostic: string } {
+  const detail =
+    typeof error === "string" ? error : error instanceof Error ? error.message : String(error);
+  return {
+    ok: false,
+    error: redactDiagnosticText(detail),
+    diagnostic: buildReadDiagnostic({
+      operation,
+      endpoint: endpointOf(server),
+      network: NETWORK.name,
+    }).text,
+  };
+}
 
 /**
  * Run a read-only contract function and decode its return value.
@@ -79,18 +130,18 @@ export async function readContract<T = unknown>(
         .build();
       const simulation = await server.simulateTransaction(tx);
       if (rpc.Api.isSimulationError(simulation)) {
-        return { ok: false, error: stringifyError(simulation.error) };
+        return readFailure(server, `${fn}()`, stringifyError(simulation.error));
       }
       const success = simulation as rpc.Api.SimulateTransactionSuccessResponse;
       const retval = success.result?.retval;
       if (retval === undefined) {
-        return { ok: false, error: `simulation of ${fn}() returned no value` };
+        return readFailure(server, `${fn}()`, `simulation returned no value`);
       }
       return { ok: true, value: decode(retval) };
     });
   } catch (error) {
     if (error instanceof DashboardReadError) throw error;
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return readFailure(server, `${fn}()`, error);
   }
 }
 
@@ -165,7 +216,7 @@ export async function readPersistentEntry<T = unknown>(
     });
   } catch (error) {
     if (error instanceof DashboardReadError) throw error;
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return readFailure(server, `getLedgerEntries(${dataKeyName})`, error);
   }
 }
 
@@ -235,7 +286,7 @@ export async function readContractStorage(
     });
   } catch (error) {
     if (error instanceof DashboardReadError) throw error;
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return readFailure(server, "getLedgerEntries(storage)", error);
   }
 }
 
@@ -307,7 +358,7 @@ export async function readNativeXlmBalance(
     if (!entry) return { ok: true, value: 0n };
     return { ok: true, value: BigInt(entry.amount) };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return readFailure(server, "getAssetBalance(native XLM)", error);
   }
 }
 
@@ -354,12 +405,18 @@ export async function verifyWasmIdentity(
     const networkKey = networkCacheKey(server);
     const cachedHash = getCachedHash(networkKey, contractId);
 
-    if (cachedHash) {
+    // A cached hash that disagrees with what the ledger declares *right now* is
+    // not a hit: it describes bytes from some other read of this address — a
+    // provider that served different bytes, or a cache populated by a build
+    // pointed at another chain (the key is only testnet/public + address).
+    // Believing it would keep the panel refused on an artifact that has since
+    // been re-read correctly, with no way back short of a reload (issue #351).
+    if (cachedHash && cachedHash === reportedWasmHash) {
       return {
         reportedWasmHash,
         fetchedSha256: cachedHash,
         bytes: getCachedByteLength(networkKey, contractId) ?? 0,
-        match: reportedWasmHash === cachedHash,
+        match: true,
       };
     }
 
@@ -375,6 +432,25 @@ export async function verifyWasmIdentity(
       match: reportedWasmHash === fetchedSha256,
     };
   });
+}
+
+/**
+ * Drop the cached identity for a contract, so the next read re-fetches it.
+ *
+ * Contract code is immutable, which is what makes caching the recomputed hash
+ * and length worthwhile — until something makes the cache the thing that is
+ * wrong. The key is coarse (testnet/public + address), so a provider serving
+ * different bytes than the one that populated it, or a re-check the operator
+ * asked for on purpose, would otherwise keep answering from an entry that has
+ * already been contradicted.
+ *
+ * The deploy panel calls this before "Re-check artifact" (issue #351): pressing
+ * that button means "ask the chain again", and a cache hit would quietly turn
+ * the press into a no-op — including the case where the artifact goes back to
+ * matching the pin and the panel has to be able to say so without a reload.
+ */
+export function invalidateWasmIdentityCache(server: rpc.Server, contractId: string): void {
+  invalidateCachedHash(networkCacheKey(server), contractId);
 }
 
 /** The exact bytecode of a deployed contract, fetched from the chain. */
