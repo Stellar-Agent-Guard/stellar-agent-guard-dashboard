@@ -38,6 +38,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { NETWORK, PHASE1_ARTIFACT } from "../../lib/guard/network.ts";
 import { hashToHex } from "../../lib/guard/scval.ts";
+import { predictContractId } from "../../lib/guard/chain.ts";
 import { specToGuardEvent, type MockEventSpec } from "../mocks/eventFixtures.ts";
 
 const RPC_HOST = "soroban-testnet.stellar.org";
@@ -188,6 +189,8 @@ export class SorobanRpcMock {
    */
   artifactMode: ArtifactMode;
 
+  private readonly contractInstances = new Set<string>([PHASE1_ARTIFACT.guard]);
+
   private readonly capture: RpcCapture;
   private readonly wasm: Uint8Array;
   private readonly artifacts = new Map<ArtifactMode, { bytes: Uint8Array; hash: string }>();
@@ -291,7 +294,7 @@ export class SorobanRpcMock {
     const method = body?.method ?? "unknown";
     this.requests.push(method);
     try {
-      const result = this.dispatch(method, body?.params ?? ({} as never));
+      const result = await this.dispatch(method, body?.params ?? ({} as never));
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -321,7 +324,7 @@ export class SorobanRpcMock {
     };
   }
 
-  private dispatch(method: string, params: Record<string, unknown>): unknown {
+  private async dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
     switch (method) {
       case "getHealth":
         return { status: "healthy", ...this.ledgerFields() };
@@ -346,7 +349,7 @@ export class SorobanRpcMock {
       case "simulateTransaction":
         return this.simulate(String(params["transaction"] ?? ""));
       case "sendTransaction":
-        return this.sendTransaction(String(params["transaction"] ?? ""));
+        return await this.sendTransaction(String(params["transaction"] ?? ""));
       case "getTransaction":
         return this.getTransaction(String(params["hash"] ?? ""));
       case "getEvents":
@@ -403,9 +406,11 @@ export class SorobanRpcMock {
       // Storage reads (the rolling `Window`, policy slots, …) resolve to "no
       // entry": the console renders that as an absent window, never as a zero.
       if (data.key.type === "scvVec") return null;
-      // The instance lookup: whatever artifact mode this chain is serving
-      // declares its own hash here, and the code entry below answers for that
-      // same hash — so a mismatch reads as a pin mismatch, never as a torn read.
+      if (data.key.type !== "scvLedgerKeyContractInstance") return null;
+      const contractId = Address.fromScAddress(data.contract).toString();
+      if (!this.contractInstances.has(contractId)) return null;
+      // The instance lookup: every guard in these tests runs the pinned
+      // artifact, which is what the deploy flow re-verifies after creation.
       const instance = new xdr.ContractDataEntry({
         ext: xdr.ExtensionPoint.v0(),
         contract: data.contract,
@@ -458,10 +463,16 @@ export class SorobanRpcMock {
     };
   }
 
-  private sendTransaction(transactionXdr: string): Record<string, unknown> {
+  private async sendTransaction(transactionXdr: string): Promise<Record<string, unknown>> {
     const hash = createHash("sha256").update(Buffer.from(transactionXdr, "base64")).digest("hex");
     this.transactions.set(hash, transactionXdr);
     this.latestLedger += 1;
+
+    const createdContract = await this.createdContractId(transactionXdr);
+    if (createdContract) {
+      this.contractInstances.add(createdContract);
+      this.guards.set(createdContract, { frozen: false, policy: null });
+    }
 
     // Apply the call's effect — the mock's version of consensus.
     const call = decodeCall(transactionXdr);
@@ -486,6 +497,26 @@ export class SorobanRpcMock {
     }
 
     return { status: "PENDING", hash, ...this.ledgerFields() };
+  }
+
+  private async createdContractId(transactionXdr: string): Promise<string | null> {
+    const transaction = TransactionBuilder.fromXDR(transactionXdr, NETWORK.passphrase);
+    const envelope = transaction.toEnvelope();
+    if (envelope.type !== "envelopeTypeTx") return null;
+    for (const operation of envelope.v1.tx.operations) {
+      const body = operation.body;
+      if (body.type !== "invokeHostFunction") continue;
+      const hostFunction = body.invokeHostFunctionOp.hostFunction;
+      if (hostFunction.type !== "hostFunctionTypeCreateContractV2") continue;
+      const preimage = hostFunction.createContractV2.contractIdPreimage;
+      if (preimage.type !== "contractIdPreimageFromAddress") continue;
+      const deployer = Address.fromScAddress(preimage.fromAddress.address).toString();
+      return await predictContractId({
+        deployerPublicKey: deployer,
+        salt: preimage.fromAddress.salt.value,
+      });
+    }
+    return null;
   }
 
   private getTransaction(hash: string): Record<string, unknown> {

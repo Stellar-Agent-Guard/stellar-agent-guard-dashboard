@@ -102,6 +102,6 @@ test.describe("deploy is refused when the artifact pin does not match", () => {
     await expect(identity.locator(".v")).toHaveText("matches");
     await expect(identity.locator(".n")).toHaveText("deploy is permitted");
     await expect(page.getByRole("button", { name: "Deploy guard" })).toBeEnabled();
-    expect(await signRequestCount(page)).toBe(0, "recovery asks nothing of the wallet either");
+    expect(await signRequestCount(page)).toBe(0);
   });
 });

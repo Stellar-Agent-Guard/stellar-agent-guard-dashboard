@@ -8,8 +8,7 @@
  */
 
 import { Account, Address, Operation, TransactionBuilder, rpc, xdr } from "@stellar/stellar-sdk";
-import { sha256Hex } from "./scval.ts";
-import type { GuardStatus, PolicyConfig } from "stellar-agent-guard-sdk";
+import { verifyGuardWasm, type GuardStatus, type PolicyConfig } from "stellar-agent-guard-sdk";
 import { NETWORK, PHASE1_ARTIFACT } from "./network.ts";
 import { buildPolicyConfig, type PolicyDraft } from "./policyForm.ts";
 import {
@@ -38,6 +37,7 @@ import {
 import { addressToScVal, hexToBytes } from "./scval.ts";
 import { announce } from "./useAnnounce.ts";
 import { recordTx } from "./txHistory.ts";
+import { contractAlreadyDeployed } from "./saltGenerator.ts";
 
 // ── Artifact identity ──────────────────────────────────────────────────────
 
@@ -332,6 +332,23 @@ export class GuardOperationError extends Error {
   }
 }
 
+async function assertDeploymentAddressAvailable(
+  server: rpc.Server,
+  address: string,
+): Promise<void> {
+  const lookup = await contractAlreadyDeployed(server, address);
+  if (lookup.error) {
+    throw new GuardOperationError(
+      `could not inspect predicted address ${address}: ${lookup.error}; refusing to deploy`,
+    );
+  }
+  if (lookup.exists) {
+    throw new GuardOperationError(
+      `predicted address ${address} already exists; change the deployer or salt before deploying again`,
+    );
+  }
+}
+
 /**
  * Deploy a new guard instance of the pinned Phase 1 artifact.
  *
@@ -356,24 +373,25 @@ export async function deployGuard(params: {
     params.onStep?.(step);
   };
 
-  const artifact = await checkArtifact(server);
-  if (!artifact.ok) throw new GuardOperationError(artifact.detail);
-
   const predicted = await predictContractId({
     deployerPublicKey: signer.address,
     salt,
     ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
   });
+  await assertDeploymentAddressAvailable(server, predicted);
+
+  const artifact = await checkArtifact(server);
+  if (!artifact.ok) throw new GuardOperationError(artifact.detail);
 
   // ── Ensure the exact bytecode is a live code entry ─────────────────────
   const present = await artifactCodePresent(server, PHASE1_ARTIFACT.wasmHash);
   if (!present.ok) throw new GuardOperationError(`could not read the code entry: ${present.error}`);
   if (!present.value) {
     const wasm = await fetchContractWasm(server, PHASE1_ARTIFACT.guard);
-    const fetchedHash = await sha256Hex(wasm);
-    if (fetchedHash !== PHASE1_ARTIFACT.wasmHash) {
+    const verification = await verifyGuardWasm(wasm, PHASE1_ARTIFACT.wasmHash);
+    if (!verification.ok) {
       throw new GuardOperationError(
-        `refusing to upload: fetched bytes hash to ${fetchedHash}, not the pinned ${PHASE1_ARTIFACT.wasmHash}`,
+        `refusing to upload: fetched bytes hash to ${verification.actual}, not the pinned ${verification.expected}`,
       );
     }
     const upload = await submitOperation({
@@ -389,6 +407,7 @@ export async function deployGuard(params: {
     }
   }
 
+  await assertDeploymentAddressAvailable(server, predicted);
   const create = await submitOperation({
     server,
     signer,
