@@ -509,6 +509,25 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   const passphrase = request.passphrase ?? NETWORK.passphrase;
   const { server, signer } = request;
 
+  // ── Network guard (issue #18) ───────────────────────────────────────────
+  // Check the wallet's active network before any signing prompt. The wallet
+  // popup must never appear when the operator is on the wrong network.
+  // Reads are safe and unblocked — they hit NETWORK.rpcUrl directly without
+  // the wallet.
+  try {
+    await assertCorrectNetwork(undefined, passphrase);
+  } catch (error) {
+    if (error instanceof NetworkMismatchError) {
+      return {
+        kind: "refused",
+        stage: "discovery",
+        detail: error.message,
+        diagnosticEvents: [],
+      };
+    }
+    throw error;
+  }
+
   let account: Account;
   try {
     account = await server.getAccount(signer.address);

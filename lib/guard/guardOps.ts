@@ -126,6 +126,24 @@ export async function submitOperation(params: {
   const { server, signer } = params;
   const label = params.label ?? "host_function_operation";
 
+  // ── Network guard (issue #18) ─────────────────────────────────────────
+  // deployGuard and the wasm upload path both go through submitOperation.
+  // Guard before any wallet interaction.
+  try {
+    await assertCorrectNetwork(undefined, passphrase);
+  } catch (error) {
+    if (error instanceof NetworkMismatchError) {
+      announce('Transaction refused — nothing was broadcast');
+      return {
+        kind: "refused",
+        stage: "discovery",
+        detail: error.message,
+        diagnosticEvents: [],
+      };
+    }
+    throw error;
+  }
+
   let account: Account;
   try {
     account = await server.getAccount(signer.address);
