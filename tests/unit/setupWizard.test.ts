@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { before, test } from "node:test";
+import { Address, SorobanDataBuilder, xdr } from "@stellar/stellar-sdk";
 import type { ReactElement } from "react";
 import { installDom, loadReact, sleep, type Act } from "./domHarness.ts";
 import { SetupWizard } from "../../components/SetupWizard.tsx";
@@ -8,6 +9,10 @@ import { GuardContext } from "../../components/GuardProvider.tsx";
 import type { GuardSnapshot } from "../../lib/guard/guardOps.ts";
 import { SETUP_STORAGE_KEY } from "../../lib/guard/setupChecklist.ts";
 import { PHASE1_ARTIFACT } from "../../lib/guard/network.ts";
+import { DashboardReadError } from "../../lib/guard/timeout.ts";
+import { policyToScVal } from "stellar-agent-guard-sdk";
+import { POLICY_PRESETS } from "../../lib/guard/presets.ts";
+import { guardStatusScVal } from "../mocks/sorobanFixtures.ts";
 
 installDom();
 
@@ -22,7 +27,7 @@ before(async () => {
   act = loaded.act;
 });
 
-const GUARD = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
+const GUARD = "CBLQLJAG72M4XQRJMQHSKYIFVHQD7LNTNOQH2GRMCMBWMSLBSLTGTJC7";
 
 /** A server whose every method rejects, so reads settle into their error states. */
 const noNetworkServer = new Proxy(
@@ -64,9 +69,128 @@ function policyMissingSnapshot(): GuardSnapshot {
   };
 }
 
-function contextValue(snapshot: GuardSnapshot) {
+/**
+ * A snapshot whose write has *already succeeded* on chain: a policy is in
+ * force. This is the state issue #394 starts from — the write landed, and what
+ * can still fail is the read that verifies it.
+ */
+function policyInstalledSnapshot(): GuardSnapshot {
+  const snapshot = policyMissingSnapshot();
+  if (!snapshot.status.ok) throw new Error("the fixture snapshot starts from a successful read");
   return {
-    server: noNetworkServer,
+    ...snapshot,
+    status: {
+      ok: true,
+      value: { ...snapshot.status.value, has_policy: true, last_heartbeat: 1n, now: 2n },
+    },
+    policy: {
+      ok: true,
+      value: {
+        per_tx_cap: 1_000n,
+        window_secs: 3_600n,
+        window_cap: 10_000n,
+        assets: [],
+        protocols: [],
+        recipients: [],
+        allow_any_recipient: false,
+        active_from: 0n,
+        active_until: 0n,
+        paused: false,
+        dms_grace_secs: 100_000n,
+      },
+    },
+  };
+}
+
+// ── A controllable read/write server (issue #394) ───────────────────────────
+
+function decodeInvocation(tx: unknown): { guard: string; fn: string } {
+  const raw = xdr.TransactionEnvelope.fromXDR((tx as { toXDR(): string }).toXDR(), "base64");
+  const body = raw.type === "envelopeTypeTx" ? raw.v1.tx.operations[0]?.body : undefined;
+  const hostFunction =
+    body && body.type === "invokeHostFunction" ? body.invokeHostFunctionOp.hostFunction : undefined;
+  if (!hostFunction || hostFunction.type !== "hostFunctionTypeInvokeContract") {
+    return { guard: "", fn: "" };
+  }
+  const call = hostFunction.invokeContract;
+  return {
+    guard: Address.fromScAddress(call.contractAddress).toString(),
+    fn: String(call.functionName),
+  };
+}
+
+interface SetupServer {
+  server: any;
+  calls: { initializeReads: number; statusReads: number; sendTransaction: number };
+  setStatusMode: (mode: "fail" | "ok") => void;
+  setInitializeMode: (mode: "fail" | "ok") => void;
+}
+
+/**
+ * A server whose reads can be failed and recovered on demand, and whose
+ * `sendTransaction` counts every attempted write — the counter the read-only
+ * retry tests assert stays at zero.
+ */
+function createSetupServer(): SetupServer {
+  const calls = { initializeReads: 0, statusReads: 0, sendTransaction: 0 };
+  let statusMode: "fail" | "ok" = "fail";
+  let initializeMode: "fail" | "ok" = "fail";
+  const success = (retval: xdr.ScVal) => ({
+    result: { auth: [], retval },
+    minResourceFee: "1",
+    transactionData: undefined,
+    latestLedger: 1,
+  });
+  const server = {
+    async simulateTransaction(tx: unknown) {
+      const { fn } = decodeInvocation(tx);
+      if (fn === "status") {
+        calls.statusReads += 1;
+        if (statusMode === "fail") throw new Error("RPC unavailable (fixture)");
+        return success(
+          guardStatusScVal({
+            admin_frozen: false,
+            has_policy: true,
+            heartbeat_expired: false,
+            last_heartbeat: 1n,
+            now: 2n,
+          }),
+        );
+      }
+      // `policy()` answering void decodes as null — a successful default-deny read.
+      return success(xdr.ScVal.scvVoid());
+    },
+    async getContractInstance() {
+      calls.initializeReads += 1;
+      if (initializeMode === "fail") throw new Error("instance unreachable (fixture)");
+      return {
+        storage: [{ key: { vec: [{ symbol: "Initialized" }] }, val: { bool: true } }],
+      };
+    },
+    async sendTransaction() {
+      calls.sendTransaction += 1;
+      throw new Error("no write may ever be broadcast by a checklist retry");
+    },
+  } as any;
+  return {
+    server,
+    calls,
+    setStatusMode: (mode) => {
+      statusMode = mode;
+    },
+    setInitializeMode: (mode) => {
+      initializeMode = mode;
+    },
+  };
+}
+
+function contextValue(
+  snapshot: GuardSnapshot,
+  server: unknown = noNetworkServer,
+  guard: string = snapshot.guard,
+) {
+  return {
+    server,
     wallet: null,
     walletError: null,
     connecting: false,
@@ -76,7 +200,7 @@ function contextValue(snapshot: GuardSnapshot) {
       throw new Error("no signing in setup-wizard tests");
     },
     instances: [{ guard: GUARD, label: "Test guard", provenance: "test" }],
-    guard: GUARD,
+    guard,
     selectGuard: () => {},
     addInstance: () => {},
     snapshot,
@@ -92,6 +216,7 @@ function contextValue(snapshot: GuardSnapshot) {
       guards: [],
       capped: 0,
       cappedLabels: [],
+      gaps: [],
     },
     startWatching: () => {},
     stopWatching: () => {},
@@ -103,17 +228,27 @@ function contextValue(snapshot: GuardSnapshot) {
 
 interface Rendered {
   container: HTMLElement;
+  rerender: (snapshot: GuardSnapshot, server?: unknown, guard?: string) => Promise<void>;
   unmount: () => Promise<void>;
 }
 
-async function render(element: ReactElement, snapshot: GuardSnapshot): Promise<Rendered> {
+async function render(
+  element: ReactElement,
+  snapshot: GuardSnapshot,
+  server: unknown = noNetworkServer,
+  guard: string = snapshot.guard,
+): Promise<Rendered> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   let root: ReturnType<typeof createRoot> | undefined;
   await act(async () => {
     root = createRoot(container);
     root.render(
-      react.createElement(GuardContext.Provider, { value: contextValue(snapshot) }, element),
+      react.createElement(
+        GuardContext.Provider,
+        { value: contextValue(snapshot, server, guard) },
+        element,
+      ),
     );
   });
   // Let mount effects (the initialize read) settle inside act.
@@ -122,6 +257,17 @@ async function render(element: ReactElement, snapshot: GuardSnapshot): Promise<R
   });
   return {
     container,
+    rerender: async (nextSnapshot, nextServer = server, nextGuard = guard) => {
+      await act(async () => {
+        root?.render(
+          react.createElement(
+            GuardContext.Provider,
+            { value: contextValue(nextSnapshot, nextServer, nextGuard) },
+            element,
+          ),
+        );
+      });
+    },
     unmount: async () => {
       await act(async () => {
         root?.unmount();
@@ -243,12 +389,16 @@ test("a failed verification re-read leaves step 4 in error, never optimistically
   const rendered = await render(react.createElement(SetupWizard), policyMissingSnapshot());
   try {
     assert.equal(step(rendered.container, "verified")?.dataset.state, "pending");
-    await click(rendered.container, "Re-verify status & policy");
+    await click(rendered.container, "Re-verify status & policy (read-only)");
 
     const verified = step(rendered.container, "verified");
     assert.equal(verified?.dataset.state, "error", "a failed re-read must not turn the step green");
     assert.match(verified?.textContent ?? "", /Error/);
     assert.match(rendered.container.textContent ?? "", /verification read failed/i);
+    // The recovery affordance is explicitly labelled read-only: the operator
+    // must be able to tell that retrying re-reads the chain rather than
+    // repeating a write (#394).
+    assert.match(rendered.container.textContent ?? "", /read-only/);
 
     // The verification result is held in the component and derived from the
     // fetch; no local write records it.
@@ -257,6 +407,338 @@ test("a failed verification re-read leaves step 4 in error, never optimistically
       const entry = (JSON.parse(raw) as Record<string, Record<string, unknown>>)[GUARD] ?? {};
       assert.deepEqual([...Object.keys(entry)].sort(), ["deployedMarker", "dismissed"]);
     }
+  } finally {
+    await rendered.unmount();
+  }
+});
+
+test("a successful write followed by a failed verification read recovers read-only, with no second write", async () => {
+  window.localStorage.removeItem(SETUP_STORAGE_KEY);
+  const fake = createSetupServer(); // status reads start failing; initialize already ran
+  fake.setInitializeMode("ok");
+  const rendered = await render(
+    react.createElement(SetupWizard),
+    policyInstalledSnapshot(),
+    fake.server,
+  );
+  try {
+    // The write already landed: policy installed, initialize done.
+    assert.equal(step(rendered.container, "policy")?.dataset.state, "done");
+    assert.equal(step(rendered.container, "initialized")?.dataset.state, "done");
+    assert.equal(step(rendered.container, "verified")?.dataset.state, "pending");
+
+    // The verification read fails after that successful write.
+    await click(rendered.container, "Re-verify status & policy (read-only)");
+    assert.equal(step(rendered.container, "verified")?.dataset.state, "error");
+    assert.equal(fake.calls.sendTransaction, 0, "a failed read never triggers a write");
+
+    // The RPC recovers; the operator retries the read — and only the read.
+    fake.setStatusMode("ok");
+    const statusReadsBefore = fake.calls.statusReads;
+    await click(rendered.container, "Re-verify status & policy (read-only)");
+
+    assert.equal(
+      step(rendered.container, "verified")?.dataset.state,
+      "done",
+      "the fresh chain result turns step 4 green",
+    );
+    assert.equal(
+      fake.calls.statusReads - statusReadsBefore,
+      1,
+      "the retry re-read status() exactly once",
+    );
+    assert.equal(
+      fake.calls.sendTransaction,
+      0,
+      "recovery issued no second write — initialize and set_policy are never replayed",
+    );
+  } finally {
+    await rendered.unmount();
+  }
+});
+
+test("a failed initialize read can be re-read in place, read-only, without any write", async () => {
+  window.localStorage.removeItem(SETUP_STORAGE_KEY);
+  const fake = createSetupServer();
+  fake.setStatusMode("ok"); // initialize reads start failing
+  const rendered = await render(
+    react.createElement(SetupWizard),
+    policyInstalledSnapshot(),
+    fake.server,
+  );
+  try {
+    const initialized = step(rendered.container, "initialized");
+    assert.equal(initialized?.dataset.state, "error", "an unreadable read is an error, not a no");
+    assert.match(initialized?.textContent ?? "", /initialize state could not be read/);
+
+    // The chain answers again; the operator re-reads just that field.
+    fake.setInitializeMode("ok");
+    await click(rendered.container, "Re-read initialize state (read-only)");
+
+    assert.equal(step(rendered.container, "initialized")?.dataset.state, "done");
+    assert.equal(fake.calls.initializeReads, 2, "one mount read plus exactly one manual re-read");
+    assert.equal(
+      fake.calls.sendTransaction,
+      0,
+      "the re-read is read-only — no write path is touched",
+    );
+  } finally {
+    await rendered.unmount();
+  }
+});
+
+test("switching guards does not show the previous guard's initialize or snapshot reads", async () => {
+  window.localStorage.removeItem(SETUP_STORAGE_KEY);
+  let resolveNext: ((value: unknown) => void) | undefined;
+  const nextGuardRead = new Promise<unknown>((resolve) => {
+    resolveNext = resolve;
+  });
+  const server = {
+    getContractInstance: async (address: string) => {
+      if (address === GUARD) {
+        return { storage: [{ key: { vec: [{ symbol: "Initialized" }] }, val: { bool: true } }] };
+      }
+      return nextGuardRead;
+    },
+  } as typeof noNetworkServer;
+  const oldSnapshot = {
+    ...policyMissingSnapshot(),
+    status: {
+      ok: true,
+      value: {
+        has_policy: true,
+        admin_frozen: false,
+        heartbeat_expired: false,
+        last_heartbeat: 0n,
+        now: 1n,
+      },
+    },
+    policy: { ok: true, value: {} },
+  } as GuardSnapshot;
+  const otherGuard = "CDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD";
+  const rendered = await render(react.createElement(SetupWizard), oldSnapshot, server);
+  try {
+    assert.equal(step(rendered.container, "initialized")?.dataset.state, "done");
+    await rendered.rerender(oldSnapshot, server, otherGuard);
+    assert.notEqual(step(rendered.container, "initialized")?.dataset.state, "done");
+    assert.notEqual(step(rendered.container, "policy")?.dataset.state, "done");
+
+    await act(async () => {
+      resolveNext?.({ storage: [] });
+      await sleep(20);
+    });
+    assert.equal(step(rendered.container, "initialized")?.dataset.state, "pending");
+  } finally {
+    await rendered.unmount();
+  }
+});
+
+test("retrying a failed initialize read completes the checklist without a write", async () => {
+  window.localStorage.removeItem(SETUP_STORAGE_KEY);
+  let calls = 0;
+  const server = {
+    getContractInstance: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("temporary RPC failure");
+      return { storage: [{ key: { vec: [{ symbol: "Initialized" }] }, val: { bool: true } }] };
+    },
+  } as typeof noNetworkServer;
+  const verifiedSnapshot = {
+    ...policyMissingSnapshot(),
+    guard: PHASE1_ARTIFACT.guard,
+    status: {
+      ok: true,
+      value: {
+        has_policy: true,
+        admin_frozen: false,
+        heartbeat_expired: false,
+        last_heartbeat: 1n,
+        now: 2n,
+      },
+    },
+    policy: { ok: true, value: POLICY_PRESETS[0]!.config },
+  } as GuardSnapshot;
+  const rendered = await render(
+    react.createElement(SetupWizard),
+    verifiedSnapshot,
+    server,
+    PHASE1_ARTIFACT.guard,
+  );
+  try {
+    assert.equal(step(rendered.container, "initialized")?.dataset.state, "error");
+    await click(rendered.container, "Re-read initialize state (read-only)");
+    assert.equal(step(rendered.container, "initialized")?.dataset.state, "done");
+    assert.equal(calls, 2);
+    assert.equal(window.localStorage.getItem(SETUP_STORAGE_KEY), null);
+  } finally {
+    await rendered.unmount();
+  }
+});
+
+test("a thrown verification timeout clears green state and retry can complete", async () => {
+  window.localStorage.removeItem(SETUP_STORAGE_KEY);
+  let statusReads = 0;
+  let policyReads = 0;
+  let writes = 0;
+  const successfulSimulation = (retval: xdr.ScVal) => {
+    const data = new SorobanDataBuilder()
+      .setReadWrite([])
+      .setResourceFee(0n)
+      .setResources(1_000_000, 0, 0)
+      .build();
+    return {
+      transactionData: new SorobanDataBuilder(data),
+      minResourceFee: "0",
+      result: { auth: [], retval },
+      events: [],
+      latestLedger: 200,
+      cost: { cpuInsns: "0", memBytes: "0" },
+      stateChanges: [],
+    };
+  };
+  const server = {
+    getContractInstance: async () => ({ storage: [] }),
+    simulateTransaction: async (transaction: any) => {
+      const fn = transaction.operations[0].func.invokeContract.functionName.toString();
+      if (fn === "status") {
+        statusReads += 1;
+        if (statusReads === 2) throw new DashboardReadError("temporary status timeout");
+        return successfulSimulation(
+          guardStatusScVal({
+            admin_frozen: false,
+            has_policy: true,
+            heartbeat_expired: false,
+            last_heartbeat: 1n,
+            now: 2n,
+          }),
+        );
+      }
+      if (fn === "policy") {
+        policyReads += 1;
+        return successfulSimulation(policyToScVal(POLICY_PRESETS[0]!.config));
+      }
+      throw new Error(`unexpected read ${fn}`);
+    },
+    prepareTransaction: async () => {
+      writes += 1;
+      throw new Error("verification must not prepare a transaction");
+    },
+    sendTransaction: async () => {
+      writes += 1;
+      throw new Error("verification must not submit a transaction");
+    },
+  } as typeof noNetworkServer;
+  const verifiedSnapshot = {
+    ...policyMissingSnapshot(),
+    guard: PHASE1_ARTIFACT.guard,
+    status: {
+      ok: true,
+      value: {
+        has_policy: true,
+        admin_frozen: false,
+        heartbeat_expired: false,
+        last_heartbeat: 1n,
+        now: 2n,
+      },
+    },
+    policy: { ok: true, value: POLICY_PRESETS[0]!.config },
+  } as GuardSnapshot;
+  const rendered = await render(
+    react.createElement(SetupWizard),
+    verifiedSnapshot,
+    server,
+    PHASE1_ARTIFACT.guard,
+  );
+  try {
+    await click(rendered.container, "Re-verify status & policy (read-only)");
+    assert.equal(step(rendered.container, "verified")?.dataset.state, "done");
+
+    await click(rendered.container, "Re-verify status & policy (read-only)");
+    assert.equal(step(rendered.container, "verified")?.dataset.state, "error");
+
+    await click(rendered.container, "Re-verify status & policy (read-only)");
+    assert.equal(step(rendered.container, "verified")?.dataset.state, "done");
+    assert.equal(statusReads, 3);
+    assert.equal(policyReads, 3);
+    assert.equal(writes, 0);
+    assert.equal(window.localStorage.getItem(SETUP_STORAGE_KEY), null);
+  } finally {
+    await rendered.unmount();
+  }
+});
+
+test("a delayed verification from another guard cannot mark the current guard done", async () => {
+  window.localStorage.removeItem(SETUP_STORAGE_KEY);
+  let resolveStatus: ((value: unknown) => void) | undefined;
+  let resolvePolicy: ((value: unknown) => void) | undefined;
+  const successfulSimulation = (retval: xdr.ScVal) => {
+    const data = new SorobanDataBuilder()
+      .setReadWrite([])
+      .setResourceFee(0n)
+      .setResources(1_000_000, 0, 0)
+      .build();
+    return {
+      transactionData: new SorobanDataBuilder(data),
+      minResourceFee: "0",
+      result: { auth: [], retval },
+      events: [],
+      latestLedger: 200,
+      cost: { cpuInsns: "0", memBytes: "0" },
+      stateChanges: [],
+    };
+  };
+  const serverA = {
+    getContractInstance: async () => ({ storage: [] }),
+    simulateTransaction: async (transaction: any) =>
+      await new Promise((resolve) => {
+        const fn = transaction.operations[0].func.invokeContract.functionName.toString();
+        if (fn === "status") resolveStatus = resolve;
+        else resolvePolicy = resolve;
+      }),
+  } as typeof noNetworkServer;
+  const serverB = {
+    getContractInstance: async () => ({ storage: [] }),
+  } as typeof noNetworkServer;
+  const guardA = PHASE1_ARTIFACT.guard;
+  const guardB = "CAPADGEK457RHKN4RYVUMDJTFHDSG7R5HREQONKLYK7MFKC5WFENPP44";
+  const snapshotA = { ...policyMissingSnapshot(), guard: guardA };
+  const snapshotB = {
+    ...policyMissingSnapshot(),
+    guard: guardB,
+    status: {
+      ok: true,
+      value: {
+        has_policy: true,
+        admin_frozen: false,
+        heartbeat_expired: false,
+        last_heartbeat: 1n,
+        now: 2n,
+      },
+    },
+    policy: { ok: true, value: POLICY_PRESETS[0]!.config },
+  } as GuardSnapshot;
+  const rendered = await render(react.createElement(SetupWizard), snapshotA, serverA, guardA);
+  try {
+    await click(rendered.container, "Re-verify status & policy (read-only)");
+    await rendered.rerender(snapshotB, serverB, guardB);
+    assert.equal(step(rendered.container, "verified")?.dataset.state, "pending");
+
+    await act(async () => {
+      resolveStatus?.(
+        successfulSimulation(
+          guardStatusScVal({
+            admin_frozen: false,
+            has_policy: true,
+            heartbeat_expired: false,
+            last_heartbeat: 1n,
+            now: 2n,
+          }),
+        ),
+      );
+      resolvePolicy?.(successfulSimulation(policyToScVal(POLICY_PRESETS[0]!.config)));
+      await sleep(20);
+    });
+    assert.equal(step(rendered.container, "verified")?.dataset.state, "pending");
   } finally {
     await rendered.unmount();
   }

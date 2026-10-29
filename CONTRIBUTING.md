@@ -22,6 +22,7 @@ npm run format:check # prettier --check (npm run format rewrites the tree)
 npm test            # node --test (unit suite)
 npm run test:e2e    # Playwright browser suites (npx playwright install chromium first)
 npm run build       # Next.js production build
+npm run check:docs-scripts  # validates README.md + CONTRIBUTING.md references
 ```
 
 These extra scripts are not part of the CI gate:
@@ -52,6 +53,36 @@ Two more are tooling rather than gates, both described below:
 
 - `npm run format` — rewrite the repository with Prettier.
 - `npm run changelog` — regenerate `CHANGELOG.md` from conventional commits.
+
+### Script audit inventory
+
+The mini checker enforces the asymmetric rule: a script referenced in docs must exist,
+while extra scripts are reported as informational rather than failing CI. Scripts that
+the docs reference only through the bare `npm test` form are not counted by the checker
+(it matches `npm run …` literally) but are listed here for completeness. The current
+inventory is:
+
+| Script                                    | Documented in README/CONTRIBUTING                               | Verdict                                                                      |
+| ----------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `dev`                                     | Yes — quick start                                               | documented                                                                   |
+| `dev:demo`                                | Yes — demo mode section                                         | documented                                                                   |
+| `build`                                   | Yes — verification block                                        | documented                                                                   |
+| `lint`                                    | Yes — verification block                                        | documented                                                                   |
+| `typecheck`                               | Yes — verification block                                        | documented                                                                   |
+| `check:docs-scripts`                      | Yes — this section and the Documentation links section          | documented                                                                   |
+| `format`                                  | Yes — lockfile section                                          | documented                                                                   |
+| `changelog`                               | Yes — lockfile section and Changelog section                    | documented                                                                   |
+| `test:docs`                               | Yes — Documentation links section                               | documented                                                                   |
+| `sandbox`                                 | Yes — Local sandbox section                                     | documented                                                                   |
+| `test:e2e`                                | Yes — verification block, branch-protection section             | documented                                                                   |
+| `test:perf`                               | Yes — extra scripts note                                        | documented                                                                   |
+| `prove:phase3`                            | Yes — extra scripts note                                        | documented                                                                   |
+| `prove:phase3:emit` / `prove:phase3:diff` | Yes — extra scripts note                                        | documented                                                                   |
+| `inspect`                                 | Yes — verification block and extra scripts note                 | documented                                                                   |
+| `test`                                    | Yes — verification block, but as `npm test` (bare `npm test …`) | informational (no `npm run test` reference yet)                              |
+| `start`                                   | No                                                              | intentional-with-note (local runtime entrypoint, kept out of the docs)       |
+| `export`                                  | No                                                              | informational (static-export entrypoint, not user documentation)             |
+| `test:visual` / `test:visual:update`      | No                                                              | informational (visual regression entrypoints, see the visual-tests workflow) |
 
 ## Pre-commit hook
 
@@ -85,7 +116,10 @@ syntax can be documented without documenting itself. Anchor matching implements 
 heading → anchor rules, including the double hyphen an em dash leaves behind.
 
 CI runs it, so a broken cross-reference — a renamed heading, a moved file — fails the
-build rather than quietly misleading a reader.
+build rather than quietly misleading a reader. Alongside it, `npm run check:docs-scripts`
+validates every `npm run …` reference in README.md and CONTRIBUTING.md against the
+scripts declared in `package.json` (see the [Script audit inventory](#script-audit-inventory)
+section), so a doc reference to a script that does not exist fails the build too.
 
 ## Changelog
 
