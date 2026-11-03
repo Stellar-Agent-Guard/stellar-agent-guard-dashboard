@@ -1,6 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState } from "react";
+import { THEME_STORAGE_KEY } from "../lib/guard/presentationStorageKeys.ts";
 
 type Theme = "dark" | "light" | "high-contrast";
 
@@ -15,13 +16,16 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<Theme>("dark");
 
   useEffect(() => {
-    const saved = localStorage.getItem("theme") as Theme;
+    const saved = localStorage.getItem(THEME_STORAGE_KEY) as Theme;
     if (saved && ["dark", "light", "high-contrast"].includes(saved)) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setThemeState(saved);
       document.documentElement.setAttribute("data-theme", saved);
     } else {
-      const prefersLight = window.matchMedia("(prefers-color-scheme: light)").matches;
+      const prefersLight =
+        typeof window !== "undefined" && typeof window.matchMedia === "function"
+          ? window.matchMedia("(prefers-color-scheme: light)").matches
+          : false;
       const initial = prefersLight ? "light" : "dark";
       setThemeState(initial);
       document.documentElement.setAttribute("data-theme", initial);
@@ -30,14 +34,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const setTheme = (newTheme: Theme) => {
     setThemeState(newTheme);
-    localStorage.setItem("theme", newTheme);
+    localStorage.setItem(THEME_STORAGE_KEY, newTheme);
     document.documentElement.setAttribute("data-theme", newTheme);
   };
 
   useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
     const mediaQuery = window.matchMedia("(prefers-color-scheme: light)");
     const listener = (e: MediaQueryListEvent) => {
-      if (!localStorage.getItem("theme")) {
+      if (!localStorage.getItem(THEME_STORAGE_KEY)) {
         const newTheme = e.matches ? "light" : "dark";
         setThemeState(newTheme);
         document.documentElement.setAttribute("data-theme", newTheme);

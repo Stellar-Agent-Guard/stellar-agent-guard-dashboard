@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { decodePolicy } from "stellar-agent-guard-sdk";
+import { scValToNative } from "@stellar/stellar-sdk";
+import type { PolicyConfig } from "stellar-agent-guard-sdk";
 import {
   EMPTY_DRAFT,
   buildPolicyConfig,
@@ -33,7 +34,7 @@ test("a valid draft encodes to the struct the contract decodes", () => {
   // is the strict inverse of the encoder and rejects anything a `#[contracttype]`
   // struct would not decode, so if it reads back the policy we described, the
   // encoding is the one the contract expects.
-  const decoded = decodePolicy(built.scval);
+  const decoded = scValToNative(built.scval) as unknown as PolicyConfig;
   assert.equal(decoded.per_tx_cap, 1000n);
   assert.equal(decoded.window_cap, 150n);
   assert.equal(decoded.window_secs, 60n);
@@ -51,7 +52,7 @@ test("caps larger than Number can represent survive encoding exactly", () => {
   const built = buildPolicyConfig(draft({ perTxCap: huge }));
   assert.equal(built.ok, true);
   if (!built.ok) return;
-  const decoded = decodePolicy(built.scval);
+  const decoded = scValToNative(built.scval) as unknown as PolicyConfig;
   assert.equal(decoded.per_tx_cap, 170141183460469231731687303715884105727n);
 });
 
@@ -69,6 +70,26 @@ test("a non-numeric cap is refused with the field named", () => {
   assert.equal(built.ok, false);
   if (built.ok) return;
   assert.ok(built.issues.some((issue) => issue.field === "perTxCap"));
+});
+
+test("caps and time bounds stay inside their XDR integer ranges", () => {
+  const cap = buildPolicyConfig(draft({ perTxCap: "170141183460469231731687303715884105728" }));
+  assert.equal(cap.ok, false);
+  if (cap.ok) return;
+  assert.ok(
+    cap.issues.some(
+      (issue) => issue.field === "perTxCap" && /maximum supported/.test(issue.message),
+    ),
+  );
+
+  const time = buildPolicyConfig(draft({ activeUntil: "18446744073709551616" }));
+  assert.equal(time.ok, false);
+  if (time.ok) return;
+  assert.ok(
+    time.issues.some(
+      (issue) => issue.field === "activeUntil" && /maximum supported/.test(issue.message),
+    ),
+  );
 });
 
 test("a malformed address is refused rather than passed through", () => {

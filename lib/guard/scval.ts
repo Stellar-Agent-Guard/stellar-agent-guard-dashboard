@@ -10,8 +10,16 @@
  * Web Crypto and every byte field is a `Uint8Array`.
  */
 
-import { GUARD_STORAGE_KEYS, toHex } from "stellar-agent-guard-sdk";
+import { GUARD_STORAGE_KEYS, sha256Hex, toHex } from "stellar-agent-guard-sdk";
 import { Address, xdr } from "@stellar/stellar-sdk";
+
+/**
+ * Re-exported rather than reimplemented: the SDK's digest is the one that also
+ * backs `verifyGuardWasm()`, the gate the deploy flow uses to decide whether a
+ * set of bytes is the pinned artifact. Hashing here and hashing there must be
+ * the same computation, so both come from the SDK.
+ */
+export { sha256Hex, toHex };
 
 /**
  * The Web Crypto implementation the raw-byte digest runs on.

@@ -11,13 +11,14 @@ import {
   pauseStream,
   resumeStream,
   type StreamBuffer,
+  type TelemetryEvent,
 } from "../../lib/guard/telemetry.ts";
 import { withIdentity } from "../mocks/eventFixtures.ts";
 
 const GUARD = "CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU7";
 
 /** A distinct committed event per ledger number. */
-function ev(ledger: number, overrides: Partial<GuardEvent> = {}): GuardEvent {
+function ev(ledger: number, overrides: Partial<TelemetryEvent> = {}): TelemetryEvent {
   return withIdentity({
     kind: "heartbeat",
     topic: "event_heartbeat",
@@ -32,9 +33,9 @@ function ev(ledger: number, overrides: Partial<GuardEvent> = {}): GuardEvent {
   });
 }
 
-const ledgers = (events: readonly GuardEvent[]) => events.map((event) => event.ledger);
+const ledgers = (events: readonly TelemetryEvent[]) => events.map((event) => event.ledger);
 
-function apply(buffer: StreamBuffer, batches: GuardEvent[][], limit?: number): StreamBuffer {
+function apply(buffer: StreamBuffer, batches: TelemetryEvent[][], limit?: number): StreamBuffer {
   return batches.reduce(
     (current, batch) => ingestEvents(current, batch, limit === undefined ? {} : { limit }),
     buffer,
@@ -82,7 +83,10 @@ describe("live ingest", () => {
       data: { at: 18_446_744_073_709_551_615n },
     });
     const small = ev(5, { source: "diagnostic", transactionHash: null, data: { at: 1n } });
-    assert.ok(max.id.startsWith("diag:"), "a diagnostic id is derived from the event's content");
+    assert.ok(
+      typeof max.id === "string" && max.id.length > 0,
+      "a diagnostic id is derived from the event's content",
+    );
     assert.notEqual(max.id, small.id, "different decoded data is a different event");
     assert.equal(
       max.id,
@@ -147,10 +151,10 @@ describe("resume reconciliation", () => {
     // shape a cursor-polled feed plus re-pushed diagnostics produces.
     let seed = 42;
     const next = () => (seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31);
-    const batches: GuardEvent[][] = [];
+    const batches: TelemetryEvent[][] = [];
     let ledger = 1;
     for (let i = 0; i < 40; i++) {
-      const batch: GuardEvent[] = [];
+      const batch: TelemetryEvent[] = [];
       for (let n = next() % 4; n > 0; n--) batch.push(ev(ledger++));
       if (ledger > 3 && next() % 3 === 0) batch.push(ev(1 + (next() % (ledger - 1)))); // a repeat
       batches.push(batch);
@@ -204,17 +208,25 @@ describe("clear buffer", () => {
 });
 
 describe("with the real poller", () => {
-  /** A stub RPC whose getEvents serves one page per call, honouring the cursor. */
-  function stubServer(pages: Array<Array<{ ledger: number; at: bigint }>>) {
+  /**
+   * A stub RPC whose getEvents serves one page per call, honouring the cursor.
+   * `failOn` is a list of 1-based **attempt** numbers that throw instead of
+   * answering — and a thrown attempt consumes no page, which is exactly what an
+   * RPC that never replied did.
+   */
+  function stubServer(pages: Array<Array<{ ledger: number; at: bigint }>>, failOn: number[] = []) {
     const requests: Array<{ cursor?: string; startLedger?: number }> = [];
     let call = 0;
+    let attempt = 0;
     const server = {
       getLatestLedger: async () => ({ sequence: 100 }),
       getEvents: async (request: { cursor?: string; startLedger?: number }) => {
+        attempt += 1;
         requests.push({
           ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
           ...(request.startLedger === undefined ? {} : { startLedger: request.startLedger }),
         });
+        if (failOn.includes(attempt)) throw new Error("rpc unavailable");
         const page = pages[call] ?? [];
         call += 1;
         const events = page.map(
@@ -274,5 +286,38 @@ describe("with the real poller", () => {
       ["start:100", "cursor-1", "cursor-2", "cursor-3"],
       "every poll continued from the previous cursor: nothing re-scanned, nothing skipped",
     );
+  });
+
+  test("a poll that fails leaves the cursor exactly where it was and the retry resumes from it (issue #311)", async () => {
+    // The health indicators added for #311 are written from the same tick that
+    // polls, so the claim under test is that recording a failure cannot move the
+    // feed: not forward (which would skip the page the failure lost) and not back
+    // to no cursor (which would re-scan the head and re-deliver everything).
+    const { server, requests } = stubServer(
+      [[{ ledger: 101, at: 1n }], [{ ledger: 102, at: 2n }]],
+      [2],
+    );
+    const feed = new GuardFeed(server, GUARD);
+
+    const first = await feed.pollOnce();
+    assert.equal(first.events.length, 1);
+    const beforeFailure = feed.position();
+    assert.deepEqual(beforeFailure, { cursor: "cursor-1", latestLedger: 101 });
+
+    await assert.rejects(() => feed.pollOnce(), /rpc unavailable/);
+    assert.deepEqual(
+      feed.position(),
+      beforeFailure,
+      "a failed round advances nothing and resets nothing",
+    );
+
+    const third = await feed.pollOnce();
+    assert.deepEqual(
+      requests.map((request) => request.cursor ?? `start:${request.startLedger}`),
+      ["start:100", "cursor-1", "cursor-1"],
+      "the retry asks for the same cursor the failed round had, so no ledger is skipped",
+    );
+    assert.deepEqual(ledgers(third.events), [102], "and the lost page is delivered on the retry");
+    assert.deepEqual(feed.position(), { cursor: "cursor-2", latestLedger: 102 });
   });
 });

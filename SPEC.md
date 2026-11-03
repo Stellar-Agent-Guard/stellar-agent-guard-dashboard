@@ -96,6 +96,11 @@ $ find . -path ./node_modules -prune -o -name 'middleware.ts' -print | wc -l
 Both are empty, so there is no request handler in this codebase that could sign, hold a key, or proxy
 the RPC. Re-confirming those two greps still return nothing is part of reviewing any change to `app/`.
 
+CI enforces the same boundary mechanically. `npm run check:no-server` fails on any
+`app/**/route.ts(x)` or repository `middleware.ts`, prints the offending paths, and links
+[the zero-server ADR](./docs/adr/001-zero-server-architecture.md), so an API surface cannot be
+introduced without deliberately changing this decision and the review checklist.
+
 ---
 
 ## 4. Read path
@@ -197,7 +202,7 @@ which is a different and much weaker statement. If step 6 fails, the console say
 
 ## 7. Telemetry semantics
 
-Two facts shape the feed, and both are stated in the UI rather than hidden:
+Three facts shape the feed, and each is stated in the UI rather than hidden:
 
 1. **Soroban has no push stream.** "Real time" here means cursor-based `getEvents` polling. The cursor
    is carried forward rather than re-derived from a ledger number, because re-scanning from a ledger
@@ -208,7 +213,9 @@ Two facts shape the feed, and both are stated in the UI rather than hidden:
    The only refusals this console can show are the ones _it_ produced, decoded from the failed
    enforced simulation's diagnostics and labelled `diagnostic`.
 
-An empty feed is therefore **not** evidence that nothing was refused on chain, and the panel says so.
+3. **Tailing N guards costs N poll loops.** The SDK's telemetry listener is single-guard (`getEvents` is filtered per contract), so a simultaneous tail is a fan-out of listener instances. The feed therefore supervises at most `FEED_GUARD_CAP` (5) guards at a time; registry entries beyond the cap are named as **not tailed** rather than dropped silently, and the poll load is documented as scaling with the number watched. Listener instances are reconciled (added/removed/stopped) on every registry change, so churn leaves exactly one listener per watched guard and no leak.
+
+An empty feed is therefore **not** evidence that nothing was refused on chain, and the panel says so. Nor is it evidence that _every_ registered guard was watched — when the cap is in force, the panel says which guards are outside it.
 
 ---
 
@@ -220,29 +227,40 @@ value _derived_ from the chain may be stale for at most one poll; a value _store
 be presented as though it were chain state. Every state item the console holds is classified here,
 with its source, its refresh trigger, and whether it is allowed to be wrong.
 
-| State                                                | Source                                                                                   | Refresh trigger                                              | May it lie (stale)?                                                                                          |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| `status()` — freeze flags, heartbeat, dead-man state | chain (read-only `simulateTransaction`)                                                  | mount + poll; re-read after every freeze/unfreeze            | no — a failed read renders an error, never a stale value                                                     |
-| `policy()`                                           | chain (`simulateTransaction`)                                                            | mount + poll; re-read after `set_policy`/`revoke_policy`     | no                                                                                                           |
-| Rolling spend window                                 | chain (`getLedgerEntries` on `DataKey::Window`)                                          | mount + poll                                                 | no                                                                                                           |
-| Balance                                              | chain (SAC `balance` via simulation)                                                     | mount + poll                                                 | no                                                                                                           |
-| Artifact identity / verification                     | chain (`getContractInstance` + `getContractWasmByContractId`) + local hash               | on demand, before deploy and in the integrity inspector      | no — a mismatch aborts the deploy                                                                            |
-| Telemetry events                                     | chain (`getEvents`, cursor-based)                                                        | continuous polling; cursor carried forward, never re-derived | no — an empty or gapped page is labelled, not smoothed over                                                  |
-| Registered guard instances (the fleet)               | **`localStorage`** (`stellar-agent-guard-dashboard.instances.v1`)                        | user action (add/remove/select)                              | yes, by design — it is an address list, not chain state; every row's live numbers are re-read from the chain |
-| Policy form draft                                    | component-local until submit                                                             | user input                                                   | yes, while editing — never treated as installed until the chain re-read confirms it                          |
-| Address book                                         | **`localStorage`** (`…addressBook.v1`)                                                   | user action                                                  | yes — convenience data, carries no fund authority                                                            |
-| Transaction history                                  | **`localStorage`** (`…txHistory.v1`)                                                     | after each submission                                        | yes — it records what this browser submitted; the chain is authoritative                                     |
-| Layout / theme / alert / idle preferences            | **`localStorage`** (`…layout.v1`, `theme`, `…idleTimeout.v1`, `…alerts.v1`)              | user action                                                  | yes — presentation only                                                                                      |
-| Wallet-provider preference                           | **`localStorage`** (`…walletProvider.v1`)                                                | user action (connector pick)                                 | yes — convenience, carries no authority                                                                      |
-| Multisig approval evaluation                         | pasted envelope is component-local; signer weights/thresholds are read live from Horizon | on paste / on demand                                         | n/a for the pasted envelope; the account's signers are re-read, not cached                                   |
-| Tab-sync envelope                                    | **`localStorage`** (`…tab-sync.v1`) when `BroadcastChannel` is unavailable               | transient                                                    | n/a — a transport, not state; receiving tabs re-read the chain (§7)                                          |
-| Active tab / route / modal-open flags                | component-local                                                                          | user action                                                  | n/a                                                                                                          |
+| State                                                | Source                                                                                          | Refresh trigger                                              | May it lie (stale)?                                                                                          |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `status()` — freeze flags, heartbeat, dead-man state | chain (read-only `simulateTransaction`)                                                         | mount + poll; re-read after every freeze/unfreeze            | no — a failed read renders an error, never a stale value                                                     |
+| `policy()`                                           | chain (`simulateTransaction`)                                                                   | mount + poll; re-read after `set_policy`/`revoke_policy`     | no                                                                                                           |
+| Rolling spend window                                 | chain (`getLedgerEntries` on `DataKey::Window`)                                                 | mount + poll                                                 | no                                                                                                           |
+| Balance                                              | chain (SAC `balance` via simulation)                                                            | mount + poll                                                 | no                                                                                                           |
+| Artifact identity / verification                     | chain (`getContractInstance` + `getContractWasmByContractId`) + local hash                      | on demand, before deploy and in the integrity inspector      | no — a mismatch aborts the deploy                                                                            |
+| Telemetry events                                     | chain (`getEvents`, cursor-based)                                                               | continuous polling; cursor carried forward, never re-derived | no — an empty or gapped page is labelled, not smoothed over                                                  |
+| Registered guard instances (the fleet)               | **`localStorage`** (`stellar-agent-guard-dashboard.instances.v2.<network>`)                     | user action (add/remove/select)                              | yes, by design — it is an address list, not chain state; every row's live numbers are re-read from the chain |
+| Policy form draft                                    | component-local until submit                                                                    | user input                                                   | yes, while editing — never treated as installed until the chain re-read confirms it                          |
+| Address book                                         | **`localStorage`** (`…addressBook.v1`)                                                          | user action                                                  | yes — convenience data, carries no fund authority                                                            |
+| Transaction history                                  | **`localStorage`** (`…txHistory.v1`)                                                            | after each submission                                        | yes — it records what this browser submitted; the chain is authoritative                                     |
+| Layout / theme / alert / idle preferences            | **`localStorage`** (`…layout.v1`, `…namedLayouts.v1`, `theme`, `…idleTimeout.v1`, `…alerts.v1`) | user action                                                  | yes — presentation only                                                                                      |
+| Wallet-provider preference                           | **`localStorage`** (`…walletProvider.v1`)                                                       | user action (connector pick)                                 | yes — convenience, carries no authority                                                                      |
+| Multisig approval evaluation                         | pasted envelope is component-local; signer weights/thresholds are read live from Horizon        | on paste / on demand                                         | n/a for the pasted envelope; the account's signers are re-read, not cached                                   |
+| Tab-sync envelope                                    | **`localStorage`** (`…tab-sync.v1`) when `BroadcastChannel` is unavailable                      | transient                                                    | n/a — a transport, not state; receiving tabs re-read the chain (§7)                                          |
+| Active tab / route / modal-open flags                | component-local                                                                                 | user action                                                  | n/a                                                                                                          |
 
 The rule that makes the table enforceable: **a `localStorage` value may only be an input to a chain
 read, never a substitute for one.** The instance registry and the address book supply addresses; the
 status, policy and balance displayed for those addresses are always re-read. Test coverage for the
 persisted helpers lives beside them (`tests/unit/tabSync.test.ts`, `tests/unit/txHistory.test.ts`,
 `tests/unit/addressBook.test.ts`, `tests/unit/dashboardGrid.test.ts`, `tests/unit/useIdleTimer.test.ts`).
+
+### Browser persistence inventory
+
+The console exposes **Browser data inventory** beside the contract storage explorer. It lists every
+browser persistence key family, its purpose, whether it may contain public operational metadata,
+and whether its contents are chain-derived, operator-entered, or presentation-only. The inventory
+is backed by the helpers' exported key constants and checked by
+`tests/unit/storageInventory.test.ts`; the short-lived bytecode cache and cross-tab transport are
+included as well. Registry, address-book, and layout records use explicit schema versions. A
+malformed, partial, unknown-future, or unsuccessfully migrated record is left in place for recovery;
+it is never used as a substitute for live chain state. Browser storage contains no secret keys.
 
 ### Complete write surface
 
