@@ -11,25 +11,45 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { checkArtifact, deployGuard, initializeGuard, planDeploy } from "../lib/guard/guardOps.ts";
+import {
+  checkArtifact,
+  classifyDeploySteps,
+  deployGuard,
+  initializeGuard,
+  planDeploy,
+} from "../lib/guard/guardOps.ts";
 import { rememberDeployment } from "../lib/guard/setupChecklist.ts";
 import type { ArtifactCheck, DeployOutcome, DeployPlan } from "../lib/guard/guardOps.ts";
 import { deployCostBreakdown } from "../lib/guard/deployCostCalculator.ts";
-import type { InvokeResult } from "../lib/guard/submit.ts";
+import { isWalletCancellation, type InvokeResult } from "../lib/guard/submit.ts";
 import { NETWORK, PHASE1_ARTIFACT } from "../lib/guard/network.ts";
-import { fetchContractWasm, verifyWasmIdentity } from "../lib/guard/chain.ts";
+import {
+  fetchContractWasm,
+  invalidateWasmIdentityCache,
+  verifyWasmIdentity,
+} from "../lib/guard/chain.ts";
 import { toHex } from "../lib/guard/scval.ts";
-import { validateInitParameters, type InitValidation } from "../lib/guard/initValidator.ts";
+import {
+  validateInitFormFields,
+  validateInitParameters,
+  type InitValidation,
+} from "../lib/guard/initValidator.ts";
+import { useFormValidation } from "../lib/guard/useFormValidation.ts";
 import { sanitizeAddressInput } from "../lib/guard/inputSanitizer.ts";
 import {
   contractAlreadyDeployed,
   createSaltAddressPredictor,
+  deployPredictionChanges,
+  deployPredictionKey,
+  deployPredictionProblem,
+  describeDeployPrediction,
   formatExpectedAttempts,
   formatSalt,
   parseSalt,
   randomSalt,
   searchVanitySalt,
   validateVanityPattern,
+  type DeployPredictionInputs,
   type SaltEncoding,
   type VanityProgress,
 } from "../lib/guard/saltGenerator.ts";
@@ -45,18 +65,159 @@ import {
 } from "../lib/guard/friendbot.ts";
 import {
   buildIntegrityReport,
+  buildIntegrityReportWithProgress,
   describeBuild,
   sortEntrypoints,
   type IntegrityReport,
+  type WasmParseProgress,
+  type WasmHashProgress,
 } from "../lib/guard/wasmInspector.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { CopyButton } from "./CopyButton.tsx";
 import { writeControlState } from "../lib/guard/observerMode.ts";
+import {
+  compileDeploymentReceipt,
+  deploymentReceiptFilename,
+  formatDeploymentReceipt,
+  type DeploymentReceipt,
+} from "../lib/guard/printReport.ts";
+import { announce } from "../lib/guard/useAnnounce.ts";
+import { usePwaActivity } from "../lib/guard/usePwaActivity.ts";
 import { MigrationWizard } from "./MigrationWizard.tsx";
 import { ErrorBlock, OutcomeList, starLink } from "./bits.tsx";
 
 /** Either the chain's answer about the artifact, or why there is not one. */
 type ArtifactFetch = { artifact: ArtifactCheck } | { error: string };
+
+type PredictedInspection =
+  | { address: string; state: "checking" }
+  | { address: string; state: "available" }
+  | { address: string; state: "existing"; integrity: IntegrityReport | null; error: string | null }
+  | { address: string; state: "error"; error: string };
+
+/** A thrown failure, kept with the action that produced it (#291). */
+type PanelFailure = {
+  source: "deploy" | "initialize";
+  detail: string;
+  /** True when the wallet declined the signature rather than something failing. */
+  cancelled: boolean;
+};
+
+/** How an outcome should be worded and toned (#291). */
+interface OutcomeView {
+  headline: string;
+  /** `warn` is a decision the operator made, `error` is something that went wrong. */
+  tone: "info" | "warn" | "error";
+  /** True only when nothing was broadcast, so an explicit retry is the next step. */
+  retryable: boolean;
+  /** The wallet's or the network's own words, when there are any worth showing. */
+  detail: string | null;
+}
+
+/**
+ * The deploy outcome's headline, decided from what actually reached the chain.
+ *
+ * Pure so the three cases the panel must never confuse are testable without a
+ * wallet: a decline (the operator said no — nothing was broadcast), a refusal
+ * (simulation or submission said no), and a create that landed but is not the
+ * pinned artifact. Before this, all three read as "a contract was created".
+ */
+export function deployOutcomeView(outcome: DeployOutcome): OutcomeView {
+  const progress = classifyDeploySteps(outcome.steps);
+  const partial = progress.kind !== "created" && progress.landed.length > 0;
+  switch (progress.kind) {
+    case "declined":
+      return {
+        headline: partial
+          ? "An earlier step landed, but the wallet declined the deploy before a contract was created"
+          : "Deploy declined in the wallet — nothing was broadcast",
+        tone: "warn",
+        retryable: true,
+        detail: progress.detail,
+      };
+    case "refused":
+      return {
+        headline: partial
+          ? "An earlier step landed, but the deploy was refused before the contract was created"
+          : "The deploy was refused before broadcast",
+        tone: "error",
+        retryable: false,
+        detail: progress.detail,
+      };
+    case "failed":
+      return {
+        headline: "The create transaction was included and rejected on chain",
+        tone: "error",
+        retryable: false,
+        detail: progress.detail,
+      };
+    default:
+      if (outcome.verified) {
+        return {
+          headline: "Deployed and verified against the pinned artifact",
+          tone: "info",
+          retryable: false,
+          detail: null,
+        };
+      }
+      return {
+        headline:
+          outcome.readError !== null
+            ? "A contract was created, but its bytecode could not be read back"
+            : "A contract was created, but it is NOT the pinned artifact",
+        tone: "error",
+        retryable: false,
+        detail: null,
+      };
+  }
+}
+
+/**
+ * The initialization outcome's headline (#291).
+ *
+ * A decline and an exported envelope are both "nothing was broadcast", and
+ * neither is an on-chain rejection — which is what this block used to claim
+ * about all three.
+ */
+export function initOutcomeView(result: InvokeResult): OutcomeView {
+  switch (result.kind) {
+    case "submitted":
+      return {
+        headline: "initialize landed on chain",
+        tone: "info",
+        retryable: false,
+        detail: null,
+      };
+    case "cancelled":
+      return {
+        headline: "initialize was declined in the wallet — nothing was broadcast",
+        tone: "warn",
+        retryable: true,
+        detail: result.detail,
+      };
+    case "refused":
+      return {
+        headline: "initialize was refused before broadcast",
+        tone: "error",
+        retryable: false,
+        detail: result.detail,
+      };
+    case "exported":
+      return {
+        headline: "initialize was exported for offline signing — nothing was broadcast",
+        tone: "warn",
+        retryable: false,
+        detail: result.detail ?? null,
+      };
+    default:
+      return {
+        headline: "initialize was broadcast and rejected on chain",
+        tone: "error",
+        retryable: false,
+        detail: result.detail,
+      };
+  }
+}
 
 // parked-until-upstream: #13
 // The multi-artifact version picker is blocked until the upstream stellar-agent-guard-contracts
@@ -71,20 +232,18 @@ export function DeployPanel() {
   // that no longer matches the wallet or salt is simply not shown. Deriving
   // staleness by key avoids the synchronous clear-in-an-effect that would
   // otherwise render a plan for the wrong account for one frame.
-  const [planFor, setPlanFor] = useState<{ key: string; plan: DeployPlan } | null>(null);
+  const [planFor, setPlanFor] = useState<{
+    key: string;
+    plan: DeployPlan;
+    prediction: DeployPredictionInputs;
+    computedAt: string;
+  } | null>(null);
   const [deploying, setDeploying] = useState(false);
   const [outcome, setOutcome] = useState<DeployOutcome | null>(null);
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<PanelFailure | null>(null);
   const [agentPubkey, setAgentPubkey] = useState("");
   const [initResult, setInitResult] = useState<InvokeResult | null>(null);
-  // Deploy is a write like any other: available to a connected admin, inert and
-  // self-explanatory to an observer (#101).
-  const deployControl = writeControlState(wallet, {
-    busy: deploying,
-    extraDisabled: artifact?.ok !== true,
-    label: "deploy a guard",
-  });
 
   // The salt can be typed as well as rolled. `salt` stays the bytes that will
   // actually be deployed, and the text box is only its presentation, so the
@@ -105,9 +264,7 @@ export function DeployPanel() {
   // re-renders without becoming state.
   const cancelSearch = useRef({ aborted: false });
 
-  const [collision, setCollision] = useState<{ exists: boolean; detail: string | null } | null>(
-    null,
-  );
+  const [predictedInspection, setPredictedInspection] = useState<PredictedInspection | null>(null);
 
   const [balances, setBalances] = useState<BalanceReading[] | null>(null);
   const [checkingBalance, setCheckingBalance] = useState(false);
@@ -117,6 +274,10 @@ export function DeployPanel() {
   const [integrity, setIntegrity] = useState<IntegrityReport | null>(null);
   const [inspecting, setInspecting] = useState(false);
   const [inspectError, setInspectError] = useState<string | null>(null);
+  const [inspectProgress, setInspectProgress] = useState<
+    WasmParseProgress | WasmHashProgress | null
+  >(null);
+  const [inspectCancelled, setInspectCancelled] = useState(false);
 
   // Guard init parameters, audited by the pre-flight validator before the
   // "Sign and initialize" button will enable. The admin is whoever is connected,
@@ -132,6 +293,22 @@ export function DeployPanel() {
     perTxCap,
     windowCap,
   });
+  const initFieldValues = {
+    adminAddress: wallet?.address ?? "",
+    agentAddress,
+    dmsDurationSecs,
+    perTxCap,
+    windowCap,
+    agentPubkey,
+  };
+  const initFieldErrors = useFormValidation(initFieldValues, validateInitFormFields);
+  const agentPubkeyValid = /^[0-9a-fA-F]{64}$/.test(agentPubkey.trim());
+
+  // A deploy in flight is a pending write, and a typed salt or half-filled
+  // init form is an unsaved deployment draft. A service-worker update waits for
+  // both rather than replacing the app underneath them (#398).
+  usePwaActivity(deploying, "write");
+  usePwaActivity(saltText.trim() !== "" || agentPubkey.trim() !== "", "draft");
 
   const [balance, setBalance] = useState<string | null>(null);
   useEffect(() => {
@@ -186,8 +363,19 @@ export function DeployPanel() {
     };
   }, [fetchArtifact, applyArtifact]);
 
-  const planKey = wallet ? `${wallet.address}:${toHex(salt)}` : "";
-  const plan = planFor?.key === planKey ? planFor.plan : null;
+  // Everything the prediction is derived from, kept together so the UI can say
+  // which input a stale address belonged to instead of silently replacing it.
+  const prediction: DeployPredictionInputs = {
+    deployerPublicKey: wallet?.address ?? "",
+    saltHex: toHex(salt),
+    networkName: NETWORK.name,
+    networkPassphrase: NETWORK.passphrase,
+  };
+  const predictionProblem = wallet ? deployPredictionProblem(prediction) : null;
+  const planKey = wallet && !predictionProblem ? deployPredictionKey(prediction) : "";
+  const plan = planFor?.key === planKey && !predictionProblem ? planFor.plan : null;
+  const stalePlan = planFor && planFor.key !== planKey ? planFor : null;
+  const staleChanges = stalePlan ? deployPredictionChanges(stalePlan.prediction, prediction) : [];
   const deployCost =
     wallet && balance !== null
       ? deployCostBreakdown({
@@ -199,12 +387,19 @@ export function DeployPanel() {
       : null;
 
   useEffect(() => {
-    if (!wallet) return;
+    if (!wallet || predictionProblem) return;
     let cancelled = false;
     void (async () => {
       try {
         const next = await planDeploy(server, wallet.address, salt);
-        if (!cancelled) setPlanFor({ key: planKey, plan: next });
+        if (!cancelled) {
+          setPlanFor({
+            key: planKey,
+            plan: next,
+            prediction,
+            computedAt: new Date().toISOString(),
+          });
+        }
       } catch {
         // A plan that cannot be computed leaves the panel saying so, rather than
         // showing a plan for a different account.
@@ -213,17 +408,61 @@ export function DeployPanel() {
     return () => {
       cancelled = true;
     };
-  }, [server, wallet, salt, planKey]);
+    // `prediction` is rebuilt from these primitives; including it would restart
+    // the read on every render. `planKey` already changes with every input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [server, wallet, salt, planKey, predictionProblem]);
 
-  // Asked whether the predicted address is already taken, because the salt is
-  // deterministic: reusing one from an earlier deployment is a collision the
-  // chain would only report at signing time.
+  // Inspect the predicted address before enabling deploy. Lookup failures do not
+  // mean the address is free, and an existing instance is read-only inspected.
   const predicted = plan?.predicted ?? "";
+  const currentPredictedInspection: PredictedInspection | null =
+    predicted === ""
+      ? null
+      : predictedInspection?.address === predicted
+        ? predictedInspection
+        : { address: predicted, state: "checking" };
+  const deployControl = writeControlState(wallet, {
+    busy: deploying,
+    extraDisabled: artifact?.ok !== true || currentPredictedInspection?.state !== "available",
+    label: "deploy a guard",
+  });
   useEffect(() => {
     let cancelled = false;
+    if (predicted === "") return;
     void (async () => {
-      const next = predicted === "" ? null : await contractAlreadyDeployed(server, predicted);
-      if (!cancelled) setCollision(next);
+      const lookup = await contractAlreadyDeployed(server, predicted);
+      if (cancelled) return;
+      if (lookup.error) {
+        setPredictedInspection({ address: predicted, state: "error", error: lookup.error });
+        return;
+      }
+      if (!lookup.exists) {
+        setPredictedInspection({ address: predicted, state: "available" });
+        return;
+      }
+
+      try {
+        const [wasm, identity] = await Promise.all([
+          fetchContractWasm(server, predicted),
+          verifyWasmIdentity(server, predicted),
+        ]);
+        const integrity = await buildIntegrityReport({
+          wasm,
+          reportedWasmHash: identity.reportedWasmHash,
+        });
+        if (!cancelled)
+          setPredictedInspection({ address: predicted, state: "existing", integrity, error: null });
+      } catch (caught) {
+        if (!cancelled) {
+          setPredictedInspection({
+            address: predicted,
+            state: "existing",
+            integrity: null,
+            error: caught instanceof Error ? caught.message : String(caught),
+          });
+        }
+      }
     })();
     return () => {
       cancelled = true;
@@ -261,6 +500,23 @@ export function DeployPanel() {
   function applyTypedSalt() {
     if (typedSalt?.ok !== true) return;
     setSalt(typedSalt.bytes);
+  }
+
+  function initValidationAttributes(field: string) {
+    const error = initFieldErrors[field];
+    return {
+      "aria-invalid": error ? true : undefined,
+      "aria-describedby": error ? `init-field-error-${field}` : undefined,
+    };
+  }
+
+  function initFieldError(field: string) {
+    const error = initFieldErrors[field];
+    return error ? (
+      <span className="field-error tiny" id={`init-field-error-${field}`} role="status">
+        {error}
+      </span>
+    ) : null;
   }
 
   async function startVanitySearch() {
@@ -340,25 +596,88 @@ export function DeployPanel() {
       return;
     }
     setInspecting(true);
+    setInspectCancelled(false);
     setInspectError(null);
+    setInspectProgress(null);
+    setIntegrity(null);
     try {
       const [wasm, identity] = await Promise.all([
         fetchContractWasm(server, target),
         verifyWasmIdentity(server, target),
       ]);
-      setIntegrity(
-        await buildIntegrityReport({ wasm, reportedWasmHash: identity.reportedWasmHash }),
-      );
+      const report = await buildIntegrityReportWithProgress({
+        wasm,
+        reportedWasmHash: identity.reportedWasmHash,
+        onParseProgress: (progress) => setInspectProgress(progress),
+        onHashProgress: (progress) => setInspectProgress(progress),
+      });
+      setIntegrity(report);
     } catch (caught) {
-      setInspectError(caught instanceof Error ? caught.message : String(caught));
+      if (caught instanceof Error && caught.message === "Parsing cancelled") {
+        setInspectCancelled(true);
+        setInspectProgress(null);
+      } else if (caught instanceof Error && caught.message === "Hashing cancelled") {
+        setInspectCancelled(true);
+        setInspectProgress(null);
+      } else {
+        setInspectError(caught instanceof Error ? caught.message : String(caught));
+      }
     } finally {
       setInspecting(false);
     }
   }
 
+  function cancelInspect() {
+    setInspectCancelled(true);
+    // The worker will handle cancellation internally
+  }
+
+  // The headline and tone for both outcomes are decided before render, from the
+  // results themselves, so a decline can never be worded as a broadcast failure.
+  const deployView = outcome === null ? null : deployOutcomeView(outcome);
+  const initView = initResult === null ? null : initOutcomeView(initResult);
+
+  /**
+   * The handoff record for the deploy on screen (#396).
+   *
+   * Derived from the outcome rather than stored, so it can never drift from the
+   * transactions and read the panel is showing. The live read is passed through
+   * as what it is: a success, a failure, or — when the flow never reached it —
+   * `null`, which the receipt records as "unavailable" rather than verified.
+   */
+  const receipt = outcome
+    ? compileDeploymentReceipt({
+        network: { name: NETWORK.name, passphrase: NETWORK.passphrase },
+        predictedAddress: plan?.predicted ?? outcome.guard,
+        deployedAddress: outcome.guard,
+        pinned: { hash: PHASE1_ARTIFACT.wasmHash, bytes: PHASE1_ARTIFACT.wasmBytes },
+        read:
+          outcome.identity !== null
+            ? { ok: true, value: outcome.identity }
+            : outcome.readError !== null
+              ? { ok: false, error: outcome.readError }
+              : null,
+        steps: outcome.steps,
+      })
+    : null;
+
+  function downloadDeploymentReceipt(record: DeploymentReceipt) {
+    const url = URL.createObjectURL(
+      new Blob([formatDeploymentReceipt(record)], { type: "application/json;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = deploymentReceiptFilename(record);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    announce("Downloaded the deployment verification receipt");
+  }
+
   async function deploy() {
     setDeploying(true);
-    setError(null);
+    setFailure(null);
     setOutcome(null);
     setLiveSteps([]);
     try {
@@ -377,14 +696,21 @@ export function DeployPanel() {
       }
       await refresh();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      // A decline is not an error to blame the deploy for: it is classified here
+      // so a rejection that throws out of the write path still gets the explicit
+      // retry block rather than a generic failure banner (#291).
+      setFailure({
+        source: "deploy",
+        detail: caught instanceof Error ? caught.message : String(caught),
+        cancelled: isWalletCancellation(caught),
+      });
     } finally {
       setDeploying(false);
     }
   }
 
   async function initialize(target: string) {
-    setError(null);
+    setFailure(null);
     setInitResult(null);
     try {
       const result = await initializeGuard({
@@ -394,9 +720,13 @@ export function DeployPanel() {
         agentPubkeyHex: agentPubkey,
       });
       setInitResult(result);
-      await refresh();
+      if (result.kind !== "cancelled") await refresh();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setFailure({
+        source: "initialize",
+        detail: caught instanceof Error ? caught.message : String(caught),
+        cancelled: isWalletCancellation(caught),
+      });
     }
   }
 
@@ -446,7 +776,9 @@ export function DeployPanel() {
         )}
       </div>
 
-      {artifact && !artifact.ok && <ErrorBlock title="Deploy refused" detail={artifact.detail} />}
+      {artifact && !artifact.ok && (
+        <ErrorBlock title="Deploy refused" detail={artifact.detail} context="write" />
+      )}
       {artifact && artifact.ok && (
         <p className="tiny muted" style={{ marginTop: 8 }}>
           {artifact.detail}
@@ -456,39 +788,113 @@ export function DeployPanel() {
       <h3>What this deploy will do</h3>
       {!wallet ? (
         <p className="tiny muted">Connect the admin wallet to compute the contract address.</p>
-      ) : plan ? (
-        <div className="grid">
-          <div className="stat">
-            <div className="k">Predicted guard address</div>
-            <div className="v small mono" title={plan.predicted}>
-              {plan.predicted}
-            </div>
-            <div className="n">
-              computed before signing, then confirmed by reading the instance back{" "}
-              <CopyButton value={plan.predicted} label="predicted guard address" />
-            </div>
-          </div>
-          <div className="stat">
-            <div className="k">Pinned bytecode already on chain</div>
-            <div className="v small">{plan.codePresent ? "yes" : "no"}</div>
-            <div className="n">
-              {plan.codePresent
-                ? "one transaction: the create"
-                : "two transactions: upload, then create"}
-            </div>
-          </div>
+      ) : predictionProblem ? (
+        <div className="error" role="alert">
+          <span className="t">No address can be predicted yet</span>
+          <span className="tiny">{predictionProblem}</span>
         </div>
       ) : (
-        <p className="tiny muted">Working out the deploy plan...</p>
+        <>
+          <div className="grid">
+            <div className="stat">
+              <div className="k">Deployer</div>
+              <div className="v small mono" title={prediction.deployerPublicKey}>
+                {prediction.deployerPublicKey}
+              </div>
+              <div className="n">the account that signs the create transaction</div>
+            </div>
+            <div className="stat">
+              <div className="k">Salt (hex)</div>
+              <div className="v small mono" title={prediction.saltHex}>
+                {prediction.saltHex}
+              </div>
+              <div className="n">the only deploy-time lever over the address</div>
+            </div>
+            <div className="stat">
+              <div className="k">Network</div>
+              <div className="v small">{prediction.networkName}</div>
+              <div className="n">its passphrase is part of the derivation</div>
+            </div>
+            <div className="stat">
+              <div className="k">Predicted guard address</div>
+              <div className="v small mono" title={plan?.predicted ?? undefined}>
+                {plan?.predicted ?? "recomputing…"}
+              </div>
+              <div className="n">
+                computed before signing, then confirmed by reading the instance back{" "}
+                {plan && <CopyButton value={plan.predicted} label="predicted guard address" />}
+              </div>
+            </div>
+            {plan && (
+              <div className="stat">
+                <div className="k">Pinned bytecode already on chain</div>
+                <div className="v small">{plan.codePresent ? "yes" : "no"}</div>
+                <div className="n">
+                  {plan.codePresent
+                    ? "one transaction: the create"
+                    : "two transactions: upload, then create"}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <p className="tiny muted" style={{ marginTop: 8 }}>
+            {describeDeployPrediction(prediction)}
+          </p>
+        </>
       )}
 
-      {collision?.exists && (
-        <div className="error" role="alert" style={{ marginTop: 8 }}>
-          <span className="t">Address already taken</span>
+      {stalePlan && staleChanges.length > 0 && (
+        <div className="notice" role="status" style={{ marginTop: 8 }}>
+          <strong>Previous prediction is obsolete</strong>
           <span className="tiny">
-            A contract already lives at {predicted}. Generate a new salt or choose another before
-            signing — the deploy would fail on collision rather than overwrite anything.
+            The {staleChanges.join(" and ")} changed after the address{" "}
+            <span className="mono">{stalePlan.plan.predicted}</span> was predicted at{" "}
+            <span className="mono">{stalePlan.computedAt}</span>. That address is not current; the
+            prediction is being recomputed from the inputs above before anything can be signed.
           </span>
+        </div>
+      )}
+
+      {currentPredictedInspection?.state === "checking" && (
+        <p className="tiny muted" role="status">
+          Checking {predicted} on {NETWORK.name} before enabling deployment…
+        </p>
+      )}
+      {currentPredictedInspection?.state === "available" && (
+        <p className="tiny muted" role="status">
+          Fresh read on {NETWORK.name}: no instance exists at this address.
+        </p>
+      )}
+      {currentPredictedInspection?.state === "error" && (
+        <div className="error" role="alert" style={{ marginTop: 8 }}>
+          <strong>Predicted address could not be checked</strong>
+          <span className="tiny">
+            {currentPredictedInspection.error} Deployment stays disabled until the chain confirms
+            whether this address is free.
+          </span>
+        </div>
+      )}
+      {currentPredictedInspection?.state === "existing" && (
+        <div className="error" role="alert" style={{ marginTop: 8 }}>
+          <strong>Address already exists on {NETWORK.name}</strong>
+          <span className="tiny">
+            No create transaction will be submitted for this address. Change the deployer or salt to
+            derive a new address before deploying again.
+          </span>
+          {currentPredictedInspection.integrity ? (
+            <>
+              <strong>{currentPredictedInspection.integrity.headline}</strong>
+              <span className="tiny">
+                Bytecode verification: {currentPredictedInspection.integrity.verdict} against the
+                pinned artifact. {currentPredictedInspection.integrity.detail}
+              </span>
+            </>
+          ) : (
+            <span className="tiny">
+              Bytecode verification could not be completed: {currentPredictedInspection.error}
+            </span>
+          )}
         </div>
       )}
 
@@ -628,7 +1034,7 @@ export function DeployPanel() {
 
       {wallet && plan && deployCost && (
         <div className={deployCost.warning ? "error" : "notice info"} style={{ marginTop: 12 }}>
-          <strong>Deployment reserve check</strong>
+          <strong>Deployment reserve estimate</strong>
           <div
             className="tiny"
             style={{
@@ -639,24 +1045,36 @@ export function DeployPanel() {
             }}
           >
             <div>
-              <div className="tiny muted">Base tx fee</div>
-              <div className="mono">{deployCost.baseFeeXlm} XLM</div>
+              <div className="tiny muted">Base tx fee (estimate)</div>
+              <div className="mono">
+                {deployCost.baseFeeXlm} XLM ({deployCost.baseFeeXlmToStroops} stroops)
+              </div>
             </div>
             <div>
-              <div className="tiny muted">WASM upload</div>
-              <div className="mono">{deployCost.wasmUploadFeeXlm} XLM</div>
+              <div className="tiny muted">WASM upload (estimate)</div>
+              <div className="mono">
+                {deployCost.wasmUploadFeeXlm} XLM ({deployCost.wasmUploadFeeXlmToStroops} stroops)
+              </div>
             </div>
             <div>
-              <div className="tiny muted">Contract instance</div>
-              <div className="mono">{deployCost.contractInstanceFeeXlm} XLM</div>
+              <div className="tiny muted">Contract instance (estimate)</div>
+              <div className="mono">
+                {deployCost.contractInstanceFeeXlm} XLM (
+                {deployCost.contractInstanceFeeXlmToStroops} stroops)
+              </div>
             </div>
             <div>
-              <div className="tiny muted">Initial rent</div>
-              <div className="mono">{deployCost.initialRentDepositXlm} XLM</div>
+              <div className="tiny muted">Initial rent (estimate)</div>
+              <div className="mono">
+                {deployCost.initialRentDepositXlm} XLM ({deployCost.initialRentDepositXlmToStroops}{" "}
+                stroops)
+              </div>
             </div>
             <div>
-              <div className="tiny muted">Required total</div>
-              <div className="mono">{deployCost.totalRequiredXlm} XLM</div>
+              <div className="tiny muted">Required total (estimate)</div>
+              <div className="mono">
+                {deployCost.totalRequiredXlm} XLM ({deployCost.totalRequiredXlmToStroops} stroops)
+              </div>
             </div>
             <div>
               <div className="tiny muted">Wallet balance</div>
@@ -677,6 +1095,12 @@ export function DeployPanel() {
               XLM before signing.
             </div>
           )}
+          {/* Source note: fees are estimates based on network conditions and may vary at signing time */}
+          {deployCost.sourceNote && (
+            <div className="tiny" style={{ marginTop: 8, color: "var(--warn)" }}>
+              {deployCost.sourceNote}
+            </div>
+          )}
         </div>
       )}
 
@@ -691,6 +1115,11 @@ export function DeployPanel() {
         <button
           className="secondary"
           onClick={() => {
+            // “Re-check” means ask the chain again, so the identity cached by
+            // the last read is dropped first — otherwise a mismatch could keep
+            // answering from a cache entry that read already disproved, and the
+            // only way back to a matching artifact would be a reload (issue #351).
+            invalidateWasmIdentityCache(server, PHASE1_ARTIFACT.guard);
             void fetchArtifact().then(applyArtifact);
           }}
           disabled={deploying}
@@ -710,18 +1139,76 @@ export function DeployPanel() {
         </div>
       )}
 
-      {error && <ErrorBlock title="The deploy could not be completed" detail={error} />}
+      {failure?.cancelled && (
+        <DeclinedBlock
+          title={
+            failure.source === "deploy"
+              ? "The deploy was declined in your wallet"
+              : "The initialization was declined in your wallet"
+          }
+          detail={failure.detail}
+          retryLabel={failure.source === "deploy" ? "Retry deploy" : "Retry initialize"}
+          onRetry={() =>
+            failure.source === "deploy" ? void deploy() : void initialize(outcome?.guard ?? "")
+          }
+          disabled={
+            failure.source === "deploy"
+              ? deployControl.disabled
+              : !wallet || !agentPubkeyValid || !initValidation.canDeploy
+          }
+        />
+      )}
+      {failure && !failure.cancelled && (
+        <ErrorBlock
+          title={
+            failure.source === "deploy"
+              ? "The deploy could not be completed"
+              : "The initialization could not be completed"
+          }
+          detail={failure.detail}
+          context="write"
+        />
+      )}
 
-      {outcome && (
-        <div className={outcome.verified ? "notice info" : "error"}>
-          <strong>
-            {outcome.verified
-              ? "Deployed and verified against the pinned artifact"
-              : "A contract was created, but it is NOT the pinned artifact"}
-          </strong>
+      {outcome && deployView && (
+        <div
+          className={
+            deployView.tone === "info"
+              ? "notice info"
+              : deployView.tone === "warn"
+                ? "warn notice"
+                : "error"
+          }
+          data-testid="deploy-outcome"
+        >
+          <strong>{deployView.headline}</strong>
           <span className="tiny mono">{outcome.guard}</span>{" "}
           <CopyButton value={outcome.guard} label="deployed guard address" />
           <OutcomeList steps={outcome.steps} />
+          {deployView.detail && <span className="tiny mono">{deployView.detail}</span>}
+          {deployView.retryable && (
+            <div className="row" style={{ marginTop: 8 }}>
+              <button
+                onClick={() => void deploy()}
+                disabled={deployControl.disabled}
+                title={deployControl.title}
+              >
+                Retry deploy
+              </button>
+              <span className="tiny muted">
+                Salt, prediction and init inputs are unchanged. Retrying is a new action: it
+                re-simulates and builds a new sequence-number-bound transaction — the declined
+                prompt is never replayed, and nothing was broadcast by this attempt.
+              </span>
+            </div>
+          )}
+          {outcome.readError !== null && (
+            <p className="tiny" style={{ color: "var(--danger)" }}>
+              The post-deploy read failed, so nothing about this instance&apos;s bytecode is
+              verified: {outcome.readError}. Re-check the artifact, or inspect the contract, before
+              routing an agent through it.
+            </p>
+          )}
           {outcome.identity && (
             <p className="tiny muted">
               Instance runs {outcome.identity.fetchedSha256.slice(0, 20)}... (
@@ -729,6 +1216,30 @@ export function DeployPanel() {
               {outcome.identity.reportedWasmHash?.slice(0, 20) ?? "none"}...
             </p>
           )}
+        </div>
+      )}
+
+      {receipt && (
+        <div className="notice info" role="status">
+          <strong>Deployment verification receipt</strong>
+          <span className="tiny">
+            A client-generated record of this deploy: network, predicted and deployed addresses,
+            pinned artifact, transaction references and the verification outcome. It is not a signed
+            credential, and it contains no keys, signed XDR or wallet session details.
+          </span>
+          <span className="tiny muted">
+            Verification: {receipt.verification.status} — {receipt.verification.summary}
+          </span>
+          <div className="row" style={{ marginTop: 8 }}>
+            <button
+              className="secondary"
+              onClick={() => downloadDeploymentReceipt(receipt)}
+              title="Download the deployment receipt as JSON"
+            >
+              Download receipt
+            </button>
+            <span className="tiny muted mono">{deploymentReceiptFilename(receipt)}</span>
+          </div>
         </div>
       )}
 
@@ -779,7 +1290,8 @@ export function DeployPanel() {
         <summary>Bytecode inspector</summary>
         <p className="tiny muted">
           Fetches the contract&apos;s stored WASM, hashes it here with Web Crypto, and compares it
-          to the pinned artifact — a second opinion on what the ledger says it is running.
+          to the pinned artifact — a second opinion on what the ledger says it is running. Parsing
+          and hashing run in a Web Worker so the UI stays responsive.
         </p>
         <div className="row">
           <button
@@ -789,10 +1301,64 @@ export function DeployPanel() {
           >
             {inspecting ? "Reading bytecode..." : "Inspect this contract"}
           </button>
+          {inspecting && (
+            <button className="secondary" onClick={() => void cancelInspect()}>
+              Cancel
+            </button>
+          )}
           <span className="tiny muted">
             Inspecting {(outcome?.guard ?? guard) || "no instance yet"}
           </span>
         </div>
+        {inspecting && inspectProgress && (
+          <div className="stack" style={{ marginTop: 8 }} role="status">
+            <div className="tiny mono">
+              {(() => {
+                const p = inspectProgress as WasmParseProgress | WasmHashProgress;
+                if ("phase" in p) {
+                  switch (p.phase) {
+                    case "validating-header":
+                      return "Validating WASM header...";
+                    case "parsing-sections":
+                      return `Parsing sections: ${p.current ?? 0} / ${p.total ?? "?"}`;
+                    case "reading-exports":
+                      return `Reading exports: ${p.count ?? 0} found`;
+                    case "reading-producers":
+                      return `Reading producers: ${p.section}`;
+                    case "hashing":
+                      return `Hashing: ${p.bytesProcessed ?? 0} / ${p.totalBytes ?? "?"} bytes`;
+                    case "complete":
+                      return "Complete";
+                    case "error":
+                      return `Error: ${p.reason}`;
+                    case "cancelled":
+                      return "Cancelled";
+                  }
+                }
+                return "Working...";
+              })()}
+            </div>
+            {inspectProgress.phase === "parsing-sections" && inspectProgress.total && (
+              <progress
+                value={inspectProgress.current ?? 0}
+                max={inspectProgress.total}
+                style={{ width: "100%", height: 6 }}
+              />
+            )}
+            {inspectProgress.phase === "hashing" && inspectProgress.totalBytes && (
+              <progress
+                value={inspectProgress.bytesProcessed ?? 0}
+                max={inspectProgress.totalBytes}
+                style={{ width: "100%", height: 6 }}
+              />
+            )}
+          </div>
+        )}
+        {inspectCancelled && (
+          <p className="tiny" style={{ color: "var(--warn)" }} role="status">
+            Inspection cancelled by operator.
+          </p>
+        )}
         {inspectError && (
           <ErrorBlock title="The bytecode could not be read" detail={inspectError} />
         )}
@@ -849,10 +1415,12 @@ export function DeployPanel() {
       <label className="field">
         <span className="lbl">Agent public key (32 raw Ed25519 bytes, hex)</span>
         <input
+          {...initValidationAttributes("agentPubkey")}
           value={agentPubkey}
           onChange={(event) => setAgentPubkey(sanitizeAddressInput(event.target.value))}
           placeholder="53b093e0281a2d8f4276b77fd21e3380b3329f09097ace3d9e60cf0f2f9039e2"
         />
+        {initFieldError("agentPubkey")}
         <span className="hint">
           This is the raw 32-byte key the agent signs with, not its G... strkey form. The SDK
           derives it from the agent keypair.
@@ -868,11 +1436,13 @@ export function DeployPanel() {
       <label className="field">
         <span className="lbl">Agent account address (G…)</span>
         <input
+          {...initValidationAttributes("agentAddress")}
           value={agentAddress}
           onChange={(event) => setAgentAddress(sanitizeAddressInput(event.target.value))}
           placeholder="GBUQ… (must differ from the connected admin)"
           aria-label="Agent account address"
         />
+        {initFieldError("agentAddress")}
       </label>
 
       <div className="grid">
@@ -884,29 +1454,35 @@ export function DeployPanel() {
             Dead-man grace (seconds)
           </span>
           <input
+            {...initValidationAttributes("dmsDurationSecs")}
             value={dmsDurationSecs}
             onChange={(event) => setDmsDurationSecs(event.target.value)}
             placeholder="3600"
             inputMode="numeric"
           />
+          {initFieldError("dmsDurationSecs")}
         </label>
         <label className="field">
           <span className="lbl">Per-transaction cap (units)</span>
           <input
+            {...initValidationAttributes("perTxCap")}
             value={perTxCap}
             onChange={(event) => setPerTxCap(event.target.value)}
             placeholder="1000"
             inputMode="numeric"
           />
+          {initFieldError("perTxCap")}
         </label>
         <label className="field">
           <span className="lbl">Rolling-window cap (units)</span>
           <input
+            {...initValidationAttributes("windowCap")}
             value={windowCap}
             onChange={(event) => setWindowCap(event.target.value)}
             placeholder="5000"
             inputMode="numeric"
           />
+          {initFieldError("windowCap")}
         </label>
       </div>
 
@@ -914,42 +1490,105 @@ export function DeployPanel() {
 
       <div className="row">
         <button
-          disabled={!wallet || agentPubkey.trim().length === 0 || !initValidation.canDeploy}
+          disabled={!wallet || !agentPubkeyValid || !initValidation.canDeploy}
           onClick={() => void initialize(outcome?.guard ?? "")}
         >
           Sign and initialize
         </button>
         {!wallet && <span className="tiny muted">Connect the admin wallet to initialize.</span>}
-        {wallet && !initValidation.canDeploy && (
+        {wallet && (!initValidation.canDeploy || !agentPubkeyValid) && (
           <span className="tiny" style={{ color: "var(--danger)" }}>
-            Resolve {initValidation.blockers.length} blocker
-            {initValidation.blockers.length === 1 ? "" : "s"} above before initializing.
+            Resolve {initValidation.blockers.length + (agentPubkeyValid ? 0 : 1)} blocker
+            {initValidation.blockers.length + (agentPubkeyValid ? 0 : 1) === 1 ? "" : "s"} above
+            before initializing.
           </span>
         )}
       </div>
 
-      {initResult && (
-        <div className={initResult.kind === "submitted" ? "notice info" : "error"}>
-          <strong>
-            {initResult.kind === "submitted"
-              ? "initialize landed on chain"
-              : initResult.kind === "refused"
-                ? "initialize was refused before broadcast"
-                : "initialize was broadcast and rejected"}
-          </strong>
+      {initResult && initView && (
+        <div
+          className={
+            initView.tone === "info"
+              ? "notice info"
+              : initView.tone === "warn"
+                ? "warn notice"
+                : "error"
+          }
+          data-testid="init-outcome"
+        >
+          <strong>{initView.headline}</strong>
           {initResult.kind === "submitted" ? (
             <span className="tiny">
               {starLink(initResult.hash)} - ledger {initResult.ledger ?? "-"}
             </span>
           ) : (
-            <span className="tiny mono">
-              {initResult.kind === "exported" ? "Exported" : initResult.detail}
-            </span>
+            initView.detail && <span className="tiny mono">{initView.detail}</span>
+          )}
+          {initView.retryable && (
+            <div className="row" style={{ marginTop: 8 }}>
+              <button
+                onClick={() => void initialize(outcome?.guard ?? "")}
+                disabled={!wallet || !agentPubkeyValid || !initValidation.canDeploy}
+              >
+                Retry initialize
+              </button>
+              <span className="tiny muted">
+                The agent key, addresses and caps are unchanged. Retrying is a new action: it
+                re-simulates and builds a new sequence-number-bound transaction — the declined
+                prompt is never replayed, and nothing was broadcast by this attempt.
+              </span>
+            </div>
           )}
         </div>
       )}
 
       <MigrationWizard target={outcome?.guard ?? guard} />
+    </div>
+  );
+}
+
+/**
+ * A wallet decline, stated on its own terms (issue #291).
+ *
+ * Deliberately not an `ErrorBlock`: nothing failed, the operator decided. The
+ * block carries three things an operator needs after saying no — what did *not*
+ * happen (no signature, no broadcast), that the form is untouched, and that
+ * retrying is a new explicit action rather than a replay of the declined prompt.
+ * It never holds, logs or re-sends an envelope: there is nothing of that kind
+ * to hold.
+ */
+function DeclinedBlock({
+  title,
+  detail,
+  retryLabel,
+  onRetry,
+  disabled,
+}: {
+  title: string;
+  /** The wallet's own words about the decline, when it offered any. */
+  detail: string;
+  retryLabel: string;
+  onRetry: () => void;
+  /** The same gate as the panel's primary button: observer mode, blockers, busy. */
+  disabled: boolean;
+}) {
+  return (
+    <div className="warn notice" role="status" data-testid="declined-block">
+      <span className="t">{title}</span>
+      {detail !== "" && <span className="tiny mono">{detail}</span>}
+      <span className="tiny">
+        Nothing was signed and nothing was broadcast, so no transaction of this attempt exists to
+        look up. Your deployment inputs are unchanged.
+      </span>
+      <div className="row" style={{ marginTop: 8 }}>
+        <button onClick={onRetry} disabled={disabled}>
+          {retryLabel}
+        </button>
+        <span className="tiny muted">
+          Retrying re-simulates and builds a new sequence-number-bound transaction. Nothing is ever
+          resubmitted automatically.
+        </span>
+      </div>
     </div>
   );
 }

@@ -87,7 +87,7 @@ jobs:
 
       - name: Upload the report artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bundle-size-report
           path: |
@@ -202,8 +202,7 @@ jobs:
                 marker,
                 "## Bundle size report",
                 "",
-                "The bundle-size analysis run did not produce a report" +
-                  `${process.env.conclusion === "timeout" ? " (timed out waiting for it)" : ""}.`,
+                "The bundle-size analysis run did not produce a report" + reason + ".",
                 "Check the `bundle-size` workflow logs on this pull request.",
               ].join("\n");
             }
