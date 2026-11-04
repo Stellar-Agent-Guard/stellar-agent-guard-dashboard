@@ -90,7 +90,7 @@ import { memoryWiper } from "../lib/guard/memoryWiper.ts";
 import type { WalletSigner } from "../lib/guard/submit.ts";
 import {
   useIdleTimer,
-  loadIdleTimeoutMs,
+  useStoredIdleTimeoutMs,
   saveIdleTimeoutMs,
   type IdleState,
 } from "../lib/guard/useIdleTimer.ts";
@@ -276,15 +276,12 @@ export function GuardProvider({
   const [instances, setInstances] = useState<GuardInstance[]>(() =>
     isDemoMode() ? [DEMO_INSTANCE] : [...KNOWN_INSTANCES],
   );
-  const [guard, setGuard] = useState<string>(() => {
-    if (typeof window !== "undefined") {
-      // The shared link's guard, validated before it becomes state: a
-      // malformed or unsafe address is rejected here, not adopted (issue #132).
-      const shared = decodeUrlState(window.location.search).guard;
-      if (shared) return shared;
-    }
-    return isDemoMode() ? DEMO_GUARD : defaultGuard();
-  });
+  // Hydration-safe on purpose: the server has no query string, so resolving a
+  // shared link's guard here would render one selection on the server and a
+  // different one on the client's first pass. The deep-link effect below adopts
+  // `?guard=` after mount instead, where reading `window.location.search` cannot
+  // desynchronise hydration (issue #132).
+  const [guard, setGuard] = useState<string>(() => (isDemoMode() ? DEMO_GUARD : defaultGuard()));
   const [snapshot, setSnapshot] = useState<GuardSnapshot | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -429,6 +426,10 @@ export function GuardProvider({
       current: guardRef.current,
     });
     if (!requested) return;
+    // Invalidate a read already issued for the default guard during this mount:
+    // the epoch bump means its result is dropped rather than painted over the
+    // guard the link asked for.
+    readEpochRef.current += 1;
     setInstances(
       requested.addToRegistry
         ? [
@@ -1022,7 +1023,10 @@ export function GuardProvider({
   // lock until there is a signing session. On expiry the wallet is disconnected
   // and the in-memory event feed is dropped, so a walk-up cannot resume an
   // authorised session or read the last operator's diagnostics.
-  const [idleTimeoutMs, setIdleTimeoutMs] = useState<number>(() => loadIdleTimeoutMs());
+  // Browser-only state read through the external-store hook, so the server and
+  // the client's first render agree on the default instead of hydrating the
+  // operator's saved choice against it.
+  const idleTimeoutMs = useStoredIdleTimeoutMs();
   const handleIdleExpire = useCallback(() => {
     disconnect();
     resetEvents();
@@ -1033,8 +1037,10 @@ export function GuardProvider({
     onExpire: handleIdleExpire,
   });
   const setIdleTimeout = useCallback((valueMs: number) => {
+    // Persisting notifies the store's subscribers, which re-renders this
+    // provider with the new value; there is no second piece of state to keep
+    // in sync.
     saveIdleTimeoutMs(valueMs);
-    setIdleTimeoutMs(valueMs);
   }, []);
 
   useEffect(() => {

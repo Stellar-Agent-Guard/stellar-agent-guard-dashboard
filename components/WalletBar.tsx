@@ -220,9 +220,10 @@ export function WalletBar() {
           )}
 
           <p className="tiny muted" style={{ marginTop: 8 }}>
-            Every write on this page is signed inside {provider ? provider.name : "your wallet"} and
-            broadcast straight to Soroban RPC. The console never sees, stores or transmits a secret
-            key, and there is no server component that could hold one.
+            Every write on this page is signed inside{" "}
+            {wallet && provider ? provider.name : "your wallet"} and broadcast straight to Soroban
+            RPC. The console never sees, stores or transmits a secret key, and there is no server
+            component that could hold one.
           </p>
           <label className="field" style={{ marginTop: 8 }}>
             <span className="lbl">Auto-lock after inactivity</span>

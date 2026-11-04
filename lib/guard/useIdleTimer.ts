@@ -16,7 +16,7 @@
  * window events and React state.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 /** Lead time before the lock, during which the warning modal is shown. */
 export const IDLE_WARNING_SECONDS = 60;
@@ -169,7 +169,40 @@ export function saveIdleTimeoutMs(valueMs: number, storage?: StorageLike | null)
     store.setItem(IDLE_TIMEOUT_STORAGE_KEY, String(valueMs));
   } catch {
     // A private-mode write only loses the preference; the default still applies.
+    return;
   }
+  notifyIdlePreference();
+}
+
+/**
+ * The stored auto-lock choice, read as external browser state.
+ *
+ * `useSyncExternalStore` serves the build default while rendering on the server
+ * (and during hydration), then adopts the operator's saved value on the client.
+ * Reading `localStorage` in a `useState` initialiser would render the default on
+ * the server and the saved choice in the returning operator's browser, which is
+ * a hydration mismatch in the middle of a security setting — the same reason
+ * `useDemoMode` and `useAddressLabel` keep browser-only reads out of render.
+ */
+const idlePreferenceListeners = new Set<() => void>();
+
+function subscribeIdlePreference(onChange: () => void): () => void {
+  idlePreferenceListeners.add(onChange);
+  return () => {
+    idlePreferenceListeners.delete(onChange);
+  };
+}
+
+function notifyIdlePreference(): void {
+  for (const listener of Array.from(idlePreferenceListeners)) listener();
+}
+
+export function useStoredIdleTimeoutMs(): number {
+  return useSyncExternalStore(
+    subscribeIdlePreference,
+    loadIdleTimeoutMs,
+    () => DEFAULT_IDLE_TIMEOUT_MS,
+  );
 }
 
 interface StorageLike {
