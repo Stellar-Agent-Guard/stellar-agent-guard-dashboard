@@ -74,6 +74,8 @@ export type TelemetryEvent = GuardEvent & {
 /** One page of rows, carrying the SDK's own page fields (cursor, ledgers). */
 export type TelemetryPage = Omit<PollResult, "events"> & {
   events: TelemetryEvent[];
+  discontinuity?: boolean;
+  affectedLedgers?: { start: number; end: number } | undefined;
   /** What this feed currently knows about holes in its coverage. */
   gaps?: FeedGapState;
 };
@@ -115,6 +117,9 @@ export const EMPTY_FEED_GAP_STATE: FeedGapState = { lost: [], unsettled: null };
 
 /** Cap on remembered lost ranges, so a long-running tab cannot grow without bound. */
 export const FEED_GAP_LIMIT = 20;
+
+/** Cap on displayed guards in the feed header. */
+export const FEED_GUARD_CAP = 5;
 
 /**
  * Compare two RPC event cursors. stellar-rpc ids are `<TOID>-<event index>`, both
@@ -242,6 +247,7 @@ export class GuardFeed {
   readonly guard: string;
   private readonly listener: GuardTelemetryListener;
   private cursor: string | null = null;
+  private lastKnownGoodCursor: string | null = null;
   private latestLedger: number | null = null;
   /** The earliest ledger not yet confirmed read; the boundary gap detection checks. */
   private expectedFrom: number | null = null;
@@ -298,10 +304,6 @@ export class GuardFeed {
       this.lastRawEvents = [];
       const decoded = await this.listener.poll(params);
       const page = { ...decoded, events: attachLedgerXdr(decoded.events, this.lastRawEvents) };
-
-      // Look for discontinuities before moving any pointer, against where the
-      // feed was. Received events are never dropped for it: the page is returned
-      // whole and the stream buffer de-duplicates anything it already holds.
       const found = detectFeedGaps({
         expectedFrom: this.expectedFrom,
         heldCursor: this.cursor,
@@ -316,13 +318,15 @@ export class GuardFeed {
       // A page with no events still advances the ledger pointer, so the next poll
       // does not re-scan a stretch of empty ledgers.
       this.latestLedger = Math.max(this.latestLedger ?? 0, page.latestLedger);
-      // The cursor only ever moves forward. A regressed one is not adopted, so the
-      // next poll resumes from the last known-good position.
       if (page.cursor && !found.some((gap) => gap.reason === "cursor_regressed")) {
+        this.lastKnownGoodCursor = page.cursor;
         this.cursor = page.cursor;
       }
       this.expectedFrom = Math.max(this.expectedFrom ?? 0, nextExpectedLedger(page, limit));
-      return { ...page, gaps: this.gapState() };
+      return {
+        ...page,
+        gaps: this.gapState(),
+      };
     });
   }
 
@@ -339,6 +343,7 @@ export class GuardFeed {
   /** Forget the cursor so the feed re-scans from a given ledger. */
   resetFrom(ledger: number | null): void {
     this.cursor = null;
+    this.lastKnownGoodCursor = null;
     this.latestLedger = ledger;
     // A new starting point is a new baseline: what is owed begins at `ledger`, and
     // notices about the old position no longer describe this feed.
