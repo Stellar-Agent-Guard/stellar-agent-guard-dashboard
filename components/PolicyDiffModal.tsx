@@ -20,12 +20,9 @@ function renderValue(value: unknown): string {
 }
 
 /**
- * The last look an operator gets before a wallet prompt.
- *
- * `set_policy` is irreversible in the sense that matters: once signed, the new
- * caps are what the guard enforces. This renders the structured diff from
- * `lib/guard/policyDiff.ts` side by side and refuses to call `onConfirm` until
- * the operator has actually seen it.
+ * A focused review for a policy change that broadens the guard's authority.
+ * This is a deliberate confirmation step, not chain authorization: the normal
+ * validation, simulation, wallet signing and post-write read still follow.
  */
 export function PolicyDiffModal({
   diff,
@@ -49,9 +46,20 @@ export function PolicyDiffModal({
       >
         <h2 style={{ marginTop: 0 }}>Policy changes</h2>
         <p className="tiny muted">
-          Review what will change before the wallet is prompted to sign. Signing installs the new
-          policy and resets the rolling window.
+          This change broadens the policy's authority. Review the reasons and changed fields before
+          continuing. Confirmation only proceeds to the normal simulation and wallet-signing flow.
         </p>
+
+        {diff.highImpactReasons.length > 0 && (
+          <div className="notice danger" role="status" style={{ margin: "10px 0", padding: "8px 10px" }}>
+            <strong>Why this needs review</strong>
+            <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+              {diff.highImpactReasons.map((reason) => (
+                <li key={reason} className="tiny">{reason}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {diff.warnings.length > 0 && (
           <div
