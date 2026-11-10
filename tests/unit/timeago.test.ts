@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it, before, test } from "node:test";
-import { formatEventTimestamp, formatTimeAgo } from "../../lib/guard/time.ts";
+import { formatEventTimestamp, formatTimeAgo, formatRemaining } from "../../lib/guard/time.ts";
 import { installDom, loadReact, type Act } from "./domHarness.ts";
 import { TimeAgo } from "../../components/bits.tsx";
 import fs from "node:fs/promises";
@@ -57,6 +57,52 @@ describe("formatTimeAgo", () => {
     const fixedNowNum = 1700000000;
     assert.equal(formatTimeAgo(fixedNowNum - 45, fixedNowNum), "45s");
     assert.equal(formatTimeAgo(fixedNowNum - 4000, fixedNowNum), "1h");
+  });
+});
+
+describe("formatRemaining", () => {
+  it("returns 'now' for sub-minute remaining (0s and 59s)", () => {
+    assert.deepEqual(formatRemaining(0n), { text: "now", expired: false });
+    assert.deepEqual(formatRemaining(59n), { text: "now", expired: false });
+  });
+
+  it("returns exact minutes at 60s boundary", () => {
+    assert.deepEqual(formatRemaining(60n), { text: "1m", expired: false });
+    assert.deepEqual(formatRemaining(119n), { text: "1m", expired: false });
+    assert.deepEqual(formatRemaining(3599n), { text: "59m", expired: false });
+  });
+
+  it("returns hours at 3600s boundary", () => {
+    assert.deepEqual(formatRemaining(3600n), { text: "1h", expired: false });
+    assert.deepEqual(formatRemaining(7199n), { text: "1h", expired: false });
+    assert.deepEqual(formatRemaining(86399n), { text: "23h", expired: false });
+  });
+
+  it("returns days at 86400s boundary", () => {
+    assert.deepEqual(formatRemaining(86400n), { text: "1d", expired: false });
+    assert.deepEqual(formatRemaining(172800n), { text: "2d", expired: false });
+  });
+
+  it("signals expired via separate return for negative values", () => {
+    assert.deepEqual(formatRemaining(-1n), { text: "expired", expired: true });
+    assert.deepEqual(formatRemaining(-180n), { text: "expired", expired: true });
+  });
+
+  it("caps large values at 999d+", () => {
+    assert.deepEqual(formatRemaining(999n * 86400n), { text: "999d+", expired: false });
+    assert.deepEqual(formatRemaining(10475n * 86400n), { text: "999d+", expired: false });
+  });
+
+  it("accepts bigint u64 seconds without float precision loss", () => {
+    // 2^53 + 1 seconds would lose precision as a JS number; bigint must be exact.
+    const big = 9007199254740993n * 86400n;
+    assert.deepEqual(formatRemaining(big), { text: "999d+", expired: false });
+  });
+
+  it("supports number input deterministically", () => {
+    assert.deepEqual(formatRemaining(45), { text: "now", expired: false });
+    assert.deepEqual(formatRemaining(4000), { text: "1h", expired: false });
+    assert.deepEqual(formatRemaining(-5), { text: "expired", expired: true });
   });
 });
 
