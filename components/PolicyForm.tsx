@@ -221,9 +221,23 @@ export function PolicyForm() {
   const approval = valueInScope(pendingApproval, activeScope);
   const policyImportApproval = valueInScope(pendingPolicyImport, activeScope);
 
+  /**
+   * What was installed when the current draft was started, as a comparable key.
+   * When the chain moves on underneath an open draft — another tab, or another
+   * operator, installs a policy — the draft is kept as typed and the change is
+   * reported, never silently merged or overwritten (issue #542).
+   */
+  const [draftBaseKey, setDraftBaseKey] = useState<string | null>(null);
+  // Set when this tab's own install lands: the next chain read is the policy
+  // this draft just installed, so it becomes the draft's new base rather than
+  // being reported as a change made elsewhere.
+  const [rebaseDraft, setRebaseDraft] = useState(false);
+
   /** Replace the draft. Refused while the draft belongs to another guard. */
   function setDraft(next: PolicyDraft | null) {
     if (draftForOtherGuard) return;
+    if (next === null) setDraftBaseKey(null);
+    else if (draft === null) setDraftBaseKey(installedKey);
     pushDraft(next);
     setDraftScope(next === null ? null : activeScope);
   }
@@ -231,6 +245,7 @@ export function PolicyForm() {
   /** Coalesced text edit. Refused while the draft belongs to another guard. */
   function editDraft(next: PolicyDraft) {
     if (draftForOtherGuard) return;
+    if (draft === null) setDraftBaseKey(installedKey);
     editDraftRaw(next);
     setDraftScope(activeScope);
   }
@@ -315,9 +330,22 @@ export function PolicyForm() {
     snapshot?.policy.ok && snapshot.policy.value !== null
       ? draftFromConfig(snapshot.policy.value)
       : EMPTY_DRAFT;
+  const installedKey = JSON.stringify(installedDraft);
   // A draft for another guard is never shown as this guard's form: the form falls
   // back to what is actually installed here.
   const effective = draft !== null && !draftForOtherGuard ? draft : installedDraft;
+  if (rebaseDraft && snapshot?.policy.ok === true && draftBaseKey !== installedKey) {
+    setDraftBaseKey(installedKey);
+    setRebaseDraft(false);
+  }
+  // The installed policy changed since this draft was started.
+  const chainChangedUnderDraft =
+    !rebaseDraft &&
+    draft !== null &&
+    !draftForOtherGuard &&
+    draftBaseKey !== null &&
+    snapshot?.policy.ok === true &&
+    draftBaseKey !== installedKey;
 
   // Metadata reads follow the addresses actually present in the draft. The key
   // is sorted and de-duplicated so reordering rows does not trigger a re-read.
@@ -586,6 +614,7 @@ export function PolicyForm() {
       // nothing, so there is nothing for the other tabs to re-read. The event
       // names the guard that was written, not the one now on screen.
       if (result.kind === "invoked" && result.result.kind === "submitted") {
+        if (!exportOnly && sameGuardScope(approved.scope, nowScope())) setRebaseDraft(true);
         notifyTabs("POLICY_UPDATED", {
           guard: approvedGuard,
           payload: { operation: "set_policy" },
@@ -727,6 +756,29 @@ export function PolicyForm() {
           <div className="row" style={{ marginTop: 6 }}>
             <button className="secondary" onClick={discardOtherGuardDraft}>
               Discard unsaved edits
+            </button>
+          </div>
+        </div>
+      )}
+
+      {chainChangedUnderDraft && (
+        <div className="notice warn" role="status" data-testid="policy-changed-under-draft">
+          <strong>The installed policy changed while you were editing</strong>
+          <span className="tiny">
+            A new policy was installed on this guard (from another tab or another operator) after
+            you started this draft. Your edits are kept as you typed them and nothing was merged.
+            Review them against what is installed now before signing, or load the installed policy.
+          </span>
+          <div className="row" style={{ marginTop: 6 }}>
+            <button
+              className="secondary"
+              onClick={() => {
+                setDraft(null);
+                setAssetCapChanges({});
+              }}
+              disabled={busy}
+            >
+              Load the installed policy
             </button>
           </div>
         </div>

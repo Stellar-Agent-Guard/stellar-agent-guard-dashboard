@@ -321,3 +321,25 @@ it to durable storage whenever the change must remain auditable.
 
 > ⚠️ This is unaudited security tooling that gates real fund access. Do not deploy
 > to mainnet without an independent audit.
+
+## Several tabs, wallets and networks
+
+- **A policy installed in another tab while you are editing.** Your draft is
+  kept exactly as typed and nothing is merged. The form says that the installed
+  policy changed while you were editing; review your draft against what is
+  installed now, or choose **Load the installed policy** to start from it.
+  Covered by `tests/e2e/policyTabIsolation.spec.ts`.
+- **The wallet switches network.** Moving into a network mismatch, or back out
+  of one, drops every guard summary read before the switch: panels reload from
+  fresh chain reads. Layout, density and theme preferences are kept. Covered by
+  `tests/e2e/networkSwitchInvalidation.spec.ts`.
+- **Fleet edits in two tabs.** Adding or removing a saved guard in one tab
+  updates the fleet table in the others at once, so an addition is not hidden
+  and a removal is not brought back by a refresh. Registry edits never write to
+  the chain. Covered by `tests/e2e/fleetConcurrentTabs.spec.ts`.
+- **A deploy interrupted mid-flight.** A wallet refusal before broadcast sends
+  nothing, and nothing is retried until you ask. If the connection drops after
+  the transaction was broadcast, the console says the write may have reached
+  the network and does not resubmit; the deploy panel then reads the predicted
+  address from the chain and refuses to create a second instance there.
+  Covered by `tests/e2e/deployInterruption.spec.ts`.
