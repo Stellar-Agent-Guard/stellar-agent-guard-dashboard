@@ -5,6 +5,9 @@ import {
   WalletCancellationError,
   isWalletCancellation,
 } from "./retry.ts";
+// The classifier's definition moved to retry.ts, but the panels read it off the
+// write path, which is where the rest of the wallet vocabulary lives.
+export { isWalletCancellation } from "./retry.ts";
 /**
  * The write path: a contract call authorized by the operator's own wallet.
  *

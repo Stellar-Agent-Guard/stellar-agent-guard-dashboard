@@ -123,6 +123,9 @@ export function isWalletCancellation(error: unknown): boolean {
   const name = walletErrorName(error);
   // `walletConnector` already collapses every provider's wording onto this class.
   if (name === "WalletUserRejectedError") return true;
+  // The write path re-raises a decline as this typed error before the next
+  // boundary sees it, so a decline it has already classified stays a decline.
+  if (name === "WalletCancellationError") return true;
   // The bare Freighter adapter reports the decline inside a generic `WalletError`,
   // so its text is the only thing that says which it was.
   if (name !== "WalletError") return false;

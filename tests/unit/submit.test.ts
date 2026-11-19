@@ -259,6 +259,15 @@ describe("invokeWithWallet source sequence freshness (issue #392)", () => {
       },
     };
 
+    // Built before the patch below: a preview is not one of the write path's
+    // passes, and this test counts the accounts the pipeline asks for.
+    const authorization = previewAuthorizationSummary({
+      contract: GUARD_CONTRACT,
+      fn: "check",
+      admin: SIGNER_ADDRESS,
+      passphrase: PASSPHRASE,
+    });
+
     const originalSequenceNumber = Account.prototype.sequenceNumber;
     const sourceAccounts: Account[] = [];
     Account.prototype.sequenceNumber = function () {
@@ -273,6 +282,7 @@ describe("invokeWithWallet source sequence freshness (issue #392)", () => {
         args: [],
         signer,
         passphrase: PASSPHRASE,
+        authorization,
         exportOnly: true,
       });
       assert.equal(result.kind, "exported");
@@ -323,6 +333,12 @@ describe("invokeWithWallet source sequence freshness (issue #392)", () => {
       args: [],
       signer,
       passphrase: PASSPHRASE,
+      authorization: previewAuthorizationSummary({
+        contract: GUARD_CONTRACT,
+        fn: "check",
+        admin: SIGNER_ADDRESS,
+        passphrase: PASSPHRASE,
+      }),
       exportOnly: true,
     });
     assert.equal(result.kind, "refused");
@@ -731,11 +747,13 @@ describe("a declined signature is its own outcome (#291)", () => {
   it("ends the write as cancelled at the envelope, with nothing broadcast", async () => {
     const sendCalls: string[] = [];
     const prompts: string[] = [];
+    const signer = decliningSigner(prompts);
     const result = await invokeWithWallet({
       ...WRITE_REQUEST,
+      authorization: boundaryAuthorization(signer.address),
       cancelOnDecline: true,
       server: makeWalletBoundaryServer(sendCalls),
-      signer: decliningSigner(prompts),
+      signer,
     });
 
     assert.equal(result.kind, "cancelled");
@@ -752,6 +770,7 @@ describe("a declined signature is its own outcome (#291)", () => {
 
     const result = await invokeWithWallet({
       ...WRITE_REQUEST,
+      authorization: boundaryAuthorization(signer.address),
       cancelOnDecline: true,
       server,
       signer,
@@ -771,7 +790,12 @@ describe("a declined signature is its own outcome (#291)", () => {
     const server = makeWalletBoundaryServer([], [makeAddressAuthEntry(signer.address)]);
 
     await assert.rejects(
-      invokeWithWallet({ ...WRITE_REQUEST, server, signer }),
+      invokeWithWallet({
+        ...WRITE_REQUEST,
+        authorization: boundaryAuthorization(signer.address),
+        server,
+        signer,
+      }),
       /declined/i,
       "without cancelOnDecline the decline keeps its original thrown form",
     );
@@ -780,6 +804,7 @@ describe("a declined signature is its own outcome (#291)", () => {
 
   it("keeps a simulation failure distinguishable: that is a refusal, not a decline", async () => {
     const prompts: string[] = [];
+    const signer = decliningSigner(prompts);
     const server = {
       getAccount: async (address: string) => new Account(address, "1"),
       simulateTransaction: async () => ({
@@ -796,8 +821,9 @@ describe("a declined signature is its own outcome (#291)", () => {
 
     const result = await invokeWithWallet({
       ...WRITE_REQUEST,
+      authorization: boundaryAuthorization(signer.address),
       server,
-      signer: decliningSigner(prompts),
+      signer,
     });
 
     assert.equal(result.kind, "refused");
@@ -863,6 +889,7 @@ describe("a declined signature is its own outcome (#291)", () => {
 
     const declined = await invokeWithWallet({
       ...WRITE_REQUEST,
+      authorization: boundaryAuthorization(signer.address),
       cancelOnDecline: true,
       server,
       signer,
@@ -876,6 +903,7 @@ describe("a declined signature is its own outcome (#291)", () => {
     // button press, and nothing in the write path re-ran on its own.
     const retried = await invokeWithWallet({
       ...WRITE_REQUEST,
+      authorization: boundaryAuthorization(signer.address),
       cancelOnDecline: true,
       server,
       signer,

@@ -57,7 +57,6 @@ import {
   fetchTokenMetadata,
   type TokenMetadata,
 } from "../lib/guard/tokenMetadata.ts";
-import { NETWORK } from "../lib/guard/network.ts";
 import { classifyFailure } from "../lib/guard/recoveryGuidance.ts";
 import { RecoveryGuidanceBlock } from "./RecoveryGuidance.tsx";
 import { writeControlState } from "../lib/guard/observerMode.ts";
