@@ -182,6 +182,8 @@ export class SorobanRpcMock {
   deliveredEvents = 0;
   /** Contracts created/frozen/… during the test, keyed by address. */
   readonly guards = new Map<string, GuardState>();
+  autoFreeze = true;
+  nextStatusError: string | null = null;
   /**
    * Which artifact this chain serves. Public so a spec can flip it mid-test —
    * mismatched, then valid again — without reloading the page, which is exactly
@@ -440,6 +442,11 @@ export class SorobanRpcMock {
     const call = decodeCall(transactionXdr);
     let retval: xdr.ScVal = xdr.ScVal.scvVoid();
     if (call?.fn === "status") {
+      if (this.nextStatusError && this.requests.includes("sendTransaction")) {
+        const errorMsg = this.nextStatusError;
+        this.nextStatusError = null;
+        throw new Error(errorMsg);
+      }
       const state = this.guard(call.contract);
       const now = BigInt(Math.floor(Date.now() / 1000));
       retval = nativeToScVal({
@@ -480,7 +487,9 @@ export class SorobanRpcMock {
       const state = this.guard(call.contract);
       switch (call.fn) {
         case "freeze":
-          state.frozen = true;
+          if (this.autoFreeze) {
+            state.frozen = true;
+          }
           break;
         case "unfreeze":
           state.frozen = false;

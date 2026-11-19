@@ -63,6 +63,11 @@ export async function installFreighterMock(
       const REJECT_NEXT_SIGN_KEY = "stellar-agent-guard.e2e.reject-next-sign";
 
       const rejectNextSign = (): boolean => {
+        const win = window as unknown as { __mockFreighterRejectNext?: boolean };
+        if (win.__mockFreighterRejectNext) {
+          win.__mockFreighterRejectNext = false;
+          return true;
+        }
         if (window.localStorage.getItem(REJECT_NEXT_SIGN_KEY) !== "1") return false;
         window.localStorage.removeItem(REJECT_NEXT_SIGN_KEY);
         return true;
@@ -147,7 +152,10 @@ export async function installFreighterMock(
             return;
           case "SUBMIT_TRANSACTION":
             if (rejectNextSign()) {
-              reply({ apiError: { code: -4, message: "User rejected the request" } });
+              reply({
+                error: { message: "User rejected the request" },
+                apiError: { code: -4, message: "User rejected the request" },
+              });
               return;
             }
             reply({
@@ -157,7 +165,10 @@ export async function installFreighterMock(
             return;
           case "SUBMIT_AUTH_ENTRY":
             if (rejectNextSign()) {
-              reply({ apiError: { code: -4, message: "User rejected the request" } });
+              reply({
+                error: { message: "User rejected the request" },
+                apiError: { code: -4, message: "User rejected the request" },
+              });
               return;
             }
             reply({
