@@ -23,6 +23,7 @@ import {
 import { installPolicy, revokePolicy } from "../lib/guard/guardOps.ts";
 import { historyShortcut, useHistoryState } from "../lib/guard/useHistoryState.ts";
 import { usePwaActivity } from "../lib/guard/usePwaActivity.ts";
+import { useModalFocus } from "../lib/guard/useModalFocus.ts";
 import { computePolicyDiff, type PolicyDiff } from "../lib/guard/policyDiff.ts";
 import { PolicyDiffModal } from "./PolicyDiffModal.tsx";
 import type { InvokeResult } from "../lib/guard/submit.ts";
@@ -251,55 +252,16 @@ export function PolicyForm() {
 
   const confirmingPreset = pendingPreset !== null;
 
-  // Same focus discipline as the freeze dialog: move focus into the modal, keep
-  // Tab inside it, close on Escape, and return focus to the select afterwards.
-  useEffect(() => {
-    if (!confirmingPreset) return;
-    const dialog = presetDialog.current;
-    if (!dialog) return;
-
-    const focusables = () =>
-      Array.from(
-        dialog.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
-        ),
-      );
-
-    dialog.focus();
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setPendingPreset(null);
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const items = focusables();
-      if (items.length === 0) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-      const first = items[0]!;
-      const last = items[items.length - 1]!;
-      const active = document.activeElement as HTMLElement | null;
-      const inside = active !== null && dialog.contains(active);
-      if (event.shiftKey && (active === first || !inside)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (active === last || !inside)) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown, true);
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate late ref read, see PanicPanel
-      presetSelect.current?.focus();
-    };
-  }, [confirmingPreset]);
+  // Same focus discipline as the freeze dialog (shared hook): move focus into
+  // the modal, keep Tab inside it, close on Escape, and return focus to the
+  // select afterwards. The hook's dialog stack keeps this trap inert while a
+  // dialog above it (e.g. the secret-key alert) owns the keyboard.
+  useModalFocus({
+    open: confirmingPreset,
+    containerRef: presetDialog,
+    returnFocusRef: presetSelect,
+    onDismiss: () => setPendingPreset(null),
+  });
 
   function applyPreset(preset: PolicyPreset) {
     setDraft(draftFromPreset(preset));

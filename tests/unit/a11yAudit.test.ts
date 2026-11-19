@@ -250,6 +250,64 @@ test("StatusPanel passes axe-core with the default-deny banner showing", async (
   }
 });
 
+test("StatusPanel passes axe-core in the error state and still links its help (#531)", async () => {
+  // A failed snapshot is when an operator most needs to know what the panel
+  // means and what to do next, so the help links must survive the error state.
+  const context = { ...TEST_GUARD, snapshot: null, snapshotError: "RPC unreachable" };
+  const rendered = await renderPanel(
+    react.createElement(
+      GuardContext.Provider,
+      { value: context },
+      react.createElement(StatusPanel),
+    ),
+  );
+  try {
+    const help = rendered.container.querySelector('nav[aria-label="Status panel help"]');
+    assert.ok(help, "the status panel help links render in the error state");
+    const names = Array.from(help.querySelectorAll("a")).map((a) => a.textContent);
+    assert.deepEqual(names, [
+      "How to read this panel",
+      "What the guard enforces",
+      "Incident runbook",
+    ]);
+    const violations = await axeViolations(rendered.container);
+    assert.deepEqual(violations, [], "the error state with help links must pass axe-core");
+  } finally {
+    await rendered.unmount();
+  }
+});
+
+test("the policy review dialog passes axe-core while open (#537, #540)", async () => {
+  const { PolicyDiffModal } = await import("../../components/PolicyDiffModal.tsx");
+  const { computePolicyDiff } = await import("../../lib/guard/policyDiff.ts");
+  const base = {
+    per_tx_cap: 100n,
+    window_secs: 86400n,
+    window_cap: 1000n,
+    assets: [],
+    protocols: [],
+    recipients: [],
+    allow_any_recipient: false,
+    active_from: 0n,
+    active_until: 0n,
+    paused: false,
+    dms_grace_secs: 0n,
+  };
+  const diff = computePolicyDiff(base, { ...base, per_tx_cap: 5n, window_cap: 50n });
+  const rendered = await renderPanel(
+    react.createElement(PolicyDiffModal, { diff, onConfirm: () => {}, onCancel: () => {} }),
+  );
+  try {
+    const dialog = rendered.container.querySelector<HTMLElement>('[role="dialog"]');
+    assert.ok(dialog);
+    assert.equal(document.activeElement, dialog, "focus moved into the review dialog");
+    const violations = await axeViolations(rendered.container);
+    assert.deepEqual(violations, [], "the open policy review must pass axe-core");
+  } finally {
+    await rendered.unmount();
+  }
+});
+
 test("TelemetryFeed passes axe-core with severity tiers on every row kind", async () => {
   // Scanned populated, not empty: a blocked, an allowed, and a lifecycle row
   // each in the DOM, so the tier markup is what gets audited (issue #26).
