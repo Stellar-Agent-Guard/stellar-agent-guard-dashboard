@@ -455,7 +455,7 @@ Never rely on color alone to communicate state:
 > Hardcoding mock numbers, fallback balances, or simulated events inside production widget code is strictly prohibited.
 
 - **No Fallback Zeros**: Never write `value ?? 0` or `snapshot?.status?.value || defaultStatus`. If an on-chain read fails or is pending, show the loading indicator or `<ErrorBlock>`. A fallback zero turns a network outage into what looks like an empty policy or a zero-balance account.
-- **Demo Mode Isolation**: Synthetic data exists solely in [`lib/guard/demoFixtures.ts`](../../lib/guard/demoFixtures.ts). It activates only when explicitly requested (`NEXT_PUBLIC_DEMO_MODE=true` or `?demo=true`). Production widgets must remain completely agnostic of demo mode and rely purely on the data provided by `useGuard()`.
+- **Demo Mode Isolation**: Synthetic data exists solely in [`lib/guard/demoFixtures.ts`](../../lib/guard/demoFixtures.ts). It activates only when explicitly requested (`NEXT_PUBLIC_DEMO_MODE=true` or `?demo=true`). Production widgets must remain completely agnostic of demo mode and rely purely on the data provided by `useGuard()`. Demo mode is read-only on every route, including a write route opened directly: connecting a wallet is refused (the wallet bar explains why), so nothing can be signed or submitted. `tests/e2e/demoReadOnly.spec.ts` asserts this per route.
 
 ### 2. No Floating-Point Amounts
 
