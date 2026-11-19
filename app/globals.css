@@ -870,6 +870,74 @@ code {
     max-height: none;
     overflow-x: visible;
   }
+
+  /*
+   * Linear policy comparison (#537).
+   *
+   * Three columns of long addresses and allowlists cannot sit side by side on
+   * a phone. Below the breakpoint every changed field becomes one card read
+   * top to bottom — Field, then Before, then After — with each value prefixed
+   * by its column name from `data-label`, so "before" and "after" are stated in
+   * text rather than implied by position. Cells keep their DOM order (no
+   * `order`, no reversed flex direction), so reading order, screen-reader order
+   * and keyboard order stay identical to the wide layout.
+   */
+  table.diff-linear,
+  table.diff-linear tbody,
+  table.diff-linear tr,
+  table.diff-linear td {
+    display: block;
+    width: 100%;
+  }
+
+  table.diff-linear thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  table.diff-linear tbody tr {
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    margin-bottom: 10px;
+    padding: 8px 12px;
+    background: var(--panel-2);
+  }
+
+  table.diff-linear td {
+    padding: 4px 0;
+    border-bottom: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  table.diff-linear td::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  /* Confirm and Cancel stack full-width in DOM order: Confirm first, as on
+     desktop, with a >=44px touch target. */
+  .policy-diff-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .policy-diff-actions button {
+    width: 100%;
+    min-height: 44px;
+  }
 }
 
 /* Sticky action bar: justified by measurement, not preference. PolicyForm
