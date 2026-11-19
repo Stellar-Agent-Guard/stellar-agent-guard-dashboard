@@ -27,6 +27,8 @@ An autonomous agent holding a wallet has a single point of failure: one prompt-i
 
 **Status: Phase 3 built, with Phase 2 publish status honestly disclosed.** Pure consumer of [stellar-agent-guard-sdk](https://github.com/aigbagbobila/stellar-agent-guard-sdk) and Soroban RPC. Holds no secrets and has no server component: every write is signed by the operator's own wallet and broadcast directly to Soroban RPC. Consumes the SDK from a committed vendored tarball (`vendor/stellar-agent-guard-sdk-0.1.1.tgz`, built from the SDK's `main`) so CI and offline builds resolve the exact, reviewable bytes; version 0.1.0 of the package is also published to npm, while the vendored 0.1.1 is not yet published (see the Phase 2 table below).
 
+> **Provenance check.** `vendor/sdk-provenance.json` records the tarball's SHA-256/SHA-512 and source revision; `npm run check:sdk-provenance` (run in CI) hashes the committed bytes against it without unpacking them.
+>
 > **SDK sequence note (2026-09-30).** The vendored tarball moved `0.1.0 → 0.1.1`, built from SDK `main` commit `391546173c40b6c772872fc84c3c84ce42c3147f` (`npm ci && npm run build && npm pack` in the SDK repo). That release is what carries `decodePolicy` / `readPersistentEntry`, which this console's read side now calls; `0.1.1` is not yet published to npm, so the committed tarball — not the registry — is the source of truth for the bytes this build decodes.
 
 > ### Phase 2 Exit Status & Dependency Disclosure
@@ -154,6 +156,8 @@ steps and for what it does and does not prove.
 - **`DeployPanel`**: Fetches bytecode, verifies SHA-256 hash (`f47919...`), predicts custom account address, prompts Freighter signature, and initializes admin + agent keys.
 - **`PolicyForm`**: Real-time form validation, encoding via SDK `policyToScVal`, Freighter signing, and transaction broadcast. Deep links (`/configure?guard=C…`) adopt the guard named in the URL, so navigating from the console's default-deny banner does not silently show a different account's state.
 - **`/fleet` (Fleet Overview)**: One table of every registered guard instance with its live on-chain state, for operators running more than one guarded agent.
+- **`/deploy` (Deploy)**: The deployment step on its own addressable screen, with the wallet bar and guard selector in front of it.
+- **`/panic` (Emergency Freeze)**: Live `status()` and the two-step panic button on one page, reachable by URL without navigating.
 
 ### Key Components & Actions
 

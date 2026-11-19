@@ -23,5 +23,6 @@
 - [Glossary](glossary.md)
 - [Testnet Verification](verification.md)
 - [Enforcement Scope](enforcement-scope.md)
+- [Security Claims Map](security-claims.md)
 - [Contributing](contributing.md)
 - [FAQ](faq.md)
