@@ -17,12 +17,30 @@ export interface FleetRow {
   retry?: () => Promise<FleetRow>;
 }
 
+/**
+ * How many guard snapshots the fleet reads at once.
+ *
+ * Each snapshot is several RPC calls, and a registry of hundreds of guards read
+ * all at once is an RPC burst that public endpoints rate-limit and slow ones
+ * time out on. Reads beyond the cap wait for a slot, so refresh time grows
+ * linearly with registry size instead of the endpoint falling over. See
+ * `docs/guides/fleet-refresh.md` for the measured behaviour.
+ */
+export const FLEET_POLL_CONCURRENCY = 6;
+
+/**
+ * Read every guard in the fleet, at most `concurrency` at a time, and return
+ * one row per contact in the order given. A failed read is a row with an
+ * error, never a rejection, so one bad guard cannot blank the table.
+ */
 export async function pollFleet(
   server: rpc.Server,
   contacts: Contact[],
   _readSnapshot = guardOps.readGuardSnapshot,
+  concurrency: number = FLEET_POLL_CONCURRENCY,
 ): Promise<FleetRow[]> {
-  const promises = contacts.map(async (contact) => {
+  const limit = Math.max(1, Math.floor(concurrency));
+  const readRow = async (contact: Contact): Promise<FleetRow> => {
     try {
       const snapshot = await _readSnapshot(server, contact.address);
       let derivedStatus: DerivedStatus = "Unknown";
@@ -80,9 +98,18 @@ export async function pollFleet(
         },
       };
     }
-  });
+  };
 
-  return Promise.all(promises);
+  const rows = new Array<FleetRow>(contacts.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < contacts.length) {
+      const index = next++;
+      rows[index] = await readRow(contacts[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, contacts.length) }, worker));
+  return rows;
 }
 
 export function filterFleet(

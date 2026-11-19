@@ -19,6 +19,8 @@
 - [Guides](guides/)
   - [Agent Integration](guides/agent-integration.md)
   - [Air-Gapped Multisig Signing](guides/air-gapped-multisig-signing.md)
+  - [Fleet Refresh at Scale](guides/fleet-refresh.md)
+  - [Large Allowlists](guides/large-allowlists.md)
 - [Architecture](architecture.md)
 - [Glossary](glossary.md)
 - [Testnet Verification](verification.md)

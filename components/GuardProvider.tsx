@@ -123,6 +123,7 @@ import {
   DEMO_BASE_LEDGER,
   DEMO_GUARD,
   DEMO_INSTANCE,
+  DEMO_READ_ONLY_TEXT,
   demoEvents,
   demoFlagFromQuery,
   demoSnapshot,
@@ -710,6 +711,12 @@ export function GuardProvider({
   const connect = useCallback(
     async (preferred?: WalletProviderId) => {
       const id = preferred ?? providerId ?? "freighter";
+      // Demo mode is read-only on every route, including a write route opened
+      // directly: no wallet means nothing can be signed or submitted.
+      if (demoRef.current) {
+        setWalletError(DEMO_READ_ONLY_TEXT);
+        return;
+      }
       setConnecting(true);
       setWalletError(null);
       setNetworkMismatch(null);
