@@ -193,8 +193,17 @@ run, because local data is not a substitute for the live read.
 When the tracker reports **Ready to submit**:
 
 1. Open **Submit Signed XDR**.
-2. Paste the fully signed envelope (the one whose hash matches the hash from step 2).
-3. Before pressing **Submit to Network**, complete the final review:
+2. Paste the fully signed envelope (the one whose hash matches the hash from step 2). The review
+   box shows the envelope's network identity: the **selected network** (name and passphrase), its
+   **network ID** (the SHA-256 of the passphrase that every signature commits to), the network the
+   source signature **verifies on**, the **transaction hash on the selected network**, and the
+   decoded operation list.
+3. Select **Check envelope**. The check records exactly those bytes and that hash for the selected
+   network. **Submit to Network** stays disabled for an envelope signed for another network, and at
+   submission the console re-derives the identity from the same bytes and refuses — without
+   broadcasting — if the envelope, the selected network or the hash changed since the check. The
+   envelope is never edited or rebuilt: the bytes broadcast are the bytes reviewed.
+4. Before pressing **Submit to Network**, complete the final review:
 
    - [ ] The hash shown by the tracker matches the hash in the envelope you are about to submit.
    - [ ] The network indicator still matches the network the envelope was built for.
@@ -204,7 +213,7 @@ When the tracker reports **Ready to submit**:
          bump, or fee-bump wrapper was introduced during the hand-off.
    - [ ] The tracker's verdict is **Ready to submit**, not "pending".
 
-4. Submit. A successful submission returns a transaction hash; the network has accepted the
+5. Submit. A successful submission returns a transaction hash; the network has accepted the
    envelope for inclusion, not necessarily executed it yet.
 
 ---

@@ -13,9 +13,18 @@ import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 import { IDLE_TIMEOUT_OPTIONS } from "../lib/guard/useIdleTimer.ts";
 import {
   WALLET_PROVIDERS,
+  readWalletScope,
   walletProviderDescriptor,
   type WalletProviderId,
+  type WalletScope,
 } from "../lib/guard/walletConnector.ts";
+import {
+  SIGNING_PATH_BOUNDARY,
+  SIGNING_STEPS,
+  signingPathsFor,
+  supportLabel,
+  type SigningPath,
+} from "../lib/guard/signingPaths.ts";
 import {
   describeMismatch,
   describeSwitchOutcome,
@@ -247,6 +256,14 @@ export function WalletBar() {
               </>
             )}
           </div>
+
+          {wallet && providerId && (
+            <CurrentSigningPaths
+              providerId={providerId}
+              availableProviders={availableProviders}
+              onShowAlternatives={() => setPickerOpen(true)}
+            />
+          )}
 
           {interruptionGuidance && (
             <div className="notice warn" role="alert" data-testid="write-interruption">
@@ -537,13 +554,23 @@ export function WalletPickerModal({
   connecting,
   onClose,
   onChoose,
+  scope,
 }: {
   availableProviders: WalletProviderId[];
   currentProvider: WalletProviderId | null;
   connecting: boolean;
   onClose: () => void;
   onChoose: (provider: WalletProviderId) => void;
+  /** The injected wallet objects; defaults to the live window (read, never called). */
+  scope?: Pick<WalletScope, "xbull"> | null;
 }) {
+  const paths = signingPathsFor({
+    availableProviders,
+    currentProvider,
+    scope: scope === undefined ? readWalletScope() : scope,
+  });
+  const pathFor = (id: WalletProviderId): SigningPath => paths.find((path) => path.id === id)!;
+  const external = paths.find((path) => path.kind === "external")!;
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -571,6 +598,7 @@ export function WalletPickerModal({
                   <strong>{descriptor.name}</strong>
                   {isCurrent && <span className="pill ok"> current</span>}
                   <div className="tiny muted">{descriptor.blurb}</div>
+                  <SigningStepList path={pathFor(descriptor.id)} />
                 </div>
                 <div className="row">
                   {detected ? (
@@ -593,7 +621,15 @@ export function WalletPickerModal({
               </div>
             );
           })}
+          <div data-testid="signing-path-external-xdr">
+            <strong>{external.name}</strong>
+            <div className="tiny muted">{external.how}</div>
+            <SigningStepList path={external} />
+          </div>
         </div>
+        <p className="tiny muted" data-testid="signing-path-boundary" style={{ marginTop: 10 }}>
+          {SIGNING_PATH_BOUNDARY}
+        </p>
         <div className="row" style={{ marginTop: 12 }}>
           <button className="secondary" onClick={onClose}>
             Cancel
@@ -603,6 +639,67 @@ export function WalletPickerModal({
           </span>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * One path's support for each signature a guard write can need (issue #517).
+ * An unsupported or unchecked step carries its reason inline, so the operator
+ * learns why before choosing the path rather than at the wallet prompt.
+ */
+function SigningStepList({ path }: { path: SigningPath }) {
+  return (
+    <ul
+      className="tiny"
+      data-testid={`signing-steps-${path.id}`}
+      style={{ margin: "4px 0 0 16px", padding: 0 }}
+    >
+      {SIGNING_STEPS.map((step) => {
+        const support = path.steps[step.id];
+        return (
+          <li key={step.id} data-step={step.id} data-support={support.support}>
+            {step.label}: {supportLabel(support.support)}
+            {support.reason && <span className="muted"> — {support.reason}</span>}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/**
+ * The connected wallet's signing paths for a guard write, with a way to see the
+ * alternatives. Rendered only while a wallet is connected; the picker carries
+ * the full list for everyone else.
+ */
+function CurrentSigningPaths({
+  providerId,
+  availableProviders,
+  onShowAlternatives,
+}: {
+  providerId: WalletProviderId;
+  availableProviders: WalletProviderId[];
+  onShowAlternatives: () => void;
+}) {
+  const path = signingPathsFor({
+    availableProviders,
+    currentProvider: providerId,
+    scope: readWalletScope(),
+  }).find((candidate) => candidate.id === providerId);
+  if (!path) return null;
+  return (
+    <div className="tiny" data-testid="current-signing-paths" style={{ marginTop: 6 }}>
+      <span className="muted">Signing paths for guard writes with {path.name}:</span>
+      <SigningStepList path={path} />
+      <button
+        type="button"
+        className="secondary"
+        style={{ padding: "4px 8px", fontSize: "0.8em", marginTop: 4 }}
+        onClick={onShowAlternatives}
+      >
+        Show alternatives
+      </button>
     </div>
   );
 }

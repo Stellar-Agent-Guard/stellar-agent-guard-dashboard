@@ -32,6 +32,7 @@ import { deriveSetupSteps, readSetupState, writeSetupState } from "../lib/guard/
 import { isDemoMode } from "../lib/guard/demoFixtures.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, short } from "./bits.tsx";
+import { FirstReadCheck } from "./FirstReadCheck.tsx";
 
 const MARKER: Record<string, string> = { done: "✓", pending: "○", error: "!" };
 const STATE_TEXT: Record<string, string> = { done: "Done", pending: "Pending", error: "Error" };
@@ -246,6 +247,8 @@ export function SetupWizard() {
         except that you dismissed it and the address predicted at deploy time. A step cannot stay
         green after the chain says otherwise.
       </p>
+
+      <FirstReadCheck />
 
       <ol className="setup-steps" data-testid="setup-steps" aria-label="Post-deploy setup steps">
         {steps.map((step) => (

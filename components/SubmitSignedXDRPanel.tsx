@@ -13,6 +13,11 @@ import { createHorizonServer, readAccountSigners } from "../lib/guard/multisigRe
 import { inspectSignedEnvelope } from "../lib/guard/submit.ts";
 import { reviewedAccountCheck } from "../lib/guard/writeReview.ts";
 import { currentAddress } from "../lib/guard/wallet.ts";
+import {
+  confirmReviewedEnvelope,
+  decodeEnvelopeIdentity,
+  type ReviewedEnvelope,
+} from "../lib/guard/envelopeIdentity.ts";
 
 type MergeReport = Extract<MergeSignedEnvelopesResult, { ok: true }>;
 
@@ -32,22 +37,34 @@ export function SubmitSignedXDRPanel() {
 
   const [preflight, setPreflight] = useState<SignedEnvelopePreflight | null>(null);
   const [checkedEnvelope, setCheckedEnvelope] = useState<string | null>(null);
+  // The identity captured at review time (#520); submission re-derives it from
+  // the exact bytes and refuses on any difference.
+  const [reviewed, setReviewed] = useState<ReviewedEnvelope | null>(null);
   const [checking, setChecking] = useState(false);
   // A pending write is work an app-shell update must not interrupt (#398).
   usePwaActivity(busy || merging, "write");
 
   const inspection = useMemo(() => inspectSignedEnvelope(xdr.trim(), NETWORK.passphrase), [xdr]);
+  const identity = useMemo(() => decodeEnvelopeIdentity(xdr, NETWORK), [xdr]);
 
   async function checkEnvelope() {
     setChecking(true);
     setError(null);
     setPreflight(null);
     setCheckedEnvelope(null);
+    setReviewed(null);
     try {
       const envelope = TransactionBuilder.fromXDR(xdr.trim(), NETWORK.passphrase);
       const result = await preflightSignedEnvelope(server, envelope);
       setPreflight(result);
       setCheckedEnvelope(xdr.trim());
+      if (identity.ok) {
+        setReviewed({
+          xdr: xdr.trim(),
+          passphrase: identity.selected.passphrase,
+          transactionHash: identity.transactionHash,
+        });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -64,11 +81,18 @@ export function SubmitSignedXDRPanel() {
       setError("Check this envelope against the latest account and ledger before submitting.");
       return;
     }
+    // The broadcast bytes must be the reviewed bytes, for the selected network,
+    // with the same transaction hash (#520). Any difference stops here.
+    const confirmation = confirmReviewedEnvelope(reviewed, xdr, NETWORK.passphrase);
+    if (!confirmation.ok) {
+      setError(confirmation.reason);
+      return;
+    }
     setBusy(true);
     setError(null);
     setSuccessHash(null);
     try {
-      const tx = TransactionBuilder.fromXDR(xdr.trim(), NETWORK.passphrase);
+      const tx = confirmation.transaction;
       // The review names one account — the source it was checked against. A
       // wallet that has since moved elsewhere must not broadcast the envelope
       // that review was for (issue #349). This surface asks the wallet for no
@@ -91,6 +115,7 @@ export function SubmitSignedXDRPanel() {
       setXdr("");
       setPreflight(null);
       setCheckedEnvelope(null);
+      setReviewed(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -259,6 +284,7 @@ export function SubmitSignedXDRPanel() {
           setXdr(e.target.value);
           setPreflight(null);
           setCheckedEnvelope(null);
+          setReviewed(null);
           setError(null);
         }}
         placeholder="Paste signed transaction XDR here (base64)"
@@ -305,6 +331,48 @@ export function SubmitSignedXDRPanel() {
               {inspection.signaturesCount} signature{inspection.signaturesCount === 1 ? "" : "s"}
             </span>
           </div>
+
+          {identity.ok && (
+            <dl className="tiny" data-testid="network-identity" style={{ margin: "8px 0" }}>
+              <dt>
+                <strong>Selected network</strong>
+              </dt>
+              <dd className="mono breakable" data-testid="identity-selected">
+                {identity.selected.name} · {identity.selected.passphrase}
+              </dd>
+              <dt>
+                <strong>Network ID</strong>
+              </dt>
+              <dd className="mono breakable">{identity.selected.networkId}</dd>
+              <dt>
+                <strong>Signature verifies on</strong>
+              </dt>
+              <dd className="mono breakable" data-testid="identity-signed-for">
+                {identity.signedFor
+                  ? `${identity.signedFor.name} · ${identity.signedFor.passphrase}`
+                  : "No known network (unsigned, or not signed by the source account)"}
+              </dd>
+              <dt>
+                <strong>Transaction hash on {identity.selected.name}</strong>
+              </dt>
+              <dd className="mono breakable">{identity.transactionHash}</dd>
+              <dt>
+                <strong>Operations</strong>
+              </dt>
+              <dd>
+                <ol
+                  style={{ margin: "4px 0", paddingLeft: "20px" }}
+                  data-testid="identity-operations"
+                >
+                  {identity.operations.map((operation, index) => (
+                    <li key={index} className="mono">
+                      {operation}
+                    </li>
+                  ))}
+                </ol>
+              </dd>
+            </dl>
+          )}
 
           {inspection.verifiedFields.length > 0 && (
             <div style={{ marginTop: "8px" }}>
