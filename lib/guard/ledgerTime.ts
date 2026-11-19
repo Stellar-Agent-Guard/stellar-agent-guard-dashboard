@@ -262,3 +262,35 @@ export function resolveReferenceTime(
     authoritative: ageSecs <= maxAgeSecs,
   };
 }
+
+/** The label of a preset, for announcements. */
+export function presetLabel(preset: RangePreset): string {
+  return RANGE_PRESETS.find((entry) => entry.id === preset)?.label ?? preset;
+}
+
+/**
+ * A range that reaches into the future cannot be queried: the chain has no
+ * events there, and a silently empty result would read as "nothing happened".
+ * Returns the message to show, or null. The picker also sets `max` on its
+ * inputs so the same dates are exposed as unavailable before submit.
+ */
+export function futureBoundError(range: TimeRange, nowSecs: number): string | null {
+  if (range.fromUnixSecs !== null && range.fromUnixSecs > nowSecs) {
+    return "The start date is in the future, and the chain has no events there.";
+  }
+  if (range.toUnixSecs !== null && range.toUnixSecs > nowSecs) {
+    return "The end date is in the future, and the chain has no events there.";
+  }
+  return null;
+}
+
+/** A spoken description of an applied custom range: "from X to Y" with either end optional. */
+export function describeAppliedRange(range: TimeRange): string {
+  const from = range.fromUnixSecs === null ? null : unixSecsToDatetimeLocal(range.fromUnixSecs);
+  const to = range.toUnixSecs === null ? null : unixSecsToDatetimeLocal(range.toUnixSecs);
+  const text = (value: string): string => value.replace("T", " ");
+  if (from && to) return `from ${text(from)} to ${text(to)}`;
+  if (from) return `from ${text(from)} until now`;
+  if (to) return `up to ${text(to)}`;
+  return "with no bounds";
+}

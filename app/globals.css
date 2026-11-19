@@ -1689,3 +1689,55 @@ code {
   display: block;
   margin-top: 2px;
 }
+
+/* Telemetry row action menu (#533): rendered inline, never a floating popup, so a
+ * scrolling table cannot clip it. Items are full-width buttons for a real target. */
+.row-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+
+.row-menu-list button {
+  text-align: left;
+  min-height: 32px;
+}
+
+.row-menu-details {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.row-menu-details dd {
+  margin: 0 0 4px;
+}
+
+/* A failed fleet read prints its reason in the cell, wrapped, never clipped. */
+.fleet-read-error {
+  margin-top: 4px;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+/* Skip link (#534): first focusable element on every route, visible on focus. */
+.skip-link {
+  position: absolute;
+  left: 8px;
+  top: -48px;
+  z-index: 100;
+  padding: 8px 12px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+}
+
+.skip-link:focus {
+  top: 8px;
+}

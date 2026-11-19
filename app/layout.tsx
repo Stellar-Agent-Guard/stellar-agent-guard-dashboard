@@ -69,6 +69,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <ToastContainer />
           <SecretKeyGuard />
           <UnsavedChangesProvider>
+            <a className="skip-link" href="#main-content">
+              Skip to main content
+            </a>
             <div className="shell">
               <DemoBadge />
               <header className="top">
@@ -91,7 +94,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <Tabs />
                 <ThemeToggle />
               </div>
-              {children}
+              <main id="main-content" tabIndex={-1}>
+                {children}
+              </main>
             </div>
           </UnsavedChangesProvider>
         </ThemeProvider>
