@@ -86,6 +86,13 @@ export function FleetTable() {
   const { search, network: networkFilter, status: statusFilter, sortKey, sortDirection } = view;
   const updateView = (patch: Partial<FleetViewState>) => fleetViewStore.set({ ...view, ...patch });
 
+  // The saved registry, as this tab knows it. GuardProvider updates `instances`
+  // when another tab adds or removes a guard (REGISTRY_CHANGED), so keying the
+  // read on it re-reads at once: an addition made elsewhere appears without
+  // waiting for the poll, and a removal made elsewhere is not resurrected by a
+  // stale row list (issue #545).
+  const registryKey = instances.map((instance) => instance.guard).join(",");
+
   useEffect(() => {
     let mounted = true;
     const fetchFleet = async () => {
@@ -108,7 +115,7 @@ export function FleetTable() {
       mounted = false;
       clearInterval(interval);
     };
-  }, [server, refreshKey]);
+  }, [server, refreshKey, registryKey]);
 
   // Derived from the rows as last read, so a poll that changes a guard's status
   // immediately moves it in or out of the filtered, sorted view.

@@ -381,6 +381,9 @@ export function GuardProvider({
   );
   const [availableProviders, setAvailableProviders] = useState<WalletProviderId[]>([]);
   const [networkMismatch, setNetworkMismatch] = useState<NetworkMismatch | null>(null);
+  // The network the wallet last reported, from any connect attempt (including a
+  // refused, mismatched one). A change is a network switch: see the effect below.
+  const [walletNetwork, setWalletNetwork] = useState<string | null>(null);
   // The connector that produced the current session. Kept in a ref because a
   // re-render must never rebuild it — a fresh connector has not been granted
   // access, and rebuilding on render would prompt the operator again.
@@ -716,6 +719,7 @@ export function GuardProvider({
       try {
         const connector = createWalletConnector(id, scope);
         const connection = await connector.connect();
+        setWalletNetwork(connection.network.passphrase);
         const mismatch = detectNetworkMismatch(connection.network.passphrase, NETWORK.passphrase, {
           targetNetwork: NETWORK.name,
           walletNetwork: connection.network.name,
@@ -851,6 +855,27 @@ export function GuardProvider({
   // with the guard and wallet, so it reaches it through a ref rather than
   // forcing a re-subscription (and a possible missed event) on every change.
   const refreshRef = useRef(refresh);
+
+  /*
+   * A network switch invalidates every cached guard summary (issue #544).
+   *
+   * When the wallet moves to another network — into a mismatch, or back out of
+   * one — nothing read before the switch may stay on screen as if it were
+   * current: the epoch is bumped so any read still in flight is dropped, the
+   * snapshot is cleared so every panel shows its loading state, and a fresh
+   * read is started. Presentation preferences (layout, density, theme) live in
+   * their own stores and are deliberately untouched.
+   */
+  const previousWalletNetwork = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = previousWalletNetwork.current;
+    previousWalletNetwork.current = walletNetwork;
+    if (previous === null || walletNetwork === null || previous === walletNetwork) return;
+    readEpochRef.current += 1;
+    setSnapshot(null);
+    setSnapshotError(null);
+    void refreshRef.current();
+  }, [walletNetwork]);
   useEffect(() => {
     refreshRef.current = refresh;
   }, [refresh]);
