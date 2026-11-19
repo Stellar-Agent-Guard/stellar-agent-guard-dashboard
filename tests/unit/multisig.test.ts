@@ -6,11 +6,13 @@ import {
   approvalPercent,
   approvalSummary,
   evaluateApprovalState,
+  mergeSignedEnvelopes,
   pendingSigners,
   remainingWeightSummary,
   signerRuleChanges,
   type MultisigSigner,
   type MultisigThresholds,
+  type SignedEnvelopeInput,
 } from "../../lib/guard/multisig.ts";
 import {
   defaultSignerLabel,
@@ -20,7 +22,18 @@ import {
   signerKind,
   unmatchedSignatures,
 } from "../../lib/guard/multisigRead.ts";
-import { Account, Keypair, Networks, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
+import { toHex } from "../../lib/guard/scval.ts";
+import {
+  Account,
+  Address,
+  Keypair,
+  Memo,
+  Networks,
+  Operation,
+  Transaction,
+  TransactionBuilder,
+  xdr,
+} from "@stellar/stellar-sdk";
 
 const ADMIN_1 = "GC7CKKC2QRWJ3DPVNJKGJSDIQLT2WCY5V2G2SWJADAVDWDKYZB4BQKQV";
 const ADMIN_2 = "GAXGJECHBVKN2SXTBWKTWAK5DABQ7AX7VACXZYPV5XJDNG5XLLH5JHOG";
@@ -513,6 +526,485 @@ test("Horizon signer types map onto tracker signer kinds", () => {
   assert.equal(signerKind("something_new"), "unknown");
 });
 
+/* ─────────────────────── partial-envelope merge (issue #372) ──────────────── */
+
+/** Build an unsigned transaction with only the fields a merge compares. */
+function unsignedEnvelope(
+  options: {
+    source?: Keypair;
+    sequence?: string;
+    fee?: string;
+    passphrase?: string;
+    destination?: string;
+    timeout?: number;
+  } = {},
+): { xdr: string; source: Keypair } {
+  const source = options.source ?? Keypair.random();
+  const tx = new TransactionBuilder(new Account(source.publicKey(), options.sequence ?? "0"), {
+    fee: options.fee ?? "100",
+    networkPassphrase: options.passphrase ?? Networks.TESTNET,
+  })
+    .addOperation(
+      Operation.accountMerge({
+        destination: options.destination ?? Keypair.random().publicKey(),
+      }),
+    )
+    .setTimeout(options.timeout ?? 30)
+    .build();
+  return { xdr: tx.toXDR(), source };
+}
+
+/** Sign a fresh copy of the same unsigned envelope, producing a partial variant. */
+function signedVariant(
+  unsignedXdr: string,
+  signer: Keypair,
+  passphrase: string = Networks.TESTNET,
+): string {
+  const tx = TransactionBuilder.fromXDR(unsignedXdr, passphrase) as Transaction;
+  tx.sign(signer);
+  return tx.toXDR();
+}
+
+test("merging compatible partial envelopes preserves both unique signatures", () => {
+  const one = Keypair.random();
+  const two = Keypair.random();
+  const unsigned = unsignedEnvelope();
+  const first = signedVariant(unsigned.xdr, one);
+  const second = signedVariant(unsigned.xdr, two);
+
+  const result = mergeSignedEnvelopes({
+    envelopes: [
+      { xdr: first, label: "Laptop" },
+      { xdr: second, label: "Safe room" },
+    ],
+    networkPassphrase: Networks.TESTNET,
+  });
+  assert.ok(result.ok);
+  assert.equal(result.facts.source, unsigned.source.publicKey());
+  assert.equal(result.signatures.length, 2);
+  // Signatures are sorted by hint, so the input labels are not in a fixed
+  // order; each one must still be attributed to its own envelope.
+  assert.deepEqual(result.signatures.map((signature) => signature.sources[0]).sort(), [
+    "Laptop",
+    "Safe room",
+  ]);
+  assert.equal(result.networkPassphrase, Networks.TESTNET);
+
+  const merged = TransactionBuilder.fromXDR(result.mergedXdr, Networks.TESTNET) as Transaction;
+  assert.equal(merged.signatures.length, 2);
+  assert.equal(merged.source, unsigned.source.publicKey());
+  assert.equal(merged.operations.length, 1);
+});
+
+test("merged output is deterministic regardless of input order", () => {
+  const one = Keypair.random();
+  const two = Keypair.random();
+  const unsigned = unsignedEnvelope();
+  const a = signedVariant(unsigned.xdr, one);
+  const b = signedVariant(unsigned.xdr, two);
+
+  const forward = mergeSignedEnvelopes({
+    envelopes: [
+      { xdr: a, label: "A" },
+      { xdr: b, label: "B" },
+    ],
+    networkPassphrase: Networks.TESTNET,
+  });
+  const reverse = mergeSignedEnvelopes({
+    envelopes: [
+      { xdr: b, label: "B" },
+      { xdr: a, label: "A" },
+    ],
+    networkPassphrase: Networks.TESTNET,
+  });
+  assert.ok(forward.ok);
+  assert.ok(reverse.ok);
+  assert.equal(forward.mergedXdr, reverse.mergedXdr);
+  assert.deepEqual(
+    forward.signatures.map((signature) => signature.signature),
+    reverse.signatures.map((signature) => signature.signature),
+  );
+});
+
+test("a repeated signature is counted once and reported as a duplicate", () => {
+  const signer = Keypair.random();
+  const signed = signedVariant(unsignedEnvelope().xdr, signer);
+  const result = mergeSignedEnvelopes({
+    envelopes: [
+      { xdr: signed, label: "First copy" },
+      { xdr: signed, label: "Second copy" },
+    ],
+    networkPassphrase: Networks.TESTNET,
+  });
+  assert.ok(result.ok);
+  assert.equal(result.signatures.length, 1);
+  assert.equal(result.duplicates.length, 1);
+  assert.deepEqual(result.duplicates[0]?.sources, ["First copy", "Second copy"]);
+});
+
+test("signatures are verified against the network hash when signers are known", () => {
+  const one = Keypair.random();
+  const two = Keypair.random();
+  const unsigned = unsignedEnvelope();
+
+  const result = mergeSignedEnvelopes({
+    envelopes: [
+      { xdr: signedVariant(unsigned.xdr, one) },
+      { xdr: signedVariant(unsigned.xdr, two) },
+    ],
+    networkPassphrase: Networks.TESTNET,
+    signers: [one.publicKey(), two.publicKey()],
+  });
+  assert.ok(result.ok);
+  assert.deepEqual(
+    result.signatures.map((signature) => signature.verification),
+    ["verified", "verified"],
+  );
+});
+
+test("a different transaction body is refused, not merged", () => {
+  const one = Keypair.random();
+  const source = Keypair.random();
+  const base = unsignedEnvelope({ source });
+  const otherSequence = unsignedEnvelope({ source, sequence: "1" });
+  const otherDestination = unsignedEnvelope({ source });
+  const otherTimeout = unsignedEnvelope({ source, timeout: 60 });
+
+  const sequence = mergeSignedEnvelopes({
+    envelopes: [
+      { xdr: signedVariant(base.xdr, one), label: "Base" },
+      { xdr: signedVariant(otherSequence.xdr, one), label: "Other sequence" },
+    ],
+    networkPassphrase: Networks.TESTNET,
+  });
+  assert.equal(sequence.ok, false);
+  if (!sequence.ok) {
+    assert.match(sequence.error, /sequence number/);
+    assert.deepEqual(sequence.mismatches[0]?.fields.includes("sequence number"), true);
+  }
+
+  const ops = mergeSignedEnvelopes({
+    envelopes: [
+      { xdr: signedVariant(base.xdr, one) },
+      { xdr: signedVariant(otherDestination.xdr, one) },
+    ],
+    networkPassphrase: Networks.TESTNET,
+  });
+  assert.equal(ops.ok, false);
+  if (!ops.ok) assert.match(ops.error, /memo, operations, or authorization payload/);
+
+  const bounds = mergeSignedEnvelopes({
+    envelopes: [
+      { xdr: signedVariant(base.xdr, one) },
+      { xdr: signedVariant(otherTimeout.xdr, one) },
+    ],
+    networkPassphrase: Networks.TESTNET,
+  });
+  assert.equal(bounds.ok, false);
+  if (!bounds.ok) assert.match(bounds.error, /time bounds/);
+});
+
+test("a different source account is refused before any signature is combined", () => {
+  const one = Keypair.random();
+  const base = unsignedEnvelope();
+  const other = unsignedEnvelope();
+  const result = mergeSignedEnvelopes({
+    envelopes: [
+      { xdr: signedVariant(base.xdr, one), label: "One" },
+      { xdr: signedVariant(other.xdr, one), label: "Two" },
+    ],
+    networkPassphrase: Networks.TESTNET,
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.error, /source account/);
+});
+
+test("a signature made on another network is rejected when signers are supplied", () => {
+  const signer = Keypair.random();
+  const publicEnvelope = unsignedEnvelope({ passphrase: Networks.PUBLIC });
+  const signedForPublic = signedVariant(publicEnvelope.xdr, signer, Networks.PUBLIC);
+
+  const result = mergeSignedEnvelopes({
+    envelopes: [{ xdr: signedForPublic, label: "Wrong network" }],
+    networkPassphrase: Networks.TESTNET,
+    signers: [signer.publicKey()],
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.error, /does not verify on this network/);
+});
+
+test("malformed and empty inputs are errors, not empty merges", () => {
+  const malformed = mergeSignedEnvelopes({
+    envelopes: [{ xdr: "not-an-envelope" }],
+    networkPassphrase: Networks.TESTNET,
+  });
+  assert.equal(malformed.ok, false);
+  if (!malformed.ok) assert.match(malformed.error, /could not be decoded/);
+
+  const empty = mergeSignedEnvelopes({ envelopes: [], networkPassphrase: Networks.TESTNET });
+  assert.equal(empty.ok, false);
+  if (!empty.ok) assert.match(empty.error, /at least one/);
+});
+
+test("distinct signatures sharing a hint are preserved and reported as a conflict", () => {
+  const signer = Keypair.random();
+  const signed = signedVariant(unsignedEnvelope().xdr, signer);
+  const parsed = TransactionBuilder.fromXDR(signed, Networks.TESTNET) as Transaction;
+  const v1 = (parsed.toEnvelope() as unknown as { v1: xdr.TransactionV1Envelope }).v1;
+  const real = v1.signatures[0]!;
+  const colliding = new xdr.DecoratedSignature({
+    hint: real.hint.value,
+    signature: new Uint8Array(64).fill(7),
+  });
+  const collidingXdr = xdr.TransactionEnvelope.envelopeTypeTx(
+    new xdr.TransactionV1Envelope({ tx: v1.tx, signatures: [colliding] }),
+  ).toXDR("base64");
+
+  const result = mergeSignedEnvelopes({
+    envelopes: [
+      { xdr: signed, label: "Real" },
+      { xdr: collidingXdr, label: "Collision" },
+    ],
+    networkPassphrase: Networks.TESTNET,
+  });
+  assert.ok(result.ok);
+  assert.equal(result.signatures.length, 2);
+  assert.equal(result.conflicts.length, 1);
+  assert.equal(result.conflicts[0]?.hint, bytesToHexLocal(real.hint.value));
+  assert.equal(result.conflicts[0]?.signatures.length, 2);
+  assert.deepEqual(result.conflicts[0]?.sources, ["Collision", "Real"]);
+});
+
+function bytesToHexLocal(bytes: Uint8Array): string {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+// ── Issue #373: merging signatures must not change transaction intent ───────
+
+const MERGE_GUARD = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+const MERGE_SOURCE = Keypair.random();
+
+function mergeAuthEntry(nonce: bigint): xdr.SorobanAuthorizationEntry {
+  const contractId = Address.fromString(MERGE_GUARD).toScAddress();
+  const invocation = new xdr.InvokeContractArgs({
+    contractAddress: contractId,
+    functionName: "set_policy",
+    args: [],
+  });
+  const fn = xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(invocation);
+  const rootInvocation = new xdr.SorobanAuthorizedInvocation({
+    function: fn,
+    subInvocations: [],
+  });
+  const credentials = xdr.SorobanCredentials.sorobanCredentialsAddress(
+    new xdr.SorobanAddressCredentials({
+      address: contractId,
+      nonce,
+      signatureExpirationLedger: 100,
+      signature: xdr.ScVal.scvVoid(),
+    }),
+  );
+  return new xdr.SorobanAuthorizationEntry({ credentials, rootInvocation });
+}
+
+function buildMergeTransaction(
+  options: {
+    source?: Keypair;
+    networkPassphrase?: string;
+    fee?: string;
+    sequence?: string;
+    memo?: string;
+    extraOperation?: boolean;
+    authNonce?: bigint;
+  } = {},
+) {
+  const invocation = new xdr.InvokeContractArgs({
+    contractAddress: Address.fromString(MERGE_GUARD).toScAddress(),
+    functionName: "set_policy",
+    args: [],
+  });
+  const builder = new TransactionBuilder(
+    new Account((options.source ?? MERGE_SOURCE).publicKey(), options.sequence ?? "0"),
+    {
+      fee: options.fee ?? "100",
+      networkPassphrase: options.networkPassphrase ?? Networks.TESTNET,
+    },
+  )
+    .addOperation(Operation.manageData({ name: "action", value: "freeze" }))
+    .addOperation(
+      Operation.invokeHostFunction({
+        func: xdr.HostFunction.hostFunctionTypeInvokeContract(invocation),
+        auth: [mergeAuthEntry(options.authNonce ?? 1n)],
+      }),
+    )
+    .setTimeout(30);
+  if (options.memo) builder.addMemo(Memo.text(options.memo));
+  if (options.extraOperation) {
+    builder.addOperation(Operation.manageData({ name: "extra", value: "1" }));
+  }
+  return builder.build();
+}
+
+function signedMergeEnvelope(
+  transaction: ReturnType<typeof buildMergeTransaction>,
+  ...keys: Keypair[]
+): SignedEnvelopeInput {
+  const copy = TransactionBuilder.fromXDR(transaction.toXDR(), Networks.TESTNET);
+  for (const key of keys) copy.sign(key);
+  return { xdr: copy.toXDR(), networkPassphrase: Networks.TESTNET };
+}
+
+function transactionBodyXdr(xdrString: string): string {
+  const envelope = xdr.TransactionEnvelope.fromXDR(xdrString, "base64");
+  assert.equal(envelope.type, "envelopeTypeTx");
+  if (envelope.type !== "envelopeTypeTx") throw new Error("not a v1 envelope");
+  return envelope.v1.tx.toXDR("base64");
+}
+
+test("merging changes only signature material; the transaction body and hash stay identical", () => {
+  const unsigned = buildMergeTransaction();
+  const bodyBefore = transactionBodyXdr(unsigned.toXDR());
+  const hashBefore = toHex(new Uint8Array(unsigned.hash()));
+  const admin1 = Keypair.random();
+  const admin2 = Keypair.random();
+
+  const merged = mergeSignedEnvelopes(
+    signedMergeEnvelope(unsigned, admin1),
+    signedMergeEnvelope(unsigned, admin2),
+  );
+  assert.equal(merged.ok, true);
+  if (!merged.ok) return;
+
+  assert.equal(merged.addedSignatures, 1);
+  assert.equal(merged.duplicateSignatures, 0);
+  assert.equal(merged.totalSignatures, 2);
+  assert.equal(merged.hash, hashBefore);
+
+  // Re-decode the merged envelope: the body the signers approved is byte-for-byte
+  // the same, including operations and their Soroban auth entries.
+  assert.equal(transactionBodyXdr(merged.envelopeXdr), bodyBefore);
+  const decoded = xdr.TransactionEnvelope.fromXDR(merged.envelopeXdr, "base64");
+  assert.equal(decoded.type, "envelopeTypeTx");
+  if (decoded.type !== "envelopeTypeTx") return;
+  assert.equal(decoded.v1.signatures.length, 2);
+  assert.equal(decoded.v1.tx.operations.length, 2);
+  assert.equal(decoded.v1.tx.operations[1]?.body.type, "invokeHostFunction");
+});
+
+test("reordered and duplicate signatures are merged without dropping a unique signer", () => {
+  const unsigned = buildMergeTransaction();
+  const admin1 = Keypair.random();
+  const admin2 = Keypair.random();
+  const base = signedMergeEnvelope(unsigned, admin1);
+
+  // Incoming is ordered admin2 then admin1; admin1 is already present. The
+  // merge keeps admin2 and does not duplicate admin1.
+  const reordered = signedMergeEnvelope(unsigned, admin2, admin1);
+  const merged = mergeSignedEnvelopes(base, reordered);
+  assert.equal(merged.ok, true);
+  if (!merged.ok) return;
+  assert.equal(merged.addedSignatures, 1);
+  assert.equal(merged.duplicateSignatures, 1);
+  assert.equal(merged.totalSignatures, 2);
+
+  const baseAgain = mergeSignedEnvelopes(base, base);
+  assert.equal(baseAgain.ok, true);
+  if (!baseAgain.ok) return;
+  assert.equal(baseAgain.addedSignatures, 0);
+  assert.equal(baseAgain.duplicateSignatures, 1);
+  assert.equal(baseAgain.totalSignatures, 1);
+});
+
+test("distinct signatures with the same 4-byte hint are both retained", () => {
+  const unsigned = buildMergeTransaction();
+  const base = signedMergeEnvelope(unsigned, Keypair.random());
+  const envelope = xdr.TransactionEnvelope.fromXDR(base.xdr, "base64");
+  assert.equal(envelope.type, "envelopeTypeTx");
+  if (envelope.type !== "envelopeTypeTx") return;
+
+  // Same hint, different signature bytes: a hint-only dedupe would drop this,
+  // silently losing a signer whose full signature is unique.
+  const sameHint = envelope.v1.signatures[0]!.hint;
+  const synthetic = new xdr.DecoratedSignature({
+    hint: sameHint,
+    signature: new Uint8Array(64).fill(9),
+  });
+  const incoming = xdr.TransactionEnvelope.envelopeTypeTx(
+    new xdr.TransactionV1Envelope({ tx: envelope.v1.tx, signatures: [synthetic] }),
+  );
+
+  const merged = mergeSignedEnvelopes(base, {
+    xdr: incoming.toXDR("base64"),
+    networkPassphrase: Networks.TESTNET,
+  });
+  assert.equal(merged.ok, true);
+  if (!merged.ok) return;
+  assert.equal(merged.addedSignatures, 1, "a unique signature is not a duplicate of its hint");
+  assert.equal(merged.totalSignatures, 2);
+});
+
+test("a changed network, fee, sequence, memo, source, operation or auth entry is refused", () => {
+  const unsigned = buildMergeTransaction();
+  const base = signedMergeEnvelope(unsigned, Keypair.random());
+
+  const cases: Array<[string, SignedEnvelopeInput, string]> = [
+    [
+      "network",
+      { ...signedMergeEnvelope(unsigned, Keypair.random()), networkPassphrase: Networks.PUBLIC },
+      "network",
+    ],
+    ["fee", signedMergeEnvelope(buildMergeTransaction({ fee: "200" }), Keypair.random()), "fee"],
+    [
+      "sequence",
+      signedMergeEnvelope(buildMergeTransaction({ sequence: "1" }), Keypair.random()),
+      "sequence number",
+    ],
+    [
+      "memo",
+      signedMergeEnvelope(buildMergeTransaction({ memo: "changed" }), Keypair.random()),
+      "memo",
+    ],
+    [
+      "source",
+      signedMergeEnvelope(buildMergeTransaction({ source: Keypair.random() }), Keypair.random()),
+      "source account",
+    ],
+    [
+      "operations",
+      signedMergeEnvelope(buildMergeTransaction({ extraOperation: true }), Keypair.random()),
+      "operations",
+    ],
+    [
+      "auth",
+      signedMergeEnvelope(buildMergeTransaction({ authNonce: 2n }), Keypair.random()),
+      "Soroban authorization entries",
+    ],
+  ];
+
+  for (const [label, incoming, expected] of cases) {
+    const merged = mergeSignedEnvelopes(base, incoming);
+    assert.equal(merged.ok, false, `${label} must not merge`);
+    if (merged.ok) continue;
+    assert.ok(
+      merged.differences.includes(expected),
+      `${label}: expected "${expected}", got ${merged.differences.join(", ")}`,
+    );
+    assert.match(merged.error, /same transaction/);
+  }
+});
+
+test("a malformed incoming envelope is refused instead of merged", () => {
+  const unsigned = buildMergeTransaction();
+  const base = signedMergeEnvelope(unsigned, Keypair.random());
+  const merged = mergeSignedEnvelopes(base, {
+    xdr: "not-an-envelope",
+    networkPassphrase: Networks.TESTNET,
+  });
+  assert.equal(merged.ok, false);
+  if (merged.ok) return;
+  assert.match(merged.error, /could not be decoded/);
+  assert.deepEqual(merged.differences, []);
+});
 /** Indirection so the test imports the real function while keeping the fake server type honest. */
 async function readAccountSignersForTest(
   server: Horizon.Server,
