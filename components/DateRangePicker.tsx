@@ -16,11 +16,16 @@
  * the presets are mutually exclusive choices.
  */
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
+import { announce } from "../lib/guard/useAnnounce.ts";
 import {
   RANGE_PRESETS,
   datetimeLocalToUnixSecs,
+  describeAppliedRange,
+  futureBoundError,
+  presetLabel,
   resolvePreset,
+  unixSecsToDatetimeLocal,
   validateRange,
   type RangePreset,
   type TimeRange,
@@ -40,6 +45,12 @@ function applyPreset(
 ): void {
   const nowSecs = Math.floor(Date.now() / 1000);
   onApply(resolvePreset(preset, nowSecs), preset);
+  announce(`Showing events from ${presetLabel(preset).toLowerCase()}`);
+}
+
+/** The latest selectable moment, as a datetime-local value. Reads the clock, so it lives here. */
+function latestSelectable(): string {
+  return unixSecsToDatetimeLocal(Math.floor(Date.now() / 1000));
 }
 
 export function DateRangePicker({
@@ -53,6 +64,14 @@ export function DateRangePicker({
   const [fromValue, setFromValue] = useState("");
   const [toValue, setToValue] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // The preset to fall back to when the custom panel is dismissed.
+  const lastPreset = useRef<Exclude<RangePreset, "custom">>("24h");
+  const [maxValue, setMaxValue] = useState<string>(latestSelectable);
+  const fromRef = useRef<HTMLInputElement>(null);
+  const applyRef = useRef<HTMLButtonElement>(null);
+  const radioRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const hintId = useId();
+  const errorId = useId();
 
   const customRange = useMemo<TimeRange>(
     () => ({
@@ -65,7 +84,11 @@ export function DateRangePicker({
   function choosePreset(next: RangePreset) {
     setPreset(next);
     setError(null);
-    if (next !== "custom") {
+    if (next === "custom") {
+      setMaxValue(latestSelectable());
+      announce("Custom range: choose a start and an end date and time, then apply.");
+    } else {
+      lastPreset.current = next;
       // Presets apply immediately: they need no further input, and a telemetry
       // range that requires a second click to take effect reads as broken.
       applyPreset(next, onApply);
@@ -73,23 +96,61 @@ export function DateRangePicker({
   }
 
   function applyCustom() {
-    if (validateRange(customRange) !== null) {
-      setError(validateRange(customRange));
+    const problem =
+      validateRange(customRange) ?? futureBoundError(customRange, Math.floor(Date.now() / 1000));
+    if (problem !== null) {
+      setError(problem);
+      announce(`That range cannot be queried. ${problem}`, "assertive");
+      // The message is next to the inputs; put the operator on the first one to fix.
+      fromRef.current?.focus();
       return;
     }
     setError(null);
     onApply(customRange, "custom");
+    announce(`Showing events ${describeAppliedRange(customRange)}`);
+    applyRef.current?.focus();
+  }
+
+  /** Escape dismisses the custom panel, back to the last preset, with focus on its radio. */
+  function dismissCustom() {
+    const fallback = lastPreset.current;
+    setPreset(fallback);
+    setError(null);
+    announce("Custom range closed");
+    // The inputs unmount with the panel, so focus has to be placed before they go.
+    radioRefs.current["custom"]?.focus();
+  }
+
+  /** Arrow keys move the checked radio, as in a native radio group. */
+  function onRadioKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    const keys: Record<string, number> = {
+      ArrowRight: 1,
+      ArrowDown: 1,
+      ArrowLeft: -1,
+      ArrowUp: -1,
+    };
+    const step = keys[event.key];
+    if (step === undefined) return;
+    event.preventDefault();
+    const target = RANGE_PRESETS[(index + step + RANGE_PRESETS.length) % RANGE_PRESETS.length]!;
+    choosePreset(target.id);
+    radioRefs.current[target.id]?.focus();
   }
 
   return (
     <div className="stack" role="group" aria-label="Telemetry time range">
       <div className="row" role="radiogroup" aria-label="Time range preset">
-        {RANGE_PRESETS.map(({ id, label }) => (
+        {RANGE_PRESETS.map(({ id, label }, index) => (
           <button
             key={id}
+            ref={(node) => {
+              radioRefs.current[id] = node;
+            }}
             type="button"
             role="radio"
             aria-checked={preset === id}
+            tabIndex={preset === id ? 0 : -1}
+            onKeyDown={(event) => onRadioKeyDown(event, index)}
             className="secondary"
             style={
               preset === id ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined
@@ -103,12 +164,29 @@ export function DateRangePicker({
       </div>
 
       {preset === "custom" && (
-        <>
+        <div
+          role="group"
+          aria-label="Custom range"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              dismissCustom();
+            }
+          }}
+        >
+          <p className="tiny muted" id={hintId} style={{ margin: "0 0 6px" }}>
+            Dates after {maxValue.replace("T", " ")} are disabled: the chain has no events from the
+            future. Press Escape to close this panel.
+          </p>
           <div className="row">
             <label className="field" style={{ marginBottom: 0, flex: 1 }}>
               <span className="lbl">From</span>
               <input
+                ref={fromRef}
                 type="datetime-local"
+                max={maxValue}
+                aria-describedby={error ? `${hintId} ${errorId}` : hintId}
+                aria-invalid={error ? true : undefined}
                 value={fromValue}
                 onChange={(event) => {
                   setFromValue(event.target.value);
@@ -122,6 +200,9 @@ export function DateRangePicker({
               <span className="lbl">To</span>
               <input
                 type="datetime-local"
+                max={maxValue}
+                aria-describedby={error ? `${hintId} ${errorId}` : hintId}
+                aria-invalid={error ? true : undefined}
                 value={toValue}
                 onChange={(event) => {
                   setToValue(event.target.value);
@@ -131,17 +212,23 @@ export function DateRangePicker({
                 aria-label="Range end date and time"
               />
             </label>
-            <button onClick={applyCustom} disabled={disabled} style={{ alignSelf: "flex-end" }}>
+            <button
+              ref={applyRef}
+              type="button"
+              onClick={applyCustom}
+              disabled={disabled}
+              style={{ alignSelf: "flex-end" }}
+            >
               Apply range
             </button>
           </div>
           {error && (
-            <div className="error" role="alert">
+            <div className="error" role="alert" id={errorId}>
               <span className="t">That range cannot be queried</span>
               <span className="tiny">{error}</span>
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );

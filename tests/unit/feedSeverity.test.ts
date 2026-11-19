@@ -263,10 +263,10 @@ test("a committed lifecycle row and a diagnostic row are distinguishable", async
 test("severity is an attribute on the row, not a rearrangement of its cells", async () => {
   // No layout shift: the row's child elements and their order are exactly what
   // they were before severity existed — the tier rides on the <tr>'s attributes.
-  // Six cells: Event, Decision, Guard, Source, Time, Transaction.
+  // Seven cells: Event, Decision, Guard, Source, Time, Transaction, Actions.
   const rendered = await renderFeed([BLOCKED, ALLOWED, LIFECYCLE, UNDETERMINED]);
   try {
-    const expected = ["TD", "TD", "TD", "TD", "TD", "TD"];
+    const expected = ["TD", "TD", "TD", "TD", "TD", "TD", "TD"];
     for (const row of rendered.rows()) {
       assert.deepEqual(
         Array.from(row.children).map((cell) => cell.tagName),

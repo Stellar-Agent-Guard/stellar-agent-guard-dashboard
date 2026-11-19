@@ -13,6 +13,7 @@ import { TelemetryAlerts } from "./TelemetryAlerts.tsx";
 import { TelemetryChart } from "./TelemetryChart.tsx";
 import { ErrorBlock, Skeleton, TimeAgo, short, starLink, TxHashCell } from "./bits.tsx";
 import { DateRangePicker } from "./DateRangePicker.tsx";
+import { EventRowMenu } from "./EventRowMenu.tsx";
 import type { RangePreset, TimeRange } from "../lib/guard/ledgerTime.ts";
 import { density, initDensityStore } from "../lib/guard/densityStore.ts";
 import {
@@ -733,6 +734,9 @@ export function TelemetryFeed() {
                     <td>
                       <Skeleton lines={1} />
                     </td>
+                    <td>
+                      <Skeleton lines={1} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -822,6 +826,14 @@ const TelemetryRow = memo(function TelemetryRow({
   // by this operator's zone or by DST; invalid timestamps yield null and the
   // cell falls back to the relative time plus `—`.
   const timestamp = formatEventTimestamp(iso);
+  // The row's context in words, so the action menu's name says which row it is for.
+  const rowContext = [
+    labelFor(event),
+    event.decision ? event.decision.result : null,
+    event.ledger ? `ledger ${event.ledger}` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
   return (
     <tr className={`severity-${severity}`} data-severity={severity} data-stream={event.source}>
       <td data-label="Event">
@@ -885,6 +897,20 @@ const TelemetryRow = memo(function TelemetryRow({
           <span className="tiny muted">none — never broadcast</span>
         )}
       </td>
+      <td data-label="Actions">
+        <EventRowMenu
+          rowLabel={rowContext}
+          contractId={event.contractId ?? null}
+          transactionHash={event.transactionHash ?? null}
+          details={[
+            { label: "Event", value: describeGuardEvent(event) },
+            { label: "Source", value: event.source },
+            { label: "Contract", value: event.contractId ?? "unknown" },
+            { label: "Ledger", value: event.ledger ? String(event.ledger) : "none" },
+            { label: "Transaction", value: event.transactionHash ?? "none, never broadcast" },
+          ]}
+        />
+      </td>
     </tr>
   );
 });
@@ -898,6 +924,7 @@ const feedHead = (
       <th scope="col">Source</th>
       <th scope="col">Time</th>
       <th scope="col">Transaction</th>
+      <th scope="col">Actions</th>
     </tr>
   </thead>
 );

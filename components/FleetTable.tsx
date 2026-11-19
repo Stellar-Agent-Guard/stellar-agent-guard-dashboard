@@ -56,6 +56,13 @@ function skippedCopy(count: number): string {
   return `${count} selected ${noun} kept: a build-seeded guard is a constant of this build and cannot be deleted.`;
 }
 
+/** Why a row could not be read, from either failure shape, or null when it read fine. */
+function readErrorOf(row: FleetRow): string | null {
+  if (row.error) return row.error;
+  if (row.snapshot && !row.snapshot.status.ok) return row.snapshot.status.error;
+  return null;
+}
+
 export function FleetTable() {
   const { wallet, server, instances, guard, removeInstances, restoreRegistry } = useGuard();
   const router = useRouter();
@@ -233,7 +240,11 @@ export function FleetTable() {
 
   const renderError = (error?: string | null) => {
     if (!error) return null;
-    return <span className="pill danger tiny">Read error: {error}</span>;
+    return (
+      <div className="tiny fleet-read-error" data-testid="fleet-read-error">
+        Read failed: {error}
+      </div>
+    );
   };
 
   return (
@@ -487,7 +498,15 @@ export function FleetTable() {
                   <td className="tiny" data-label="Network">
                     {row.network}
                   </td>
-                  <td data-label="Status">{renderStatus(row.derivedStatus)}</td>
+                  <td data-label="Status">
+                    <div>
+                      {renderStatus(row.derivedStatus)}
+                      {/* The reason a guard is Unknown is printed, not tucked into a
+                          tooltip: a phone has no hover, and "Unknown" alone reads as
+                          a verdict rather than a failed read. */}
+                      {renderError(readErrorOf(row))}
+                    </div>
+                  </td>
                   <td className="mono tiny" data-label="24h Spend">
                     {formatStroopsWithUnit(row.spend24h)}
                   </td>
@@ -512,11 +531,6 @@ export function FleetTable() {
                         >
                           Retry
                         </button>
-                      )}
-                      {row.error && (
-                        <span className="tiny muted" title={row.error}>
-                          ⚠
-                        </span>
                       )}
                     </div>
                   </td>
