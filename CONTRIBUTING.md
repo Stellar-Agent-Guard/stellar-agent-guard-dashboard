@@ -113,17 +113,20 @@ npm run check:docs-scripts  # validates README.md + CONTRIBUTING.md references
 What each gate is for — a failure names the gate that caught it, so this table is the
 single home for the explanations rather than a second copy elsewhere in the docs:
 
-| Gate                         | Catches                                                                                                                                       |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run typecheck`          | Type drift the bundler would otherwise erase: a changed SDK return shape, a prop that no longer exists, a narrowed union.                     |
-| `npm run lint`               | React/Next hook-order problems, unused imports, and the repository's module-boundary rules.                                                   |
-| `npm run format:check`       | Stylistic drift Prettier owns; a format failure is retried with `npm run format`, not hand-edited.                                            |
-| `npm test`                   | Unit and fuzz behaviour: encoders/decoders, policy validation, race handling, component wiring (the suite runs each file in its own process). |
-| `npm run test:e2e`           | Real browser flows against a mocked chain: guard lifecycle, policy writes, telemetry filtering/export.                                        |
-| `npm run build`              | Production compilation, route rendering and the static-export boundary.                                                                       |
-| `npm run check:no-server`    | An accidental route handler, middleware file or server action — the zero-backend boundary is architectural.                                   |
-| `npm run test:docs`          | Broken relative links and section anchors in Markdown.                                                                                        |
-| `npm run check:docs-scripts` | A `npm run …` reference in README/CONTRIBUTING whose script no longer exists.                                                                 |
+| Gate                           | Catches                                                                                                                                       |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run typecheck`            | Type drift the bundler would otherwise erase: a changed SDK return shape, a prop that no longer exists, a narrowed union.                     |
+| `npm run lint`                 | React/Next hook-order problems, unused imports, and the repository's module-boundary rules.                                                   |
+| `npm run format:check`         | Stylistic drift Prettier owns; a format failure is retried with `npm run format`, not hand-edited.                                            |
+| `npm test`                     | Unit and fuzz behaviour: encoders/decoders, policy validation, race handling, component wiring (the suite runs each file in its own process). |
+| `npm run test:e2e`             | Real browser flows against a mocked chain: guard lifecycle, policy writes, telemetry filtering/export.                                        |
+| `npm run build`                | Production compilation, route rendering and the static-export boundary.                                                                       |
+| `npm run check:no-server`      | An accidental route handler, middleware file or server action — the zero-backend boundary is architectural.                                   |
+| `npm run check:sdk-provenance` | The vendored SDK tarball no longer matching `vendor/sdk-provenance.json` or the lockfile (hashed only, never unpacked).                       |
+| `npm run check:doc-routes`     | A README route with no page under `app/`, or a page the README does not document.                                                             |
+| `npm run check:security-scan`  | Secret-like content in the tree. Prints rule, path and line, never the match, and writes a job summary in CI.                                 |
+| `npm run test:docs`            | Broken relative links and section anchors in Markdown.                                                                                        |
+| `npm run check:docs-scripts`   | A `npm run …` reference in README/CONTRIBUTING whose script no longer exists.                                                                 |
 
 ### Visual regression baselines
 
@@ -192,6 +195,9 @@ inventory is:
 | `build`                                   | Yes — verification block                                        | documented                                                             |
 | `lint`                                    | Yes — verification block                                        | documented                                                             |
 | `typecheck`                               | Yes — verification block                                        | documented                                                             |
+| `check:sdk-provenance`                    | Yes — verification table                                        | documented                                                             |
+| `check:doc-routes`                        | Yes — verification table                                        | documented                                                             |
+| `check:security-scan`                     | Yes — verification table                                        | documented                                                             |
 | `check:docs-scripts`                      | Yes — this section and the Documentation links section          | documented                                                             |
 | `format`                                  | Yes — lockfile section                                          | documented                                                             |
 | `changelog`                               | Yes — lockfile section and Changelog section                    | documented                                                             |

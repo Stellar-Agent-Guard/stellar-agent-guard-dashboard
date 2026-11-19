@@ -1,0 +1,9 @@
+{
+  "tarball": "vendor/stellar-agent-guard-sdk-0.1.1.tgz",
+  "version": "0.1.1",
+  "sourceRepository": "Stellar-Agent-Guard/stellar-agent-guard-sdk",
+  "sourceRevision": "391546173c40b6c772872fc84c3c84ce42c3147f",
+  "buildCommand": "npm ci && npm run build && npm pack",
+  "sha256": "9783404018b1e7a64e8301366040a999c927ca8d64306c3dc31928cbaf5bf5d9",
+  "integrity": "sha512-4YFEUvU0nSwetZbjnq/R7xppxrLxTfrsDWhK3tBTOjCvL/rUMJqNZuT6sq/fzXAyjPj741snMNNPSK4+tcv0cg=="
+}
