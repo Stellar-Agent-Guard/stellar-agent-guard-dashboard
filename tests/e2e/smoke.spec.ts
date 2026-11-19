@@ -128,7 +128,11 @@ test.describe("primary route smoke checks", () => {
 
     await tabs.getByRole("link", { name: "Console", exact: true }).click();
     await expect.poll(pathname).toBe("/");
-    await expect(page.getByRole("heading", { name: "On-chain state", exact: true })).toBeVisible();
+    // The grid's panel title and the panel body carry the same heading, so scope
+    // to the one either renders to avoid a strict-mode violation.
+    await expect(
+      page.getByRole("heading", { name: "On-chain state", exact: true }).first(),
+    ).toBeVisible();
   });
 });
 
