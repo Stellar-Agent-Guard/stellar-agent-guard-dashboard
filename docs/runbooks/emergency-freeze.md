@@ -6,7 +6,10 @@ dashboard reads and writes.
 **Related:** [Dual-freeze semantics](../concepts/dual-freeze-semantics.md) ·
 [Panic button & freeze](../screens/panic-freeze.md) ·
 [Enforcement scope](../enforcement-scope.md) ·
-[Routine policy updates](./policy-updates.md)
+[Routine policy updates](./policy-updates.md) ·
+[Fleet-wide freeze rehearsal](./fleet-freeze-rehearsal.md) ·
+[Lost browser profile recovery](./lost-browser-profile.md) ·
+[Custom-RPC migration](./custom-rpc-migration.md)
 
 > **Read this before an incident, not during one.** Everything here is designed to
 > be followed under stress. If you are in the middle of an incident, jump straight
@@ -228,6 +231,10 @@ Freezing stops the bleeding; it does not explain it. Collect, in this order:
 5. **Artifact identity**: confirm the instance still runs the pinned Phase 1
    artifact. `npm run inspect` prints `is Phase 1 artifact`. If it reads `false`,
    you are not looking at the contract this dashboard deploys — escalate.
+6. **Browser-local evidence**: the transaction history and per-tab diagnostic rows
+   exist only in this profile. Export or screenshot them now; if the profile is
+   later cleared, they are not recoverable from the chain as a list. See
+   [Lost browser profile recovery](./lost-browser-profile.md).
 
 Write a timestamp for every artifact. The sequence of _when you knew what_ is part
 of the record.
