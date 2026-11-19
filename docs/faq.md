@@ -10,7 +10,7 @@ The freeze transaction is signed and broadcast on-chain. Once included in a ledg
 
 ### How do I switch networks?
 
-The current deployment targets Stellar Testnet. Network settings can be inspected in `lib/guard/network.ts`.
+The current deployment targets Stellar Testnet. Network settings can be inspected in `lib/guard/network.ts`. There is no in-app endpoint or network switcher: the RPC URL and passphrase are build-time configuration, and the wallet must be on the same network before any write. Follow [Migrating to a different Soroban RPC endpoint](./runbooks/custom-rpc-migration.md).
 
 ---
 
@@ -31,4 +31,4 @@ The dashboard maps common wallet, RPC, and simulation failures to **safe next st
 
 ### How do I switch networks?
 
-The current deployment targets Stellar Testnet. Network settings can be inspected in `lib/guard/network.ts`.
+The current deployment targets Stellar Testnet. Network settings can be inspected in `lib/guard/network.ts`. There is no in-app endpoint or network switcher: the RPC URL and passphrase are build-time configuration, and the wallet must be on the same network before any write. Follow [Migrating to a different Soroban RPC endpoint](./runbooks/custom-rpc-migration.md).
