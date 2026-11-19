@@ -114,16 +114,20 @@ test.describe("primary route smoke checks", () => {
     // The tab strip is the one nav shared by every route (`nav.tabs`); the shell
     // also renders a sidebar and a mobile drawer, so scope to the tabs.
     const tabs = page.locator("nav.tabs");
+    // The address bar also carries the shareable-view query (`?guard=…&tab=…`),
+    // so assert the pathname rather than the whole URL.
+    const pathname = (): string => new URL(page.url()).pathname;
+
     await tabs.getByRole("link", { name: "Fleet", exact: true }).click();
-    await expect(page).toHaveURL(/\/fleet$/);
+    await expect.poll(pathname).toBe("/fleet");
     await expect(page.getByRole("heading", { name: "Fleet Overview", exact: true })).toBeVisible();
 
     await tabs.getByRole("link", { name: "Configure", exact: true }).click();
-    await expect(page).toHaveURL(/\/configure$/);
+    await expect.poll(pathname).toBe("/configure");
     await expect(page.getByRole("heading", { name: "Configure", exact: true })).toBeVisible();
 
     await tabs.getByRole("link", { name: "Console", exact: true }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect.poll(pathname).toBe("/");
     await expect(page.getByRole("heading", { name: "On-chain state", exact: true })).toBeVisible();
   });
 });
@@ -134,19 +138,19 @@ test("an unreachable chain is surfaced as a failed read, never as zeros", async 
 
   // The panic page pairs the status read with the freeze controls, so it is the
   // highest-stakes surface for a read that quietly renders as "not frozen".
+  // A failed field renders its own retryable "read failed" block with the
+  // error and a retry — never a value, and never a zero.
   await page.goto("/panic");
   await expect(page.getByRole("heading", { name: "On-chain state", exact: true })).toBeVisible();
-  await expect(page.getByText("The guard's state could not be read")).toBeVisible({
-    timeout: 30_000,
-  });
-  // The tradeoff is stated, not implied: a failed read is not an empty policy.
-  await expect(page.getByText(/a failed read is not an empty policy/i)).toBeVisible();
+  await expect(page.getByText(/read failed/i).first()).toBeVisible({ timeout: 30_000 });
 
-  // The fleet route must keep rendering and mark rows with a read error rather
-  // than deriving a status it did not read.
+  // The fleet route must keep rendering and show an unread guard as Unknown —
+  // never derive "Active" from a read that did not return.
   await page.goto("/fleet");
   await expect(page.getByRole("heading", { name: "Fleet Overview", exact: true })).toBeVisible();
-  await expect(page.getByText(/Read error:/i).first()).toBeVisible({ timeout: 30_000 });
+  const statusPills = page.locator("tbody span.pill");
+  await expect(statusPills.filter({ hasText: "Unknown" }).first()).toBeVisible({ timeout: 30_000 });
+  await expect(statusPills.filter({ hasText: /^(Active|Frozen|Expired)$/ })).toHaveCount(0);
 
   expect(failures, "a failed read must not crash the page").toEqual([]);
 });
