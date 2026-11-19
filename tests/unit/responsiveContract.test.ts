@@ -53,6 +53,16 @@ test("responsive contract: rules live inside the 720px media block", async (t) =
   await t.test("inline date-range pair stacks instead of overflowing", () => {
     assert.match(block, /\.form-inline-row\s*\{[^}]*flex-direction:\s*column/);
   });
+
+  await t.test("modal action row stacks full-width buttons (touch-height >=44px)", () => {
+    assert.match(block, /\.modal \.row\s*\{[^}]*flex-direction:\s*column/);
+    assert.match(block, /\.modal \.row button,\s*\.modal button\s*\{[^}]*min-height:\s*44px/);
+    assert.match(block, /\.modal \.row button,\s*\.modal button\s*\{[^}]*width:\s*100%/);
+  });
+
+  await t.test("error message wraps long unspaced copy", () => {
+    assert.match(stylesheet, /\.error\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  });
 });
 
 test("responsive contract: the form actually uses the classes", async (t) => {
