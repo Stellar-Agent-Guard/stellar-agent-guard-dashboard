@@ -13,6 +13,8 @@
   - [Deploy Panel](screens/deploy-panel.md)
   - [Panic Button & Freeze](screens/panic-freeze.md)
   - [Telemetry Feed](screens/telemetry-feed.md)
+  - [Pre-Signature Authorization Summary](screens/authorization-summary.md)
+  - [Wallet Diagnostics](screens/wallet-diagnostics.md)
 - [Operator Runbooks](runbooks/)
   - [Emergency Freeze & Incident Response](runbooks/emergency-freeze.md)
   - [Routine Policy Updates & Audit](runbooks/policy-updates.md)

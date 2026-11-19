@@ -15,11 +15,19 @@
  * numbers are IEEE doubles, so writing them as numbers would silently round
  * large values, and an audit log must not change the figures it records.
  *
+ * Every *event* time is canonical ISO-8601 UTC at second precision — the same
+ * form the CSV/JSON export uses, so one instant is written the same way in
+ * every machine-readable file this console produces (issue #318). The header's
+ * `exportedAt` is the exception and keeps its milliseconds on purpose: it
+ * stamps when this export ran, not when something happened on chain, and it is
+ * the field that distinguishes two same-second exports of the same feed.
+ *
  * Pure functions only: the component does the download, and tests can check
  * the exact bytes.
  */
 
 import { toHex } from "./scval.ts";
+import { canonicalUtc } from "./time.ts";
 import type { TelemetryEvent } from "./telemetry.ts";
 import { EMPTY_TELEMETRY_FILTER, type TelemetryFilter } from "./telemetryExport.ts";
 
@@ -85,7 +93,10 @@ export interface AuditEventRecord {
   contractId: string | null;
   /** Decimal string; see the module note on 64-bit integers. */
   ledger: string | null;
-  /** When the ledger closed, or, for a diagnostic that never reached a ledger, when this console decoded it. */
+  /**
+   * When the ledger closed, or, for a diagnostic that never reached a ledger, when this console decoded it.
+   * Canonical ISO-8601 UTC; `null` when neither is known.
+   */
   timestamp: string | null;
   timestampSource: "ledger_close" | "observed" | null;
   ledgerClosedAt: string | null;
@@ -102,9 +113,22 @@ export interface AuditEventRecord {
   } | null;
 }
 
+/**
+ * One event time in the export's canonical form, or `null` when it is absent.
+ *
+ * `canonicalUtc` renders absence as the empty string because the CSV writes an
+ * empty cell; this format writes JSON `null`, so the two spellings are kept
+ * apart here rather than leaking an empty string into a nullable field.
+ */
+function nullableUtc(value: string | null | undefined): string | null {
+  const canonical = canonicalUtc(value);
+  return canonical === "" ? null : canonical;
+}
+
 export function toAuditRecord(event: TelemetryEvent): AuditEventRecord {
-  const observedAt = event.observedAt ?? null;
-  const timestamp = event.ledgerClosedAt ?? observedAt;
+  const observedAt = nullableUtc(event.observedAt);
+  const ledgerClosedAt = nullableUtc(event.ledgerClosedAt);
+  const timestamp = ledgerClosedAt ?? observedAt;
   return {
     record: "guard_event",
     kind: event.kind,
@@ -115,8 +139,8 @@ export function toAuditRecord(event: TelemetryEvent): AuditEventRecord {
     contractId: event.contractId,
     ledger: event.ledger === null || event.ledger === undefined ? null : String(event.ledger),
     timestamp,
-    timestampSource: event.ledgerClosedAt ? "ledger_close" : observedAt ? "observed" : null,
-    ledgerClosedAt: event.ledgerClosedAt,
+    timestampSource: ledgerClosedAt ? "ledger_close" : observedAt ? "observed" : null,
+    ledgerClosedAt,
     observedAt,
     transactionHash: event.transactionHash,
     data: toJsonSafe(event.data),

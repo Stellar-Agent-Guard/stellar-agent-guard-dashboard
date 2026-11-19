@@ -115,3 +115,48 @@ export function formatEventTimestamp(
 
   return { utc, local, zoneLabel };
 }
+
+/**
+ * A date or date-time that carries no zone and no offset, e.g. `2026-03-08T02:30:00`.
+ *
+ * `Date.parse` reads a *time* without a zone in the *host's* zone, so the same
+ * text becomes a different instant on two operators' machines — and around a
+ * daylight-saving transition it can become an instant that never existed in
+ * that zone. A bare date (`2026-09-24`) is already UTC to `Date.parse`, so it
+ * needs no correction.
+ */
+function withUtcZone(text: string): string {
+  const zoneless = text.match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?))?$/);
+  if (!zoneless) return text;
+  const [, datePart, timePart] = zoneless;
+  if (!datePart || !timePart) return text;
+  return `${datePart}T${timePart}Z`;
+}
+
+/**
+ * The one canonical rendering of an instant for machine-readable exports
+ * (issue #318): ISO-8601 UTC at second precision with a `Z` suffix — the same
+ * bytes `formatEventTimestamp` shows in its `utc` column on screen.
+ *
+ * Three cases, and the reason each is what it is:
+ *
+ * - Absent (null, undefined, blank) returns the empty string, which every
+ *   export renders as an empty cell rather than an invented date.
+ * - A value that denotes an instant is normalised to UTC. An explicit offset
+ *   (`+02:00`) is folded into the same instant; a zone-less wall time is read
+ *   as UTC rather than as the operator's local time, because a zone-less
+ *   string means two different instants in two different zones, and an export
+ *   that changed with the browser's `TZ` could not be compared by two people.
+ * - A value that does not denote an instant at all (an upstream glitch, an
+ *   epoch integer) is returned trimmed, verbatim. Blanking it would delete the
+ *   only time a row carries; passing it through leaves the anomaly visible and
+ *   attributable to whatever produced it.
+ */
+export function canonicalUtc(value: string | null | undefined): string {
+  if (value === null || value === undefined) return "";
+  const text = value.trim();
+  if (text === "") return "";
+  const parsed = Date.parse(withUtcZone(text));
+  if (Number.isNaN(parsed)) return text;
+  return new Date(parsed).toISOString().replace(/\.\d{3}Z$/, "Z");
+}

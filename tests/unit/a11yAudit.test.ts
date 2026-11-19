@@ -47,7 +47,11 @@ const noNetworkServer = new Proxy(
 const TEST_GUARD = {
   server: noNetworkServer,
   wallet: {
-    address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWH",
+    // A real strkey, not a placeholder: the freeze dialog reads its pre-signature
+    // authorization summary (#343) out of this account, and an address the SDK cannot
+    // parse makes that summary impossible, which disables the acknowledgement the
+    // keyboard walk below depends on being able to tick.
+    address: "GAOBCRXTCO4ZCBNHALJUMJJ5JDXNOUZ7U6VZJX4UBTXAHQEO66IPU6PH",
     networkPassphrase: "Test SDF Network ; September 2015",
     network: "Testnet",
   },
@@ -59,7 +63,7 @@ const TEST_GUARD = {
     throw new Error("no signing in a11y tests");
   },
   instances: [],
-  guard: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  guard: "CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU7",
   selectGuard: () => {},
   addInstance: () => {},
   snapshot: null,

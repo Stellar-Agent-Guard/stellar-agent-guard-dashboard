@@ -1,6 +1,8 @@
 "use client";
 
 import type { PolicyDiff, DiffEntry } from "../lib/guard/policyDiff.ts";
+import type { AuthorizationContext } from "../lib/guard/authorizationSummary.ts";
+import { AuthorizationSummaryBlock } from "./AuthorizationSummary.tsx";
 
 const STATUS: Record<DiffEntry["status"], { sign: string; color: string; label: string }> = {
   added: { sign: "+", color: "#1a7f37", label: "added" },
@@ -26,13 +28,21 @@ function renderValue(value: unknown): string {
  * caps are what the guard enforces. This renders the structured diff from
  * `lib/guard/policyDiff.ts` side by side and refuses to call `onConfirm` until
  * the operator has actually seen it.
+ *
+ * The diff says *what* changes; the authorization block beneath it says *who is
+ * signing what, and where* (issue #343) — the two halves of the same question,
+ * which is why they share this dialog rather than sitting in separate panels. An
+ * install with no summary to show has no confirmed signer, so the confirm button
+ * stays disabled instead of offering a prompt the operator cannot evaluate.
  */
 export function PolicyDiffModal({
   diff,
+  authorization,
   onConfirm,
   onCancel,
 }: {
   diff: PolicyDiff;
+  authorization: AuthorizationContext | null;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -105,8 +115,22 @@ export function PolicyDiffModal({
           </table>
         )}
 
+        <div style={{ marginTop: 14 }}>
+          <AuthorizationSummaryBlock authorization={authorization} purpose="this policy install" />
+        </div>
+
         <div className="row" style={{ marginTop: 14 }}>
-          <button onClick={onConfirm}>Confirm and sign</button>
+          <button
+            onClick={onConfirm}
+            disabled={authorization === null}
+            title={
+              authorization === null
+                ? "This console cannot name the account and guard that would sign, so it will not ask your wallet to."
+                : undefined
+            }
+          >
+            Confirm and sign
+          </button>
           <button className="secondary" onClick={onCancel}>
             Cancel
           </button>

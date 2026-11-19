@@ -11,3 +11,7 @@ Interactive no-code form for configuring smart account guardrails:
 - **Active Execution Windows**: Restricts execution to specific ledger timestamp intervals.
 - **Pause Switch**: Global pause switch for routine maintenance.
 - **Dead-Man Grace Window**: Configures maximum allowable inactivity period in seconds.
+- **Pre-Signature Authorization Summary**: The review dialog pairs the diff with the operation, guard
+  address, network and admin account the signature will cover, derived from the transaction about to be
+  simulated ([authorization-summary.md](authorization-summary.md)). An install with no summary to show
+  is never offered as a signing prompt.
