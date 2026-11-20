@@ -44,10 +44,12 @@ cannot prove both is refused as a recoverable interruption.
 
 ## Wallet state is not chain state
 
-| State | What it is | After an extension update |
-| --- | --- | --- |
-| Wallet state (local) | Connection, account, network as the extension last reported them | May be stale until re-read; it never overrides a chain read |
-| Chain state (authoritative) | Policy, freeze status, rolling window, telemetry and transaction outcomes, read from Soroban RPC | Unaffected; this is what the console reports as fact |
+- **Wallet state (local)** — connection, account and network as the extension
+  last reported them. May be stale until re-read, and it never overrides a
+  chain read.
+- **Chain state (authoritative)** — policy, freeze status, rolling window,
+  telemetry and transaction outcomes, read from Soroban RPC. Unaffected by an
+  extension update; this is what the console reports as fact.
 
 If the two disagree, the chain wins. A stale header is a reason to reconnect, not
 a reason to re-send a write.
