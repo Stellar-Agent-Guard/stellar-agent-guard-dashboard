@@ -385,7 +385,7 @@ export function OutcomeList({
               color:
                 step.result.kind === "submitted"
                   ? "var(--ok)"
-                  : step.result.kind === "unknown"
+                  : step.result.kind === "unknown" || step.result.kind === "cancelled"
                     ? "var(--warn)"
                     : "var(--danger)",
             }}

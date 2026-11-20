@@ -8,8 +8,7 @@
  */
 
 import { Account, Address, Operation, TransactionBuilder, rpc, xdr } from "@stellar/stellar-sdk";
-import { sha256Hex } from "./scval.ts";
-import type { GuardStatus, PolicyConfig } from "stellar-agent-guard-sdk";
+import { verifyGuardWasm, type GuardStatus, type PolicyConfig } from "stellar-agent-guard-sdk";
 import { NETWORK, PHASE1_ARTIFACT } from "./network.ts";
 import { buildPolicyConfig, type PolicyDraft } from "./policyForm.ts";
 import {
@@ -26,11 +25,14 @@ import {
 } from "./chain.ts";
 import {
   INCLUSION_FEE,
+  actionableCancellationMessage,
   assembleFromSimulation,
   buildInitialEnvelope,
   describeRejectedResult,
+  isWalletCancellation,
   diagnosticEventsOf,
   invokeWithWallet,
+  writeBoundary,
   type InvokeResult,
   type WalletSigner,
 } from "./submit.ts";
@@ -178,8 +180,28 @@ export async function submitOperation(params: {
     };
   }
 
+  // A deploy or an upload is reviewed on the panel before this runs, and the
+  // wallet can move to another account while that panel is open. The boundary
+  // is re-read here exactly as it is for a contract call, so a deployment can
+  // never be signed — or broadcast — by an account other than the one that was
+  // on screen (issue #349).
+  const beforeEnvelope = await writeBoundary(signer, "envelope");
+  if (beforeEnvelope) return beforeEnvelope;
+
   announce("Please approve transaction in Freighter");
-  const signedXdr = await signer.signTransaction(prepared.toXDR());
+  let signedXdr: string;
+  try {
+    signedXdr = await signer.signTransaction(prepared.toXDR());
+  } catch (error) {
+    // The deploy's own steps take the same route as every other write: a decline
+    // is the operator's decision and becomes its own outcome, so the panel can
+    // offer a retry instead of reporting a failure that never reached the
+    // network (issue #291). Only a decline is caught — any other signer error
+    // still propagates to the caller.
+    if (!isWalletCancellation(error)) throw error;
+    announce("Signing declined in the wallet — nothing was broadcast", "assertive");
+    return { kind: "cancelled", detail: actionableCancellationMessage(error) };
+  }
   const transaction = TransactionBuilder.fromXDR(signedXdr, passphrase);
 
   // The envelope's fee field carries inclusion fee + resource fee — exactly
@@ -201,6 +223,9 @@ export async function submitOperation(params: {
     );
     return { kind: "unknown", hash, detail, feeStroops };
   };
+
+  const beforeSend = await writeBoundary(signer, "submission");
+  if (beforeSend) return beforeSend;
 
   let sent: rpc.Api.SendTransactionResponse;
   try {
@@ -353,6 +378,68 @@ export interface DeployOutcome {
   verified: boolean;
 }
 
+/**
+ * Where a deploy's steps actually got to (issue #291).
+ *
+ * `steps` only ever grows forwards, so the *last* step is the one that decided
+ * the outcome — and the earlier ones say whether any part of the deploy already
+ * reached the chain. Keeping this classification out of the panel is what lets
+ * a decline, a pre-broadcast refusal and an on-chain rejection be worded
+ * differently instead of all rendering as "the deploy failed".
+ */
+export type DeployProgress =
+  | {
+      /** The wallet declined the signature: that step never left the browser. */
+      kind: "declined";
+      detail: string;
+      /** Labels of the earlier steps that did reach the network. */
+      landed: string[];
+    }
+  | {
+      /** Simulation, guard enforcement, RPC or submission — nothing broadcast. */
+      kind: "refused";
+      detail: string;
+      landed: string[];
+    }
+  | {
+      /** Broadcast and rejected after inclusion in a ledger. */
+      kind: "failed";
+      detail: string;
+      landed: string[];
+    }
+  | {
+      /** The submission may have reached the network, but no response confirmed it. */
+      kind: "unknown";
+      detail: string;
+      landed: string[];
+    }
+  | {
+      /** The create transaction was accepted; verification decides if it is good. */
+      kind: "created";
+    };
+
+export function classifyDeploySteps(steps: DeployStep[]): DeployProgress {
+  const landed = steps
+    .filter((step) => step.result.kind === "submitted" || step.result.kind === "failed")
+    .map((step) => step.label);
+  const last = steps[steps.length - 1];
+  if (!last) return { kind: "refused", detail: "no deploy step ran", landed: [] };
+  const detail =
+    "detail" in last.result && typeof last.result.detail === "string" ? last.result.detail : "";
+  switch (last.result.kind) {
+    case "cancelled":
+      return { kind: "declined", detail, landed };
+    case "failed":
+      return { kind: "failed", detail, landed };
+    case "unknown":
+      return { kind: "unknown", detail, landed };
+    case "submitted":
+      return { kind: "created" };
+    default:
+      return { kind: "refused", detail, landed };
+  }
+}
+
 export class GuardOperationError extends Error {
   constructor(message: string) {
     super(message);
@@ -416,10 +503,10 @@ export async function deployGuard(params: {
   if (!present.ok) throw new GuardOperationError(`could not read the code entry: ${present.error}`);
   if (!present.value) {
     const wasm = await fetchContractWasm(server, PHASE1_ARTIFACT.guard);
-    const fetchedHash = await sha256Hex(wasm);
-    if (fetchedHash !== PHASE1_ARTIFACT.wasmHash) {
+    const verification = await verifyGuardWasm(wasm, PHASE1_ARTIFACT.wasmHash);
+    if (!verification.ok) {
       throw new GuardOperationError(
-        `refusing to upload: fetched bytes hash to ${fetchedHash}, not the pinned ${PHASE1_ARTIFACT.wasmHash}`,
+        `refusing to upload: fetched bytes hash to ${verification.actual}, not the pinned ${verification.expected}`,
       );
     }
     const upload = await submitOperation({
@@ -504,6 +591,9 @@ export async function initializeGuard(params: {
     fn: "initialize",
     args: [addressToScVal(params.signer.address), xdr.ScVal.scvBytes(pubkey)],
     signer: params.signer,
+    // Initialize is the write this panel offers a retry for, so its decline is
+    // an outcome the operator can act on rather than a thrown error (issue #291).
+    cancelOnDecline: true,
     ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
   });
 }
