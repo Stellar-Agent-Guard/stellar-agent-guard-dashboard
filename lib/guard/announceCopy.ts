@@ -131,7 +131,9 @@ export function streamResumed(added: number): Spoken {
  * The operator-facing reason a write did not take effect.
  *
  * Ordered by how much each one explains: what the enforced simulation refused
- * and why, then what the network rejected, then a transaction that was only
+ * and why, then what the network rejected, then a submission that was never
+ * confirmed either way — which is stated as exactly that, because pretending it
+ * failed is what invites an unsafe replay — then a transaction that was only
  * exported — nothing on chain changed, which is the whole point of saying so —
  * and finally the caller's own fallback, which is used for the cases the result
  * type cannot speak for: a write that was included but whose effect a `status()`
@@ -144,6 +146,9 @@ export function streamResumed(added: number): Spoken {
 export function writeFailureReason(result: InvokeResult, fallback: string): string {
   if (result.kind === "refused") return `refused during ${result.stage}: ${result.detail}`;
   if (result.kind === "failed") return `the network rejected the transaction: ${result.detail}`;
+  if (result.kind === "unknown") {
+    return `submission unconfirmed — verify the hash on chain before retrying: ${result.detail}`;
+  }
   if (result.kind === "exported") {
     return "the transaction was only exported for offline signing, so nothing on chain changed";
   }

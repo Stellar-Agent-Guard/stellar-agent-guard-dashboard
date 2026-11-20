@@ -225,6 +225,7 @@ test("the same write failure is worded the same way everywhere", () => {
     detail: "per_tx_cap_exceeded",
   } as never;
   const failed = { kind: "failed", detail: "tx_too_early", hash: "abc" } as never;
+  const unknown = { kind: "unknown", detail: "no confirmation was observed", hash: "abc" } as never;
   const exported = { kind: "exported", xdr: "AAAA" } as never;
 
   assert.equal(
@@ -234,6 +235,12 @@ test("the same write failure is worded the same way everywhere", () => {
   assert.equal(
     writeFailureReason(failed, "unused"),
     "the network rejected the transaction: tx_too_early",
+  );
+  // An ambiguous submission is worded as unconfirmed with the verify-first
+  // instruction — never as a failure, which is what invites a blind replay.
+  assert.equal(
+    writeFailureReason(unknown, "unused"),
+    "submission unconfirmed — verify the hash on chain before retrying: no confirmation was observed",
   );
   assert.match(writeFailureReason(exported, "unused"), /offline signing/);
   // A write that was included but changed nothing is the case the result type

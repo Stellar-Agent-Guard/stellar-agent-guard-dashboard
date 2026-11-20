@@ -884,6 +884,13 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
               <span className="mono">{report.result.detail}</span>
             </p>
           )}
+          {report.result.kind === "unknown" && (
+            <p className="tiny" style={{ marginTop: 6 }}>
+              Transaction {starLink(report.result.hash)} was broadcast but never confirmed:{" "}
+              <span className="mono">{report.result.detail}</span> Verify the hash on chain before
+              signing this action again — do not resubmit blind.
+            </p>
+          )}
 
           {!report.confirmed && !afterOk(report) && report.txHash && (
             <p className="tiny muted" style={{ marginTop: 6 }}>
