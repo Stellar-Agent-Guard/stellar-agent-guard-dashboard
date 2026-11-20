@@ -33,6 +33,7 @@ import { POLLING } from "./polling.ts";
 import { guardStorageLedgerKeys, ledgerKeyId } from "./scval.ts";
 import { stringifyError } from "./chain.ts";
 import { announce } from "./useAnnounce.ts";
+import { beginTxProgress, outcomeOf, type TxRun } from "./txProgress.ts";
 import { recordTx } from "./txHistory.ts";
 import { hardwareGuide } from "./hardwareGuide.ts";
 import {
@@ -509,6 +510,7 @@ function interruptedResult(interruption: WriteInterruption): InvokeResult {
 export async function writeBoundary(
   signer: WalletSigner,
   phase: WritePhase,
+  options: { announceInterruption?: boolean } = {},
 ): Promise<InvokeResult | null> {
   try {
     await revalidateWallet({
@@ -520,7 +522,11 @@ export async function writeBoundary(
   } catch (error) {
     const interruption = interruptionFromSignerFailure(error, phase);
     if (!interruption) throw error;
-    announce(`Wallet interrupted during ${PHASE_LABEL[phase]} — nothing was resubmitted`);
+    // Contract calls report the interruption as their final outcome in the
+    // transaction status region (issue #539), so they opt out of this one.
+    if (options.announceInterruption !== false) {
+      announce(`Wallet interrupted during ${PHASE_LABEL[phase]} — nothing was resubmitted`);
+    }
     return interruptedResult(interruption.interruption);
   }
 }
@@ -529,7 +535,7 @@ export async function writeBoundary(
  * Run a wallet-authorized contract call, submitting only on a passing enforced
  * simulation.
  */
-async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
+async function runInvocation(request: InvokeRequest, progress: TxRun): Promise<InvokeResult> {
   const passphrase = request.passphrase ?? NETWORK.passphrase;
   const { server, signer } = request;
 
@@ -553,16 +559,15 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   const sequence = account.sequenceNumber();
   const freshAccount = () => new Account(signer.address, sequence);
 
-  // "Please approve…" is one milestone per submission, not one per signature:
-  // Freighter can prompt twice (auth entry, then envelope), and a screen
-  // reader hearing the same instruction twice would be exactly the spam the
-  // announcer exists to prevent.
-  let walletPrompted = false;
+  // "Waiting for wallet approval" is one stage per submission, not one per
+  // signature: Freighter can prompt twice (auth entry, then envelope), and the
+  // progress tracker only ever moves forward, so the second prompt is silent.
   const promptWallet = (): void => {
-    if (walletPrompted) return;
-    walletPrompted = true;
-    announce("Please approve transaction in Freighter");
+    progress.stage("signing");
   };
+  // Interruptions are reported once, as the run's outcome, not again here.
+  const boundary = (phase: WritePhase) =>
+    writeBoundary(signer, phase, { announceInterruption: false });
 
   const plainOperation = Operation.invokeContractFunction({
     contract: request.contract,
@@ -577,7 +582,7 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     passphrase,
     guard: request.guardForFootprint ?? null,
   });
-  announce("Transaction simulation started");
+  progress.stage("simulating");
   const discovery = await server.simulateTransaction(probe);
   if (rpc.Api.isSimulationError(discovery)) {
     // Recording mode: this pass records what the call *needs*, so a failure here
@@ -640,7 +645,7 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     // re-derive, including the credential kind and the entry's expiration ledger.
     // Before asking for it, the live account is re-read: a wallet that switched
     // administrators since the simulation must not sign this review (issue #340).
-    const beforeAuth = await writeBoundary(signer, "authorization");
+    const beforeAuth = await boundary("authorization");
     if (beforeAuth) return beforeAuth;
     promptWallet();
     let signedEntryXdr: string;
@@ -649,7 +654,6 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     } catch (error) {
       const interruption = interruptionFromSignerFailure(error, "authorization");
       if (interruption) {
-        announce("Wallet interrupted during authorization signing — nothing was resubmitted");
         return interruptedResult(interruption.interruption);
       }
       // A decline is the operator's decision, not a failure: when the caller
@@ -736,7 +740,7 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   // signatures and the envelope signature: the envelope is what commits the
   // source account, so signing it for a different administrator is precisely
   // the silent source switch this check exists to prevent.
-  const beforeEnvelope = await writeBoundary(signer, "envelope");
+  const beforeEnvelope = await boundary("envelope");
   if (beforeEnvelope) return beforeEnvelope;
   promptWallet();
   let signedEnvelope: string;
@@ -745,7 +749,6 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   } catch (error) {
     const interruption = interruptionFromSignerFailure(error, "envelope");
     if (interruption) {
-      announce("Wallet interrupted during transaction signing — nothing was resubmitted");
       return interruptedResult(interruption.interruption);
     }
     // Same at the envelope as at the authorization entry: where the caller asked
@@ -772,7 +775,7 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   // Broadcast is the last boundary: a provider that vanished here may have
   // been the only witness to a submission, so the outcome is reported as
   // "verify before retrying" rather than as a failure (issue #341).
-  const beforeSend = await writeBoundary(signer, "submission");
+  const beforeSend = await boundary("submission");
   if (beforeSend) return beforeSend;
 
   let sent: rpc.Api.SendTransactionResponse;
@@ -809,7 +812,7 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     };
   }
 
-  announce(`Transaction ${request.fn} submitted to network for guard ${request.contract}`);
+  progress.stage("submitting");
 
   const included = await pollForInclusion(
     server,
@@ -837,36 +840,35 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
 }
 
 /**
- * Run a wallet-authorized contract call, announcing its milestones and
- * recording its outcome.
+ * Run a wallet-authorized contract call, reporting its progress and recording
+ * its outcome.
  *
- * The mid-flight milestones (simulation started, Freighter approval,
- * broadcast) are announced inside `runInvocation`, at the moment they actually
- * happen. The terminal outcome — confirmed, failed or refused — is handled
- * once, here, so every return path, including each kind of refusal, gets the
- * same announcement and the same history entry without that logic being
- * repeated at every `return`. Refused calls are announced but deliberately
- * not recorded: a refusal never had a transaction to record.
+ * Progress is reported through the transaction status region
+ * (`lib/guard/txProgress.ts`, issue #539): the mid-flight stages (simulating,
+ * waiting for wallet approval, submitted) are reported inside `runInvocation`
+ * at the moment they happen, each exactly once, and the terminal outcome —
+ * confirmed, failed, refused, declined, exported or interrupted — is reported
+ * once, here, so every return path gets the same line without that logic being
+ * repeated at every `return`. Every line names the operation; none carries the
+ * envelope, its arguments or the network's raw error payload.
+ *
+ * Refused calls are reported but deliberately not recorded: a refusal never
+ * had a transaction to record.
  */
 export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeResult> {
-  const result = await runInvocation(request);
-  const context = `for guard ${request.contract}`;
-  if (result.kind === "exported") {
-    announce(`Transaction XDR exported for offline signing ${context}`);
-  } else if (result.kind === "refused" && result.writeInterruption) {
-    // The provider went away or the account changed mid-write. The guidance is
-    // phase-specific and already on screen; the announcement says which phase,
-    // and deliberately does not claim the write failed — at submission time it
-    // may have landed.
-    const guidance = recoveryGuidance(result.writeInterruption);
-    announce(`${guidance.headline} ${guidance.nextStep}`, "assertive");
-  } else if (result.kind === "cancelled") {
-    // The operator's own decision, so the announcement says what did *not*
-    // happen and that nothing needs rescuing — no transaction exists to look up.
-    announce("Signing declined in the wallet — nothing was broadcast", "assertive");
-  } else if (result.kind === "refused") {
-    announce(`Transaction refused — nothing was broadcast ${context}`, "assertive");
-  } else if (result.kind === "failed") {
+  const progress = beginTxProgress(request.fn);
+  let result: InvokeResult;
+  try {
+    result = await runInvocation(request, progress);
+  } catch (error) {
+    // A decline the caller did not ask to receive as a result, or an unexpected
+    // RPC failure, is thrown back to the caller exactly as before. The region
+    // still ends the run, so it never sits on "waiting for wallet approval".
+    progress.finish(isWalletCancellation(error) ? { kind: "cancelled" } : { kind: "errored" });
+    throw error;
+  }
+
+  if (result.kind === "failed") {
     recordTx({
       hash: result.hash,
       operation: request.fn,
@@ -875,7 +877,6 @@ export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeRe
       networkName: NETWORK.name,
       networkPassphrase: request.passphrase ?? NETWORK.passphrase,
     });
-    announce(`Transaction failed on chain ${context}`, "assertive");
   } else if (result.kind === "submitted") {
     recordTx({
       hash: result.hash,
@@ -885,18 +886,14 @@ export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeRe
       networkName: NETWORK.name,
       networkPassphrase: request.passphrase ?? NETWORK.passphrase,
     });
-    announce(
-      result.ledger !== null && result.status === rpc.Api.GetTransactionStatus.SUCCESS
-        ? `Transaction confirmed on ledger ${result.ledger} ${context}`
-        : `Transaction confirmed on the network ${context}`,
-    );
-    // Only the transaction is announced here, never what the operator meant by
-    // it. A freeze's *effect* is claimed by whoever can verify it: the panic
-    // panel, which re-reads `status()` and announces "Account frozen" or the
-    // reason it did not take, and the fleet table, which has no re-read and so
-    // announces the submission itself. One announcement per write, from the
-    // place that has the evidence for it.
   }
+  // Only the transaction is reported here, never what the operator meant by
+  // it. A freeze's *effect* is claimed by whoever can verify it: the panic
+  // panel, which re-reads `status()` and announces "Account frozen" or the
+  // reason it did not take, and the fleet table, which has no re-read and so
+  // announces the submission itself. One announcement per write, from the
+  // place that has the evidence for it.
+  progress.finish(outcomeOf(result));
   return result;
 }
 

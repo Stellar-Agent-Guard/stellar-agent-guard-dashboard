@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { DemoBadge } from "./DemoBadge.tsx";
 import { Tabs } from "./bits.tsx";
 import { AriaAnnouncer } from "./AriaAnnouncer.tsx";
+import { TxProgressStatus } from "./TxProgressStatus.tsx";
 import { ThemeProvider } from "./ThemeProvider.tsx";
 import { PrivacyToggle, ThemeToggle } from "./ThemeToggle.tsx";
 import { SIDEBAR_COLLAPSED_STORAGE_KEY } from "../lib/guard/presentationStorageKeys.ts";
@@ -100,6 +101,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
     <>
       <ThemeProvider>
         <AriaAnnouncer />
+        <TxProgressStatus />
         <div className="shell">
           {/* Mobile-only hamburger menu button */}
           {isMobile && (
