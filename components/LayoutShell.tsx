@@ -81,8 +81,21 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [drawerOpen]);
 
-  // Determine if we're on mobile (width < 768px)
-  const isMobile = typeof window !== "undefined" ? window.innerWidth < 768 : false;
+  // Determine if we're on mobile (width < 768px).
+  //
+  // This is state, not a render-time read, because browser zoom shrinks the
+  // layout viewport: at 200% a 1280px window is 640 CSS px and has to adopt the
+  // single-column shell without a reload. The `resize` event fires on zoom in
+  // Chromium and Firefox, so the same listener covers both (issue #530).
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const update = () => setIsMobile(window.innerWidth < 768);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
 
   // Handle resize to close drawer when going from mobile to desktop
   useEffect(() => {

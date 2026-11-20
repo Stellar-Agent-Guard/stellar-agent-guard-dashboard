@@ -11,6 +11,7 @@ import { SetupWizard } from "../../components/SetupWizard.tsx";
 import { StatusPanel } from "../../components/StatusPanel.tsx";
 import { TxHistoryTable } from "../../components/TxHistoryTable.tsx";
 import { TelemetryFeed } from "../../components/TelemetryFeed.tsx";
+import { TelemetryChart } from "../../components/TelemetryChart.tsx";
 import { GuardContext, GuardEventsContext } from "../../components/GuardProvider.tsx";
 import { POLL_OFF } from "../../lib/guard/feedHealth.ts";
 import { TX_HISTORY_STORAGE_KEY, type TxHistoryEntry } from "../../lib/guard/txHistory.ts";
@@ -311,6 +312,56 @@ test("TelemetryFeed passes axe-core with severity tiers on every row kind", asyn
     );
     const violations = await axeViolations(rendered.container);
     assert.deepEqual(violations, [], "the tiered feed must pass axe-core");
+  } finally {
+    await rendered.unmount();
+  }
+});
+
+test("the telemetry chart passes axe-core and keeps its data view reachable", async () => {
+  // Issue #532: a chart can be structurally clean while its trends are still
+  // unavailable to a screen reader, so the populated chart is scanned *and* the
+  // alternate view is proven to be a labelled, focusable table.
+  const events = [
+    {
+      kind: "auth_checked",
+      topic: "event_auth_checked",
+      source: "diagnostic",
+      contractId: TEST_GUARD.guard,
+      ledger: null,
+      ledgerClosedAt: null,
+      transactionHash: null,
+      decision: { result: "blocked", reason: "per_tx_cap_exceeded" },
+      data: {},
+    },
+  ] as GuardEventsContextValue;
+  const rendered = await renderPanel(
+    react.createElement(
+      GuardContext.Provider,
+      { value: TEST_GUARD },
+      react.createElement(
+        GuardEventsContext.Provider,
+        { value: events },
+        react.createElement(TelemetryChart),
+      ),
+    ),
+  );
+  try {
+    const toggle = rendered.container.querySelector<HTMLButtonElement>(
+      '[data-testid="tchart-data-toggle"]',
+    );
+    assert.ok(toggle, "the non-visual route into the data must exist");
+    await act(async () => toggle.click());
+
+    const table = rendered.container.querySelector("table.chart-data");
+    assert.ok(table, "the alternate view is a real table");
+    assert.ok(table.querySelector("caption"), "the table carries the chart's summary");
+    assert.equal(
+      rendered.container.querySelector('[data-testid="tchart-data-view"]')?.getAttribute("role"),
+      "region",
+    );
+
+    const violations = await axeViolations(rendered.container);
+    assert.deepEqual(violations, [], "the chart and its data view must pass axe-core");
   } finally {
     await rendered.unmount();
   }
