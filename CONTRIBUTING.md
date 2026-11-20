@@ -4,6 +4,15 @@
 that holds no keys and runs no server code, so most changes are UI, client-side Soroban
 RPC, or tests.
 
+## Browser Capability Changes
+
+> **Adding or modifying browser APIs requires documented fallbacks and secure-context
+> verification.** Before opening a PR that modifies any browser API usage (Clipboard,
+> Storage, Web Workers, or Wallet), ensure the browser-capabilities checklist in
+> `docs/operations/browser-capabilities.md` is updated and the requirements are met.
+All PRs that change browser API usage must satisfy the relevant items in the checklist.
+Pull requests that do not will be returned for completion.
+
 ## First run (local development walkthrough)
 
 This is a pure client-side Next.js app: there is no backend, database or API route to
