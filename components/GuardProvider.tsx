@@ -111,6 +111,7 @@ import {
   type NetworkSwitchOutcome,
 } from "../lib/guard/networkSwitch.ts";
 import { isObserverSession, readSourceFor } from "../lib/guard/observerMode.ts";
+import { createWalletSessionGuard } from "../lib/guard/walletSession.ts";
 import { memoryWiper } from "../lib/guard/memoryWiper.ts";
 import type { WalletSigner } from "../lib/guard/submit.ts";
 import {
@@ -385,6 +386,11 @@ export function GuardProvider({
   // re-render must never rebuild it — a fresh connector has not been granted
   // access, and rebuilding on render would prompt the operator again.
   const connectorRef = useRef<WalletConnector | null>(null);
+  // Every connect attempt is stamped with a generation. A provider answer that
+  // arrives after a disconnect, a tab-wide disconnect announcement, or a newer
+  // attempt is dropped rather than written into state (issue #519) — otherwise
+  // a late callback would re-enable write controls for a session that is gone.
+  const sessionGuardRef = useRef(createWalletSessionGuard());
   const [instances, setInstances] = useState<GuardInstance[]>(() =>
     isDemoMode() ? [DEMO_INSTANCE] : [...KNOWN_INSTANCES],
   );
@@ -672,14 +678,15 @@ export function GuardProvider({
     const preferred = loadPreferredProvider();
     if (!canReconnectSilently(preferred)) return;
     let cancelled = false;
+    const attempt = sessionGuardRef.current.begin();
     void (async () => {
       try {
         const id = preferred ?? "freighter";
         const connector = createWalletConnector(id, scope);
         const address = await connector.getPublicKey();
-        if (!address || cancelled) return;
+        if (!address || cancelled || !sessionGuardRef.current.isCurrent(attempt)) return;
         const network = await connector.getNetwork();
-        if (cancelled) return;
+        if (cancelled || !sessionGuardRef.current.isCurrent(attempt)) return;
         const mismatch = detectNetworkMismatch(network.passphrase, NETWORK.passphrase, {
           targetNetwork: NETWORK.name,
           walletNetwork: network.name,
@@ -710,12 +717,16 @@ export function GuardProvider({
   const connect = useCallback(
     async (preferred?: WalletProviderId) => {
       const id = preferred ?? providerId ?? "freighter";
+      const attempt = sessionGuardRef.current.begin();
       setConnecting(true);
       setWalletError(null);
       setNetworkMismatch(null);
       try {
         const connector = createWalletConnector(id, scope);
         const connection = await connector.connect();
+        // Superseded or disconnected while the provider was thinking: this
+        // answer is stale, so it neither enables a session nor reports an error.
+        if (!sessionGuardRef.current.isCurrent(attempt)) return;
         const mismatch = detectNetworkMismatch(connection.network.passphrase, NETWORK.passphrase, {
           targetNetwork: NETWORK.name,
           walletNetwork: connection.network.name,
@@ -739,6 +750,7 @@ export function GuardProvider({
           network: connection.network.name,
         });
       } catch (error) {
+        if (!sessionGuardRef.current.isCurrent(attempt)) return;
         connectorRef.current = null;
         setWallet(null);
         setWalletError(
@@ -749,7 +761,9 @@ export function GuardProvider({
               : String(error),
         );
       } finally {
-        setConnecting(false);
+        // A stale attempt must not clear the spinner of the attempt that owns
+        // the session now.
+        if (sessionGuardRef.current.isCurrent(attempt)) setConnecting(false);
       }
     },
     [providerId, scope],
@@ -778,7 +792,11 @@ export function GuardProvider({
   }, [scope, connect]);
 
   const disconnect = useCallback(() => {
+    // Invalidating first means an in-flight provider callback can no longer be
+    // adopted, however late it resolves (issue #519).
+    sessionGuardRef.current.invalidate();
     connectorRef.current = null;
+    setConnecting(false);
     setWallet(null);
     setNetworkMismatch(null);
     tabSync.broadcast("WALLET_DISCONNECTED", { guard: guardRef.current });
@@ -955,7 +973,9 @@ export function GuardProvider({
           void refreshRef.current();
           return;
         case "WALLET_DISCONNECTED":
+          sessionGuardRef.current.invalidate();
           connectorRef.current = null;
+          setConnecting(false);
           setWallet(null);
           setNetworkMismatch(null);
           return;
