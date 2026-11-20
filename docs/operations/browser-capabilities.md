@@ -7,10 +7,12 @@
 **Secure-context requirement:** The async Clipboard API only exists in a secure context (HTTPS, or `file:`/`localhost` exemptions) and only when the user's browser agent has granted write access.
 
 **Fallback behavior:**
+
 - If `navigator.clipboard` is unavailable (insecure context, permission denied), the `copyToClipboard()` function returns `{ ok: false, error: "clipboard is unavailable — this browser context is not secure or has denied clipboard access" }` rather than throwing.
 - The UI component (`CopyButton`) must surface this as a visible failure — showing the manual-select hint and announcing it — never as silence.
 
 **Tested behavior:**
+
 - `secureContextOk()` returns `false` when `window.isSecureContext` is not `true` or when `liveClipboard()` returns `null`.
 - `copyToClipboard()` never throws; rejections come back as `{ ok: false, error }`.
 - In jsdom and other test environments without the Clipboard API, the fallback path is taken.
@@ -26,11 +28,13 @@
 **Secure-context requirement:** N/A — this is a read-only RPC interaction, not a browser API.
 
 **Fallback behavior:**
+
 - Missing or uninitialized storage decodes to an `Uninitialized` marker rather than throwing, so a caller can render "not set" without a try/catch.
 - A TTL entry reports the remaining ledger lifetime instead of throwing.
 - Partially readable storage maps report what is readable next to entries that cannot be read — an honest answer without losing the readable half.
 
 **Tested behavior:**
+
 - `decodeStorageFootprint()` returns `{ decoded: false, value: "Uninitialized" }` when data is missing.
 - `decodeStorageFootprint()` reports `ttl` when a Soroban TTL entry is supplied.
 - Entries with unrecognized types decode gracefully.
@@ -46,11 +50,13 @@
 **Secure-context requirement:** Web Workers require a secure context in some browsers. If a worker cannot be created, the fallback is to perform the work on the main thread (which may block the UI briefly).
 
 **Fallback behavior:**
+
 - If `Worker` construction fails or the worker script cannot be loaded, `inspectWasmInWorker()` and `hashWasmInWorker()` reject with an error that the UI catches and renders as a read failure.
 - The UI shows a named read error rather than rendering `0` or a verified value from a stale read.
 - Workers are created with `type: "module"` so they can use `import` statements.
 
 **Tested behavior:**
+
 - Worker creation is wrapped in try/catch; errors are reported through the `onError` callback.
 - The `onParsedProgress` and `onHashProgress` callbacks are optional — they default to no-op functions.
 - In environments without Worker support (e.g., some test runners), the code degrades gracefully.
@@ -66,11 +72,13 @@
 **Secure-context requirement:** The Freighter extension API is only available when Freighter is installed and the browser is on a compatible network. The wallet connection flow refuses to proceed if the wallet's passphrase does not match the dashboard's expected network.
 
 **Fallback behavior:**
+
 - If Freighter is not installed, `connectWallet()` prompts the user to connect a wallet and reports that writes are disabled until a wallet is connected.
 - If the wallet is on a different network, a mismatch banner is displayed and write controls are disabled.
 - No wallet? The console stays in observer mode: reads, telemetry, and the storage explorer work, and write controls explain that a wallet is required.
 
 **Tested behavior:**
+
 - `connectWallet()` reads the network Freighter is pointed at via `getNetworkDetails()` and refuses to connect if the wallet's passphrase does not match `NETWORK.passphrase` (`lib/guard/network.ts`).
 - The `DEMO MODE — Static Fixture Data` path works without a wallet — reads, telemetry, and the storage explorer work with seeded fixture data.
 - Write controls are disabled in demo mode; fixtures never touch RPC.
@@ -79,12 +87,12 @@
 
 ## 5. Summary: Capability Matrix
 
-| API / Feature | Module | Secure Context | Fallback | Test Entry |
-|--------------|--------|----------------|----------|------------|
-| Clipboard API | `lib/guard/clipboard.ts` | Required (`isSecureContext`) | Returns `{ok: false, error}` | `secureContextOk()`, `copyToClipboard()` |
-| Storage (Soroban) | `lib/guard/storage.ts` | N/A (RPC read) | `Uninitialized` marker | `decodeStorageFootprint()` |
-| Web Workers | `lib/guard/wasmInspector.ts` | Recommended | Main-thread fallback | `inspectWasmInWorker()`, `hashWasmInWorker()` |
-| Wallet (Freighter) | `lib/guard/wallet.ts` | Required (network match) | Observer mode, disabled writes | `connectWallet()`, `currentAddress()` |
+| API / Feature      | Module                       | Secure Context               | Fallback                       | Test Entry                                    |
+| ------------------ | ---------------------------- | ---------------------------- | ------------------------------ | --------------------------------------------- |
+| Clipboard API      | `lib/guard/clipboard.ts`     | Required (`isSecureContext`) | Returns `{ok: false, error}`   | `secureContextOk()`, `copyToClipboard()`      |
+| Storage (Soroban)  | `lib/guard/storage.ts`       | N/A (RPC read)               | `Uninitialized` marker         | `decodeStorageFootprint()`                    |
+| Web Workers        | `lib/guard/wasmInspector.ts` | Recommended                  | Main-thread fallback           | `inspectWasmInWorker()`, `hashWasmInWorker()` |
+| Wallet (Freighter) | `lib/guard/wallet.ts`        | Required (network match)     | Observer mode, disabled writes | `connectWallet()`, `currentAddress()`         |
 
 ## 6. Troubleshooting Links
 

@@ -10,8 +10,8 @@ RPC, or tests.
 > verification.** Before opening a PR that modifies any browser API usage (Clipboard,
 > Storage, Web Workers, or Wallet), ensure the browser-capabilities checklist in
 > `docs/operations/browser-capabilities.md` is updated and the requirements are met.
-All PRs that change browser API usage must satisfy the relevant items in the checklist.
-Pull requests that do not will be returned for completion.
+> All PRs that change browser API usage must satisfy the relevant items in the checklist.
+> Pull requests that do not will be returned for completion.
 
 ## First run (local development walkthrough)
 
