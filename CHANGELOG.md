@@ -43,6 +43,7 @@ derived from [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.
 
 ### Documentation
 
+- **contributing**: document the test fixture update workflow — provenance, redaction, SDK vocabulary updates and focused commands, enforced by `tests/unit/fixtureProvenance.test.ts` (Closes #557)
 - remove Phase 2 gate section from spec (`5450239`)
 - correct Phase 2 publish status (`68f9f0f`)
 - **site**: point the contributing page at the dashboard's own guide (`8981f8b`)

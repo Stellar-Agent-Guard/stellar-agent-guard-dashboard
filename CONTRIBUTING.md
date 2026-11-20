@@ -172,6 +172,16 @@ These extra scripts are not part of the CI gate:
   events in 30s with FPS/heap assertions); frame-rate numbers depend on the
   runner's hardware, so it is measured locally and never gates a merge.
 
+### Test fixtures
+
+Shared fixtures (`tests/fixtures/`, `tests/mocks/`, `tests/e2e/rpcFixtures.ts`,
+`lib/guard/demoFixtures.ts`) follow one workflow: record where the bytes came from,
+commit public testnet data only (never a secret seed or `.env.phase3`), update the
+mirrored SDK vocabulary in the same PR as an SDK bump, and run the focused check for the
+fixture you touched. See [`docs/operations/test-fixtures.md`](./docs/operations/test-fixtures.md).
+`node --import tsx --test tests/unit/fixtureProvenance.test.ts` enforces its inventory,
+the redaction scan and the vocabulary match.
+
 ### Lockfile ride-along rule
 
 `package-lock.json` is committed and is the reproducibility contract (`npm ci` is the
