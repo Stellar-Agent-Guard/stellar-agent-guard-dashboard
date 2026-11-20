@@ -19,6 +19,8 @@
 - [Guides](guides/)
   - [Agent Integration](guides/agent-integration.md)
   - [Air-Gapped Multisig Signing](guides/air-gapped-multisig-signing.md)
+  - [Contributing Widgets and Panels](guides/contributing-widgets.md)
+  - [Adding a Dashboard Read Panel](guides/adding-a-read-panel.md)
 - [Architecture](architecture.md)
 - [Glossary](glossary.md)
 - [Testnet Verification](verification.md)
