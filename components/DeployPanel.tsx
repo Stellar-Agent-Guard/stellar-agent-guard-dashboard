@@ -206,7 +206,8 @@ export function initOutcomeView(result: InvokeResult): OutcomeView {
       };
     case "unknown":
       return {
-        headline: "initialize submission was not confirmed — verify the hash on chain before retrying",
+        headline:
+          "initialize submission was not confirmed — verify the hash on chain before retrying",
         tone: "warn",
         retryable: false,
         detail: result.detail,
