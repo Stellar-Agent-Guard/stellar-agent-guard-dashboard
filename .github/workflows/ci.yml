@@ -11,32 +11,63 @@ on:
 permissions:
   contents: read
 
+# A new push to the same pull request makes the running job obsolete, so cancel
+# it rather than spending a runner on a commit nobody will merge. Pushes to main
+# are never cancelled: each one is a merge that may need its result recorded.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+    # Generous but finite: a hung install or a Playwright download that never
+    # finishes must fail the check instead of holding a runner for six hours.
+    timeout-minutes: 30
     steps:
       # Every `uses:` is pinned to a full 40-char commit SHA with a readable
       # version comment. A moving tag (e.g. `@v4`) can be repointed upstream at
       # any time, which would let changed third-party code execute here with no
       # reviewable diff in this repository. Dependabot (.github/dependabot.yml)
       # keeps these pins current through reviewable PRs.
+      #
+      # `persist-credentials: false` keeps the job's token out of .git/config:
+      # nothing here pushes, and a later step that runs project code should not
+      # be able to read a credential it has no use for.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      # Node 24 comes from package.json `engines` (">=24.0.0"); the repository
+      # has no .nvmrc. Keep this in step with engines when the floor moves.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
 
-      # The Phase 2 SDK is vendored as a tarball until it is published to npm, so
-      # this also verifies that the committed tarball is installable and usable.
-      # When Phase 2 publishes, this step's premise disappears with it.
-      - run: npm ci
+      # `npm ci` installs exactly the committed lockfile and fails if it and
+      # package.json disagree, so CI can never test a dependency tree that no
+      # reviewer saw. `--ignore-scripts` blocks arbitrary install-time code from
+      # every dependency (and the vendored SDK tarball); both esbuild and
+      # unrs-resolver ship prebuilt platform packages, so nothing here needs a
+      # lifecycle script to work. `.npmrc` sets the same flag for local runs.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Lint
+        run: npm run lint
 
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Lint
-        run: npm run lint
+      # Unit and property-based tests only. The integration proof
+      # (scripts/prove-phase3.ts) spends real testnet funds and needs funded
+      # testnet keys, so it is run deliberately and is not part of this gate.
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
 
       # The zero-server boundary is an architectural decision, not a style rule:
       # a Next.js route handler or a middleware file would be the first place a
@@ -47,33 +78,22 @@ jobs:
 
       # Formatting is a separate gate from linting: eslint-config-next carries
       # no stylistic rules, so prettier is the only thing that can catch
-      # whitespace/line-ending drift. It runs before the tests so a format
-      # failure reads as style, not as a broken build.
+      # whitespace/line-ending drift.
       - name: Format
         run: npm run format:check
 
-      # Unit tests only. The integration proof (scripts/prove-phase3.ts) spends
-      # real testnet funds and needs funded testnet keys, so it is run
-      # deliberately and is not part of the CI gate.
-      - name: Unit tests
-        run: npm test
-
-      # Every relative path and section anchor in the README, SPEC.md, CONTRIBUTING.md
-      # and docs/ is a promise that the docs still line up. This checks it, offline:
-      # it never fetches an external URL, so a broken link to another host cannot
-      # fail a build for reasons that have nothing to do with this commit.
+      # Every relative path and section anchor in the README, SPEC.md,
+      # CONTRIBUTING.md and docs/ is a promise that the docs still line up.
+      # This checks it offline, so a broken external link cannot fail a build.
       - name: Documentation links
         run: npm run test:docs
-
-      - name: Build
-        run: npm run build
 
       - name: Docs-referenced npm scripts exist
         run: npm run check:docs-scripts
 
       # The scope statement is a hard requirement of this project, not a
-      # documentation nicety: fail the build if the code, README and SPEC.md
-      # have drifted apart on what is and is not enforced.
+      # documentation nicety: fail if code, README and SPEC.md drift apart on
+      # what is and is not enforced.
       - name: Enforcement-scope statement is consistent
         run: node --test tests/unit/scopeStatement.test.ts
 
@@ -81,40 +101,23 @@ jobs:
       # and the telemetry filter/export paths, driven through the real pages in
       # headless Chromium against an in-process mock chain — no testnet, no
       # network. These live inside the required `ci` job rather than beside it
-      # so branch protection (which requires the check named `ci`) actually
-      # gates on them.
+      # so branch protection (which requires the check named `ci`) gates on them.
       #
       # The perf benchmark (tests/perf, #114) is deliberately absent:
       # frame-rate assertions depend on the runner's GPU/CPU, so it runs
-      # locally via `npm run test:perf` and is not a CI gate.
-      # The Playwright browsers are the only step in this job that downloads
-      # rather than computes, and they are byte-identical on every run: a cold
-      # `playwright install` measured 190.6s locally against 4.7s with the
-      # browsers already present, and the step itself is ~22s of a ~128s job.
-      # Restoring them is the one cache this job can justify with a measurement.
-      #
-      # `.next/cache` is deliberately *not* cached. It is worth 126s locally
-      # (177s cold → 50.6s warm) but 71MB per run, while the Build step here is
-      # 15s on the runner — a transfer that can cost more than the step it
-      # replaces. The E2E suite gains nothing either: it drives `next dev`, not
-      # the production build, so it never reads this cache.
+      # locally via `npm run test:perf`.
       #
       # The key hashes the *installed* `@playwright/test` package, not the whole
-      # lockfile: a cache that misses whenever any dependency moves would be
-      # re-downloaded for reasons that have nothing to do with the browser
-      # build, and a cache hit across a Playwright bump would run a binary the
-      # pinned version does not expect. No `restore-keys` for the same reason —
-      # a browser build from a different Playwright version is not a usable
-      # fallback, it is a wrong binary.
+      # lockfile: a hit across a Playwright bump would run a binary the pinned
+      # version does not expect. No `restore-keys` for the same reason.
       - name: Restore Playwright browsers
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-browsers-${{ runner.os }}-${{ hashFiles('node_modules/@playwright/test/package.json') }}
 
-      # Unconditional, cache hit or not: on a hit it is a ~5s no-op that also
-      # proves the restored tree is the one this runner can execute, which is
-      # cheaper than discovering a corrupt cache in the E2E suite.
+      # Unconditional, cache hit or not: on a hit it is a short no-op that also
+      # proves the restored tree is the one this runner can execute.
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
@@ -125,7 +128,7 @@ jobs:
       # CI goes red; the config keeps traces only on failure.
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report
           path: |

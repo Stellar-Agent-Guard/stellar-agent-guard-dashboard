@@ -1,0 +1,175 @@
+name: security
+
+# Required status checks for the default-branch ruleset (see
+# scripts/security/apply-ruleset.sh) — exact job names:
+#
+#   dependency-review
+#   npm-audit
+#   secret-scan
+#
+# `scorecard` is deliberately NOT in that list: it runs only on pushes to the
+# default branch and on a schedule, so it never reports on a pull request and
+# requiring it would leave every PR waiting on a check that never starts.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, Monday 04:17 UTC. The minute is offset from the hour so this does
+    # not queue alongside the many workflows that start exactly on the hour.
+    - cron: "17 4 * * 1"
+
+# Least privilege by default. Individual jobs add only what they need.
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Diff-only review of dependency changes: fails when the PR introduces a
+  # dependency with a known moderate-or-worse advisory, or a license outside
+  # the allow list. It compares the base and head dependency graphs, so it does
+  # not fail on advisories that already existed before the PR.
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Required by the action to post its summary on the pull request.
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: on-failure
+
+  # Production dependency audit. `--omit=dev` keeps the gate about code that
+  # actually ships to operators' browsers; devDependency advisories still
+  # surface through Dependabot without blocking every merge.
+  npm-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      # Verifies the registry signature and provenance attestation of every
+      # installed package, not just the ones with advisories. This is the check
+      # that would notice a package republished under a compromised owner or a
+      # tarball that does not match what the registry signed.
+      - name: Verify registry signatures
+        run: npm audit signatures
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  # Scan the full git history for committed credentials. gitleaks-action is not
+  # used: it requires a paid license for organization-owned repositories. The
+  # release binary below is pinned by version *and* verified against the
+  # published SHA256 before it is executed.
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # fetch-depth: 0 is required: gitleaks walks every commit, and a shallow
+      # checkout would silently scan only the tip, which is exactly where a
+      # careless commit is most likely to have been removed from.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Download gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          # SHA256 from gitleaks_8.30.1_checksums.txt on the release page.
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks version
+
+      # The allowlist below suppresses 16 pre-existing findings, all verified
+      # false positives: the public Stellar testnet passphrase, public contract
+      # IDs and account keys (C.../G... strkeys), transaction hashes, and
+      # synthetic values in fixtures. test fixtures are allowlisted by path
+      # because they exist to hold dummy credentials; a real secret committed
+      # there would still be visible in the repository.
+      #
+      # It is inline because this branch may only change workflow files. Moving
+      # it to .gitleaks.toml at the repository root is the natural follow-up.
+      - name: Scan history for secrets
+        env:
+          GITLEAKS_CONFIG_TOML: |
+            [extend]
+            useDefault = true
+
+            [allowlist]
+            description = "Public Stellar identifiers, the public testnet passphrase, and synthetic test fixtures"
+            paths = [
+              '''^tests/fixtures/''',
+              '''^tests/unit/''',
+            ]
+            regexes = [
+              '''Test SDF Network ; September 2015''',
+              '''\b[CG][A-Z2-7]{55}\b''',
+              '''\b[0-9a-f]{64}\b''',
+              '''deadbeef''',
+            ]
+        run: ./gitleaks git . --redact --no-banner --verbose
+
+  # OpenSSF Scorecard checks the repository's own supply-chain posture
+  # (branch protection, token permissions, pinned dependencies, dangerous
+  # workflow patterns). It needs to run on the default branch so the score is
+  # about merged state, and it uploads SARIF to code scanning.
+  scorecard:
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+      # Scorecard signs and publishes its results to the OpenSSF API.
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Public repository required for publication; results are also
+          # uploaded to code scanning below.
+          publish_results: true
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: results.sarif

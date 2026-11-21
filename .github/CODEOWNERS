@@ -1,0 +1,66 @@
+# Code owners for supply-chain and build-sensitive paths.
+#
+# Why these paths: a compromised dependency, lockfile, install hook, CI
+# workflow, or bundler config executes code before any application code runs.
+# A previous incident appended obfuscated JavaScript to config files that were
+# merged without close review, so every path that can execute during install,
+# build, or deploy requires @aigbagbobila to approve.
+#
+# CODEOWNERS uses the last matching pattern, and a matching pattern requires
+# the listed owner's approval only when branch protection/rulesets enable
+# "Require review from Code Owners". See scripts/security/apply-ruleset.sh.
+
+# ── CI, Actions, and repo automation ───────────────────────────────────────
+/.github/                @aigbagbobila
+/.github/**              @aigbagbobila
+/.husky/                 @aigbagbobila
+/.husky/**               @aigbagbobila
+
+# ── Dependency manifests and lockfiles ─────────────────────────────────────
+/package.json            @aigbagbobila
+/package-lock.json       @aigbagbobila
+/npm-shrinkwrap.json     @aigbagbobila
+/yarn.lock               @aigbagbobila
+/pnpm-lock.yaml          @aigbagbobila
+/bun.lock                @aigbagbobila
+/bun.lockb               @aigbagbobila
+
+# ── Install and runtime version configuration ──────────────────────────────
+/.npmrc                  @aigbagbobila
+/.nvmrc                  @aigbagbobila
+/.node-version           @aigbagbobila
+/.yarnrc.yml             @aigbagbobila
+/.pnpmfile.cjs           @aigbagbobila
+
+# ── Build/test configuration (runs during build and test) ──────────────────
+*.config.*               @aigbagbobila
+/*.config.*              @aigbagbobila
+
+# ── Container and hosting configuration ────────────────────────────────────
+/Dockerfile*             @aigbagbobila
+/docker-compose*.yml     @aigbagbobila
+/docker-compose*.yaml    @aigbagbobila
+/vercel.json             @aigbagbobila
+/netlify.toml            @aigbagbobila
+
+# ── Repository scripts (executed by maintainers and CI) ────────────────────
+/scripts/                @aigbagbobila
+/scripts/**              @aigbagbobila
+
+# ── Browser-served scripts in public/ (not built from source) ──────────────
+/public/**/*.js          @aigbagbobila
+/public/**/*.mjs         @aigbagbobila
+/public/**/*.cjs         @aigbagbobila
+/public/sw.js            @aigbagbobila
+
+# ── Server entry points and middleware (zero-server boundary exceptions) ───
+/middleware.ts           @aigbagbobila
+/middleware.js           @aigbagbobila
+/proxy.ts                @aigbagbobila
+/proxy.js                @aigbagbobila
+/instrumentation.ts      @aigbagbobila
+/instrumentation.js      @aigbagbobila
+/app/**/route.ts         @aigbagbobila
+/app/**/route.js         @aigbagbobila
+/app/**/middleware.ts    @aigbagbobila
+/app/**/proxy.ts         @aigbagbobila

@@ -10,6 +10,7 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(ci)"
     labels:
@@ -17,6 +18,8 @@ updates:
       - "dependencies"
 
   # Application dependencies declared in package.json / package-lock.json.
+  # Minor and patch bumps are grouped into one PR to keep review load bounded;
+  # major bumps stay separate because they need individual release-note review.
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -27,6 +30,14 @@ updates:
     labels:
       - "scope:dashboard"
       - "dependencies"
+    groups:
+      npm-minor-and-patch:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
     # The SDK is consumed as a vendored tarball until registry publish
     # authorization lands, so a registry bump here would fight the vendoring.
     ignore:

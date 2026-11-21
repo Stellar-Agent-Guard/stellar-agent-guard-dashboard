@@ -1,0 +1,18 @@
+# Long lines in these files are serialized transaction/error fixtures, not source code.
+tests/fixtures/phase3-proof.json:long-line
+# This RPC fixture includes long serialized XDR fields and base64 payloads by design.
+tests/fixtures/rpc-capture.json:long-line
+# Browser atob() decodes the base64-encoded Stellar XDR.
+lib/guard/multisig.ts:atob
+# The mock decodes base64 transaction XDR to calculate its deterministic hash.
+tests/e2e/sorobanRpcMock.ts:base64-buffer
+# This module shells out to resolve the current Git SHA; the operation is injectable in tests.
+lib/guard/proofRun.ts:child-process
+# The changelog utility uses Git commands to collect commit history.
+scripts/generate-changelog.mjs:child-process
+# The bundle-size test starts its CLI as a child process to verify its output.
+tests/unit/bundleSize.test.ts:child-process
+# The documentation audit test executes the checker CLI as a child process.
+tests/unit/docScripts.test.ts:child-process
+# The long values are base64-encoded XDR fields in the RPC fixture.
+tests/fixtures/rpc-capture.json:encoded-blob

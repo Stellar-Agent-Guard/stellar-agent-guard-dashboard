@@ -53,6 +53,36 @@ Soroban RPC endpoint is not a local-storage key; it is supplied through the
 dashboard's build configuration. None of these browser values should be treated
 as trusted authorization state or as a substitute for on-chain enforcement.
 
+## Supply-chain and build integrity
+
+Configuration and build files are executable code, not inert settings. A
+previous incident elsewhere appended obfuscated JavaScript to `next.config.js`,
+`postcss.config.js`, `tailwind.config.js`, and `vite.config.*` files, which then
+ran during build. Treat every config, build, install, CI, and container file as
+high-risk.
+
+- **Code owner review is required** for `/.github/`, dependency manifests and
+  all lockfiles, every `*.config.*` file, `.npmrc`, `.nvmrc`, `Dockerfile*`,
+  `vercel.json`/`netlify.toml`, `scripts/`, scripts served from `public/`, and
+  middleware/server entry points. See `.github/CODEOWNERS`.
+- **Install scripts are disabled** by `.npmrc` (`ignore-scripts=true`).
+  `esbuild`, `unrs-resolver`, and `fsevents` declare install scripts, but each
+  ships prebuilt platform packages, so none requires its script on Linux CI or
+  macOS. Do not enable install scripts globally; if a dependency genuinely
+  needs one, run it explicitly under review and document the exception here.
+- **Installs are lockfile-driven** (`npm ci`, committed `package-lock.json`).
+  Review any lockfile diff that adds a new package, changes a registry URL, or
+  adds an install script, even when `package.json` is unchanged.
+- **CI actions are pinned to full commit SHAs**, and Dependabot proposes pin
+  updates as reviewable PRs (`github-actions` and grouped npm minor/patch).
+- **Build output is not trusted from an unreviewed commit.** If a build behaves
+  unexpectedly, diff the config files for appended or minified code before
+  debugging application logic.
+
+Reports of a malicious dependency, typosquat, compromised maintainer account, or
+obfuscated build/config file are in scope and should use the private channels
+below.
+
 ## Reporting a Vulnerability
 
 Please do not report vulnerabilities in public issues or discussions.
