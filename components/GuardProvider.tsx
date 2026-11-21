@@ -30,7 +30,7 @@ import type { rpc } from "@stellar/stellar-sdk";
 import { createServer } from "../lib/guard/chain.ts";
 import { readGuardSnapshot, type GuardSnapshot } from "../lib/guard/guardOps.ts";
 import { NETWORK } from "../lib/guard/network.ts";
-import { POLLING, jitteredInterval } from "../lib/guard/polling.ts";
+import { POLLING, jitteredInterval, startRefreshTimer } from "../lib/guard/polling.ts";
 import {
   FEED_SWITCH_HISTORY_LEDGERS,
   GuardFeed,
@@ -78,10 +78,17 @@ import {
   defaultGuard,
   loadInstances,
   removeInstance as removeSavedInstance,
+  removeInstances as removeSavedInstancesBulk,
   renameInstance as renameSavedInstance,
   type GuardInstance,
 } from "../lib/guard/instance.ts";
-import { addGuard, fallbackAfterRemoval, registryAfterChange } from "../lib/guard/registry.ts";
+import {
+  addGuard,
+  fallbackAfterRemoval,
+  registryAfterChange,
+  restoreRegistryBackup,
+  type RegistryBackup,
+} from "../lib/guard/registry.ts";
 import { readStatus, readPolicy, readWindow, verifyWasmIdentity } from "../lib/guard/chain.ts";
 import { currentAddress, freighterSigner, type ConnectedWallet } from "../lib/guard/wallet.ts";
 import {
@@ -205,13 +212,30 @@ export interface GuardContextValue {
   addInstance: (guard: string, label: string) => Promise<{ ok: boolean; error?: string }>;
   /** Delete an operator-saved guard, clearing the state scoped to it. */
   removeInstance: (guard: string) => void;
+  /**
+   * Remove several saved guards in one write (#302), clearing the state scoped
+   * to each one that really left the registry. Resolves `true` only when the
+   * write landed, so a caller can offer an undo for a change that happened.
+   */
+  removeInstances: (guards: readonly string[]) => boolean;
+  /** Merge a backup of the registry back in — the one-step undo of a cleanup. */
+  restoreRegistry: (backup: RegistryBackup) => void;
   /** Rename a saved guard (a known instance gets a saved override). */
   renameInstance: (guard: string, label: string) => void;
   snapshot: GuardSnapshot | null;
   snapshotError: string | null;
   refreshing: boolean;
+  /** Last successful chain read refresh timestamp (ms since epoch). */
+  lastRefresh: number | null;
   refresh: () => Promise<void>;
-  /** Per-read retry (issue #36): re-invoke ONLY one failed snapshot read. */
+  /**
+   * Per-read retry (issue #36, #386): re-invoke ONLY one failed snapshot read.
+   *
+   * Bound to the guard/network context it started in: when the active guard or
+   * the RPC server changes while the re-read is in flight, the late response
+   * belongs to a world the operator has left and is discarded — no merge, no
+   * announcement — instead of painting over the new context's view.
+   */
   retryRead: (field: SnapshotField) => Promise<void>;
   /** The snapshot field currently re-reading, if any. */
   retryingField: SnapshotField | null;
@@ -376,6 +400,7 @@ export function GuardProvider({
   const [snapshot, setSnapshot] = useState<GuardSnapshot | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState<number | null>(null);
   // Per-read retry state (issue #36): which single field is re-reading. Only
   // one retry is in flight at a time — the same in-flight discipline the panel
   // refresh button follows — and a retry never touches the other fields.
@@ -498,6 +523,17 @@ export function GuardProvider({
   // abort/ignore-stale pattern the issue's concurrency test pins; without it the
   // slower of two overlapping `refresh()` calls wins the `setSnapshot` race.
   const readEpochRef = useRef(0);
+
+  // A change of RPC server (the test seam, and any future network switch) is a
+  // context change for every in-flight read, exactly like a guard switch: the
+  // epoch moves so a read issued against the old server is discarded rather
+  // than merged. On mount there is no previous server, so nothing is bumped.
+  const lastServerRef = useRef(server);
+  useEffect(() => {
+    if (lastServerRef.current === server) return;
+    lastServerRef.current = server;
+    readEpochRef.current += 1;
+  }, [server]);
 
   // The coordinator is deliberately never closed by an effect cleanup: React's
   // development StrictMode mount/unmount/mount cycle would close the channel on
@@ -799,6 +835,7 @@ export function GuardProvider({
       if (epoch !== readEpochRef.current) return;
       setSnapshot(next);
       setSnapshotError(null);
+      setLastRefresh(Date.now());
     } catch (error) {
       if (epoch !== readEpochRef.current) return;
       // A transport failure is not the guard's state: report it as a failure and
@@ -819,7 +856,7 @@ export function GuardProvider({
   }, [refresh]);
 
   /**
-   * Re-run exactly one snapshot read (issue #36).
+   * Re-run exactly one snapshot read (issue #36, #386).
    *
    * Discrete reads get discrete retries: retrying `status` must not re-invoke
    * `policy`, `window` or `identity` — the operator's per-read error report
@@ -829,10 +866,18 @@ export function GuardProvider({
    * render triple: the failed read shows its error block, then a pending
    * skeleton while the re-read is in flight, then the value or the error again
    * (with the retry still available — a failing retry is not a dead end).
+   *
+   * The retry is bound to the context it started in (#386): the read epoch is
+   * captured before the network call, and a retry that resolves after the
+   * active guard or the RPC server changed is discarded whole — its result is
+   * neither merged into the snapshot nor announced, because "policy read
+   * recovered" about a guard the operator is no longer looking at is noise at
+   * best and a lie about the current view at worst.
    */
   const retryRead = useCallback(
     async (field: SnapshotField) => {
       if (!guard || retryingField !== null) return; // one in flight at a time
+      const epoch = readEpochRef.current;
       setRetryingField(field);
       try {
         const failure = (error: unknown): { ok: false; error: string } => ({
@@ -860,6 +905,10 @@ export function GuardProvider({
               .catch(failure);
             break;
         }
+        // Discard a late response: the guard or the RPC server changed while
+        // this read was in flight, so the result belongs to a context the
+        // operator has left. Nothing is merged and nothing is announced.
+        if (epoch !== readEpochRef.current) return;
         // Merge only this field into the existing snapshot. A snapshot that has
         // been replaced wholesale (guard switch, full refresh) since the retry
         // started is left alone: the retry result is for a guard this panel may
@@ -946,10 +995,10 @@ export function GuardProvider({
 
   useEffect(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), SNAPSHOT_INTERVAL_MS);
-    const unregister = memoryWiper.add(() => clearInterval(timer));
+    const stop = startRefreshTimer(() => void refresh(), SNAPSHOT_INTERVAL_MS);
+    const unregister = memoryWiper.add(stop);
     return () => {
-      clearInterval(timer);
+      stop();
       unregister();
     };
   }, [refresh]);
@@ -1021,6 +1070,85 @@ export function GuardProvider({
         dropFeedState();
         tabSync.broadcast("GUARD_CHANGED", { guard: fallback });
       }
+    },
+    [instances, guard, tabSync, dropFeedState, announceRegistry],
+  );
+
+  /**
+   * Remove several saved guards in one reviewed write (#302).
+   *
+   * The cascade a single removal performs runs for every address that really
+   * left the registry, and the active guard moves to the first remaining one
+   * when it was among them — the same fallback a single delete takes, so a bulk
+   * cleanup never leaves the selector pointing at an address that is gone.
+   *
+   * A write that did not land leaves the selector exactly as it was and says
+   * so: the console must never display a registry that storage disagrees with.
+   */
+  const removeInstances = useCallback(
+    (targets: readonly string[]) => {
+      const result = removeSavedInstancesBulk(targets);
+      if (!result.ok) {
+        announce("The registry change could not be saved — nothing was removed", "assertive");
+        return false;
+      }
+      const removed = result.removed;
+      if (removed.length === 0) return false;
+      const removedSet = new Set(removed);
+      for (const target of removed) {
+        const entry = instances.find((instance) => instance.guard === target);
+        clearGuardScopedState(entry?.network ?? NETWORK.name, target);
+        announceRegistry("remove", target);
+      }
+      setInstances(result.instances);
+      if (removedSet.has(guard)) {
+        const fallback = result.instances[0]?.guard ?? defaultGuard();
+        readEpochRef.current += 1;
+        setGuard(fallback);
+        setSnapshot(null);
+        setSnapshotError(null);
+        setBuffer(emptyStreamBuffer());
+        setRangeLabel(null);
+        dropFeedState();
+        tabSync.broadcast("GUARD_CHANGED", { guard: fallback });
+      }
+      return true;
+    },
+    [instances, guard, tabSync, dropFeedState, announceRegistry],
+  );
+
+  /**
+   * Merge a cleanup's backup into the stored registry — its one-step undo.
+   *
+   * Entries the cleanup removed come back (and are announced, so another tab
+   * re-reads), and the operator returns to the account they were on when the
+   * backup was taken if the cleanup had moved them off it.
+   */
+  const restoreRegistry = useCallback(
+    (backup: RegistryBackup) => {
+      const result = restoreRegistryBackup(backup);
+      if (!result.ok) {
+        announce(result.error ?? "The previous registry could not be restored.", "assertive");
+        return;
+      }
+      const cameBack = backup.entries.filter(
+        (entry) => !instances.some((instance) => instance.guard === entry.guard),
+      );
+      for (const entry of cameBack) announceRegistry("add", entry.guard);
+      setInstances(result.instances);
+      const active = backup.activeGuard;
+      if (active !== "" && active !== guard) {
+        if (!result.instances.some((instance) => instance.guard === active)) return;
+        readEpochRef.current += 1;
+        setGuard(active);
+        setSnapshot(null);
+        setSnapshotError(null);
+        setBuffer(emptyStreamBuffer());
+        setRangeLabel(null);
+        dropFeedState();
+        tabSync.broadcast("GUARD_CHANGED", { guard: active });
+      }
+      announce("Restored the registry as it was before the cleanup");
     },
     [instances, guard, tabSync, dropFeedState, announceRegistry],
   );
@@ -1451,8 +1579,11 @@ export function GuardProvider({
       selectGuard,
       addInstance,
       removeInstance,
+      removeInstances,
+      restoreRegistry,
       renameInstance,
       snapshot,
+      lastRefresh,
       snapshotError,
       refreshing,
       refresh,
@@ -1487,6 +1618,7 @@ export function GuardProvider({
       connect,
       disconnect,
       signer,
+      lastRefresh,
       providerId,
       availableProviders,
       networkMismatch,
@@ -1497,6 +1629,8 @@ export function GuardProvider({
       selectGuard,
       addInstance,
       removeInstance,
+      removeInstances,
+      restoreRegistry,
       renameInstance,
       snapshot,
       snapshotError,

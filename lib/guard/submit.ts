@@ -136,6 +136,18 @@ export interface InvokeRequest {
   passphrase?: string;
   exportOnly?: boolean;
   /**
+   * End the write as its own `cancelled` outcome when the operator declines the
+   * signature, instead of throwing the decline back at the caller (issue #291).
+   *
+   * Deliberately opt-in rather than the default: a decline only becomes a
+   * first-class outcome on the deploy/initialize path this issue covers, where
+   * the panel words it separately from a failure and offers an explicit retry.
+   * Every other write — policy install/revoke, freeze/unfreeze, key rotation —
+   * keeps throwing exactly as it did before, so their existing visible outcome
+   * (and the tests that pin it) is untouched.
+   */
+  cancelOnDecline?: boolean;
+  /**
    * A smart account whose own storage must be merged into the footprint. Only
    * needed when the call is authorized *by* the guard (its `__check_auth` reads
    * policy/window/freeze state); an admin call passes `null`, because there the
@@ -454,6 +466,18 @@ async function pollForInclusion(
 }
 
 /**
+ * The outcome for a signature the operator declined (issue #291).
+ *
+ * Deliberately its own kind rather than a `refused`: nothing was simulated into
+ * a refusal and nothing was rejected by the network. The detail is the wallet's
+ * own words where it offered any, so no envelope, signature or payload is copied
+ * into it.
+ */
+function cancelledResult(error: unknown): InvokeResult {
+  return { kind: "cancelled", detail: actionableCancellationMessage(error) };
+}
+
+/**
  * The refusable result for a wallet interruption.
  *
  * Publishes the phase-specific guidance once, for the wallet panel, and returns
@@ -476,8 +500,16 @@ function interruptedResult(interruption: WriteInterruption): InvokeResult {
 /**
  * Re-check the wallet binding at a write boundary, returning a result instead
  * of throwing when the wallet moved. `null` means the write may continue.
+ *
+ * Exported because the deploy path (`guardOps.submitOperation`) signs through
+ * the same wallet as a contract call and therefore owes the console the same
+ * guarantee: no signature and no broadcast for an account the review was not
+ * built for (issue #349).
  */
-async function boundary(signer: WalletSigner, phase: WritePhase): Promise<InvokeResult | null> {
+export async function writeBoundary(
+  signer: WalletSigner,
+  phase: WritePhase,
+): Promise<InvokeResult | null> {
   try {
     await revalidateWallet({
       boundAddress: signer.address,
@@ -608,7 +640,7 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     // re-derive, including the credential kind and the entry's expiration ledger.
     // Before asking for it, the live account is re-read: a wallet that switched
     // administrators since the simulation must not sign this review (issue #340).
-    const beforeAuth = await boundary(signer, "authorization");
+    const beforeAuth = await writeBoundary(signer, "authorization");
     if (beforeAuth) return beforeAuth;
     promptWallet();
     let signedEntryXdr: string;
@@ -616,9 +648,17 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
       signedEntryXdr = await signer.signAuthEntry(entry.toXDR("base64"));
     } catch (error) {
       const interruption = interruptionFromSignerFailure(error, "authorization");
-      if (!interruption) throw error;
-      announce("Wallet interrupted during authorization signing — nothing was resubmitted");
-      return interruptedResult(interruption.interruption);
+      if (interruption) {
+        announce("Wallet interrupted during authorization signing — nothing was resubmitted");
+        return interruptedResult(interruption.interruption);
+      }
+      // A decline is the operator's decision, not a failure: when the caller
+      // asked for it (deploy/initialize, issue #291) it gets its own outcome so
+      // the panel can say "nothing was broadcast" and offer an explicit retry,
+      // instead of reporting a broadcast that never happened. Otherwise the
+      // decline is thrown exactly as it was before.
+      if (request.cancelOnDecline && isWalletCancellation(error)) return cancelledResult(error);
+      throw error;
     }
     signed.push(xdr.SorobanAuthorizationEntry.fromXDR(signedEntryXdr, "base64"));
   }
@@ -696,7 +736,7 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   // signatures and the envelope signature: the envelope is what commits the
   // source account, so signing it for a different administrator is precisely
   // the silent source switch this check exists to prevent.
-  const beforeEnvelope = await boundary(signer, "envelope");
+  const beforeEnvelope = await writeBoundary(signer, "envelope");
   if (beforeEnvelope) return beforeEnvelope;
   promptWallet();
   let signedEnvelope: string;
@@ -704,9 +744,16 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     signedEnvelope = await signer.signTransaction(assembled.transaction.toXDR());
   } catch (error) {
     const interruption = interruptionFromSignerFailure(error, "envelope");
-    if (!interruption) throw error;
-    announce("Wallet interrupted during transaction signing — nothing was resubmitted");
-    return interruptedResult(interruption.interruption);
+    if (interruption) {
+      announce("Wallet interrupted during transaction signing — nothing was resubmitted");
+      return interruptedResult(interruption.interruption);
+    }
+    // Same at the envelope as at the authorization entry: where the caller asked
+    // for it, the operator saying no ends the write as a cancellation that never
+    // reaches the network (issue #291). Nothing is retried from here — the retry
+    // is theirs to ask for.
+    if (request.cancelOnDecline && isWalletCancellation(error)) return cancelledResult(error);
+    throw error;
   }
 
   if (maxTime > 0 && detectExpiration(Math.floor(Date.now() / 1000), maxTime)) {
@@ -725,7 +772,7 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
   // Broadcast is the last boundary: a provider that vanished here may have
   // been the only witness to a submission, so the outcome is reported as
   // "verify before retrying" rather than as a failure (issue #341).
-  const beforeSend = await boundary(signer, "submission");
+  const beforeSend = await writeBoundary(signer, "submission");
   if (beforeSend) return beforeSend;
 
   let sent: rpc.Api.SendTransactionResponse;
@@ -813,6 +860,10 @@ export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeRe
     // may have landed.
     const guidance = recoveryGuidance(result.writeInterruption);
     announce(`${guidance.headline} ${guidance.nextStep}`, "assertive");
+  } else if (result.kind === "cancelled") {
+    // The operator's own decision, so the announcement says what did *not*
+    // happen and that nothing needs rescuing — no transaction exists to look up.
+    announce("Signing declined in the wallet — nothing was broadcast", "assertive");
   } else if (result.kind === "refused") {
     announce(`Transaction refused — nothing was broadcast ${context}`, "assertive");
   } else if (result.kind === "failed") {

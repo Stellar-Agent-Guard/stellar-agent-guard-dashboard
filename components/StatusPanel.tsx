@@ -87,6 +87,12 @@ function DmsAlertBanner({
   const nowSecs = useNowSecs();
   const reference = useMemo(() => resolveReferenceTime(reading, nowSecs), [reading, nowSecs]);
   const projected = projectDmsAlert(alert, reference);
+  // A chain reading that outlived the freshness bound is a stale read (#389):
+  // the projection already freezes its numbers at the last chain value and
+  // refuses to state an exact expiry; this flag adds the explicit "stale read"
+  // note so the operator knows to refresh rather than read the figures as a
+  // fresh deadline.
+  const stale = reference.source === "ledger" && !reference.authoritative;
 
   const details: string[] = [];
   if (projected.remainingSecs !== null && alert.totalSecs !== null) {
@@ -134,6 +140,12 @@ function DmsAlertBanner({
     <div className={`dms-banner no-print ${projected.level}`} role="alert">
       <strong>{title}</strong>
       {details.length > 0 && <span className="detail">{details.join(" · ")}</span>}
+      {stale && (
+        <span className="detail" data-testid="dms-stale-note">
+          stale read — these figures are from the last successful ledger read, not a new one; they
+          are not a fresh deadline. Refresh to re-read the chain.
+        </span>
+      )}
     </div>
   );
 }
@@ -191,14 +203,41 @@ function ReadDiagnostics({ entries }: { entries: Array<{ label: string; text: st
  * results in a `simulatedStatus` projection and stamps a striped watermark
  * across the panel, so no write path can be reached while it is active.
  */
+/** A printable allowlist: null is an unavailable read, never an empty list. */
+function printAllowlist(items: string[] | null): string {
+  if (items === null) return "Unavailable — the policy read failed";
+  return items.length === 0 ? "None" : items.join(", ");
+}
+
+/** A printable read outcome, with the reason when there is no value. */
+function printReadOutcome(read: {
+  state: "read" | "empty" | "failed";
+  detail: string | null;
+}): string {
+  if (read.state === "failed") return `Unavailable${read.detail ? ` — ${read.detail}` : ""}`;
+  if (read.state === "empty") return "Read succeeded; no entry (not a failure)";
+  return "Read successfully";
+}
+
 export function StatusPanel() {
-  const { snapshot, snapshotError, refreshing, refresh, guard, wallet, retryRead, retryingField } =
-    useGuard();
+  const {
+    snapshot,
+    snapshotError,
+    refreshing,
+    refresh,
+    guard,
+    wallet,
+    retryRead,
+    retryingField,
+    lastRefresh,
+  } = useGuard();
 
   useStatusTransitionAnnouncer(snapshot);
 
   const printReport = snapshot
-    ? compilePrintReport(snapshot, NETWORK.name, wallet?.address || "Disconnected")
+    ? compilePrintReport(snapshot, NETWORK.name, wallet?.address || "Disconnected", {
+        networkPassphrase: NETWORK.passphrase,
+      })
     : null;
   // Derived from this render's read, never from an event: a revoke done here, in
   // another tab, or by the agent's own tooling shows up on the next poll. An
@@ -283,6 +322,13 @@ export function StatusPanel() {
                 read <TimeAgo iso={snapshot.fetchedAt} />
               </span>
             )}
+            {(!snapshot || snapshotError) && lastRefresh != null && (
+              <span className="tiny muted">
+                {snapshotError ? "error state" : "stale since "}
+                {lastRefresh != null && new Date(lastRefresh).toLocaleTimeString()}
+              </span>
+            )}
+            {refreshing && !snapshot && <span className="tiny muted">loading...</span>}
             <StorageExplorerButton />
             <WebhookSettingsButton />
             <WebhookAlertBridge />
@@ -608,14 +654,24 @@ export function StatusPanel() {
         {printReport && (
           <div className="print-only print-report">
             <h2>Compliance Audit Report</h2>
+            <p className="tiny">
+              Captured by the Stellar Agent Guard dashboard. The values below are only as current as
+              the reads listed in the provenance section; re-read the chain before relying on this
+              page.
+            </p>
             <p>
-              <strong>Timestamp:</strong> {printReport.timestamp}
+              <strong>Captured at:</strong> {printReport.capturedAt}
             </p>
             <p>
               <strong>Network:</strong> {printReport.network}
             </p>
             <p>
-              <strong>Contract ID:</strong> <span className="mono">{printReport.contractId}</span>
+              <strong>Network passphrase:</strong>{" "}
+              <span className="mono">{printReport.networkPassphrase || "Not recorded"}</span>
+            </p>
+            <p>
+              <strong>Guard contract ID:</strong>{" "}
+              <span className="mono">{printReport.contractId}</span>
             </p>
             <p>
               <strong>Bytecode Hash:</strong>{" "}
@@ -633,9 +689,20 @@ export function StatusPanel() {
             <div>
               <strong>Allowlists:</strong>
               <ul>
-                <li>Assets: {printReport.allowlists.assets.join(", ") || "None"}</li>
-                <li>Recipients: {printReport.allowlists.recipients.join(", ") || "None"}</li>
-                <li>Protocols: {printReport.allowlists.protocols.join(", ") || "None"}</li>
+                <li>Assets: {printAllowlist(printReport.allowlists.assets)}</li>
+                <li>Recipients: {printAllowlist(printReport.allowlists.recipients)}</li>
+                <li>Protocols: {printAllowlist(printReport.allowlists.protocols)}</li>
+              </ul>
+            </div>
+            <div>
+              <strong>Read provenance:</strong>
+              <ul>
+                {printReport.reads.map((read) => (
+                  <li key={read.key}>
+                    {read.label}: {printReadOutcome(read)} —{" "}
+                    {read.readAt ? `read at ${read.readAt}` : "no successful read to timestamp"}
+                  </li>
+                ))}
               </ul>
             </div>
           </div>
