@@ -22,6 +22,11 @@ import { ErrorBlock } from "./bits.tsx";
 import { NETWORK } from "../lib/guard/network.ts";
 import { announce } from "../lib/guard/useAnnounce.ts";
 import {
+  deliveryTracker,
+  clearDeliveryHistory,
+  type DeliveryRecord,
+} from "../lib/guard/WebhookAlertBridge.tsx";
+import {
   DEFAULT_WEBHOOK_SETTINGS,
   WEBHOOK_EVENT_HINTS,
   WEBHOOK_EVENT_LABELS,
@@ -82,6 +87,7 @@ export function WebhookSettingsModal({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [ping, setPing] = useState<DispatchResult | null>(null);
+  const [deliveries, setDeliveries] = useState<DeliveryRecord[]>(() => deliveryTracker.getRecords());
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -145,16 +151,33 @@ export function WebhookSettingsModal({ onClose }: { onClose: () => void }) {
       setTesting(false);
       return;
     }
+    const record = deliveryTracker.enqueue(candidate.url, `test-${Date.now()}`, "WEBHOOK_TEST");
     const result = await dispatchWebhook(
       buildVerificationPing({ guard, network: NETWORK.name }),
       candidate,
     );
+    if (result.ok) {
+      deliveryTracker.markDelivered(record.id, result.status ?? 200);
+    } else {
+      deliveryTracker.markFailed(
+        record.id,
+        result.status ?? undefined,
+        result.error ?? result.outcome,
+      );
+    }
+    setDeliveries(deliveryTracker.getRecords());
     setPing(result);
     setTesting(false);
     announce(
       result.ok ? "Test webhook delivered" : `${pingHeadline(result)}: ${describeDispatch(result)}`,
       result.ok ? "polite" : "assertive",
     );
+  }
+
+  function handleClearHistory() {
+    clearDeliveryHistory();
+    setDeliveries([]);
+    announce("Webhook delivery history cleared.");
   }
 
   return (
@@ -301,6 +324,77 @@ export function WebhookSettingsModal({ onClose }: { onClose: () => void }) {
             )}
           </div>
         )}
+
+        <div className="stack" style={{ marginTop: 14 }} data-testid="webhook-delivery-history">
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <span className="lbl" style={{ margin: 0 }}>
+              Delivery history
+            </span>
+            {deliveries.length > 0 && (
+              <button
+                type="button"
+                className="secondary"
+                style={{ padding: "2px 8px", fontSize: "0.8em" }}
+                onClick={handleClearHistory}
+                aria-label="Clear local delivery history"
+              >
+                Clear history
+              </button>
+            )}
+          </div>
+          <span className="hint">
+            Recent delivery history is retained locally in your browser for 24 hours (up to 50
+            records) for troubleshooting. Clearing history does not alter your endpoint or alert
+            configuration.
+          </span>
+          {deliveries.length === 0 ? (
+            <p className="tiny muted" style={{ margin: "4px 0" }}>
+              No webhook deliveries recorded yet.
+            </p>
+          ) : (
+            <div
+              className="scrolly"
+              style={{ maxHeight: 150, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 4 }}
+            >
+              <table className="tiny stack" style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: "4px 8px" }}>Time</th>
+                    <th style={{ textAlign: "left", padding: "4px 8px" }}>Event</th>
+                    <th style={{ textAlign: "left", padding: "4px 8px" }}>Status</th>
+                    <th style={{ textAlign: "left", padding: "4px 8px" }}>Details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deliveries.map((record) => (
+                    <tr key={record.id} style={{ borderTop: "1px solid var(--border)" }}>
+                      <td style={{ padding: "4px 8px" }}>
+                        <time dateTime={new Date(record.timestamp).toISOString()}>
+                          {new Date(record.timestamp).toLocaleTimeString()}
+                        </time>
+                      </td>
+                      <td style={{ padding: "4px 8px" }} className="mono">
+                        {record.event ?? "ALERT"}
+                      </td>
+                      <td style={{ padding: "4px 8px" }}>
+                        <span
+                          className={`pill ${record.status === "delivered" ? "ok" : record.status === "pending" ? "" : "danger"}`}
+                          style={{ fontSize: "0.75em", padding: "1px 5px" }}
+                        >
+                          {record.status}
+                          {record.statusCode ? ` (${record.statusCode})` : ""}
+                        </span>
+                      </td>
+                      <td style={{ padding: "4px 8px" }} className="tiny muted">
+                        {record.errorMessage ?? "OK"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
 
         <div className="row" style={{ marginTop: 12 }}>
           <button onClick={save}>Save</button>

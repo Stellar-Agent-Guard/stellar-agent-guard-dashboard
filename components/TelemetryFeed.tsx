@@ -6,7 +6,9 @@ import type { GuardEvent } from "stellar-agent-guard-sdk";
 import {
   STREAM_BUFFER_LIMIT,
   describeFeedGap,
+  groupTelemetryEvents,
   type TelemetryEvent,
+  type TelemetryGrouping,
 } from "../lib/guard/telemetry.ts";
 import { useGuard, useGuardEvents } from "./GuardProvider.tsx";
 import { TelemetryAlerts } from "./TelemetryAlerts.tsx";
@@ -225,6 +227,7 @@ export function TelemetryFeed() {
   // projection, so an export is the filtered multi-guard view and nothing more.
   const rows = filterGuardEvents(guardVisible, filter);
   const filterActive = isFilterActive(filter) || selectedGuards.size > 0;
+  const [grouping, setGrouping] = useState<TelemetryGrouping>("none");
 
   /**
    * The scope every download leaves with (#309), computed from the same rows the
@@ -249,6 +252,11 @@ export function TelemetryFeed() {
         ? feed.guards
         : instances.map((instance) => ({ guard: instance.guard, label: instance.label })),
     [feed.guards, instances],
+  );
+
+  const groups = useMemo(
+    () => groupTelemetryEvents(rows, grouping, chipSources),
+    [rows, grouping, chipSources],
   );
 
   /**
@@ -476,6 +484,34 @@ export function TelemetryFeed() {
           }
           style={{ maxWidth: 240 }}
         />
+        <label
+          className="tiny muted"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+        >
+          Group by
+          <select
+            aria-label="Group events"
+            value={grouping}
+            onChange={(event) => {
+              const next = event.target.value as TelemetryGrouping;
+              setGrouping(next);
+              if (next !== "none") {
+                const nextGroups = groupTelemetryEvents(rows, next, chipSources);
+                announce(
+                  `Grouped into ${nextGroups.length} groups across ${rows.length} events`,
+                  "polite",
+                );
+              } else {
+                announce("Grouping removed, showing chronological stream", "polite");
+              }
+            }}
+          >
+            <option value="none">No grouping (chronological)</option>
+            <option value="kind">Event type</option>
+            <option value="guard">Guard</option>
+            <option value="verdict">Decision / Verdict</option>
+          </select>
+        </label>
         <button
           className="secondary"
           onClick={() => downloadExport("csv")}
@@ -759,15 +795,42 @@ export function TelemetryFeed() {
         <div className="scrolly table-stack">
           <table className={`events stack ${densityState === "compact" ? "compact" : ""}`}>
             {feedHead}
-            <tbody>
-              {rows.map((event) => (
-                <TelemetryRow
-                  key={event.id}
-                  event={event}
-                  guardLabel={attributionLabel(event.contractId, chipSources)}
-                />
-              ))}
-            </tbody>
+            {grouping === "none" ? (
+              <tbody>
+                {rows.map((event) => (
+                  <TelemetryRow
+                    key={event.id}
+                    event={event}
+                    guardLabel={attributionLabel(event.contractId, chipSources)}
+                  />
+                ))}
+              </tbody>
+            ) : (
+              groups.map((group) => (
+                <tbody key={group.id} data-group={group.id}>
+                  <tr
+                    className="group-header"
+                    style={{ background: "var(--surface-sunken, rgba(255,255,255,0.04))" }}
+                  >
+                    <td colSpan={6} style={{ fontWeight: 600, padding: "8px 12px" }}>
+                      <span className="row" style={{ alignItems: "center", gap: 8 }}>
+                        <span>{group.label}</span>
+                        <span className="pill tiny muted">
+                          {group.count} event{group.count === 1 ? "" : "s"}
+                        </span>
+                      </span>
+                    </td>
+                  </tr>
+                  {group.events.map((event) => (
+                    <TelemetryRow
+                      key={event.id}
+                      event={event}
+                      guardLabel={attributionLabel(event.contractId, chipSources)}
+                    />
+                  ))}
+                </tbody>
+              ))
+            )}
           </table>
         </div>
       )}

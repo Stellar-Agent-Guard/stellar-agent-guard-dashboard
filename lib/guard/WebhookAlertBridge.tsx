@@ -9,7 +9,8 @@
  * - **retrying**: Temporary failure, scheduled for retry
  *
  * The tracker maintains a bounded queue (most recent 50 deliveries) and
- * automatically evicts entries older than 24 hours.
+ * automatically evicts entries older than 24 hours. Records are persisted in
+ * local browser storage so troubleshooting history survives tab refreshes.
  */
 
 export type DeliveryStatus = "pending" | "delivered" | "failed" | "retrying";
@@ -20,30 +21,79 @@ export interface DeliveryRecord {
   status: DeliveryStatus;
   timestamp: number; // epoch ms
   attempts: number;
-  lastAttemptAt?: number;
-  statusCode?: number;
-  errorMessage?: string;
-  nextRetryAt?: number;
+  lastAttemptAt?: number | undefined;
+  statusCode?: number | undefined;
+  errorMessage?: string | undefined;
+  nextRetryAt?: number | undefined;
+  event?: string | undefined;
 }
 
-const MAX_QUEUE_SIZE = 50;
-const EVICTION_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+export const MAX_QUEUE_SIZE = 50;
+export const EVICTION_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+export const WEBHOOK_DELIVERY_STORAGE_KEY = "stellar-agent-guard-dashboard.webhook-history.v1";
+
+export interface StorageLike {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem?(key: string): void;
+}
+
+function defaultStorage(): StorageLike | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
 
 export class WebhookDeliveryTracker {
   private records: DeliveryRecord[] = [];
+  private storage: StorageLike | null = null;
+
+  constructor(storage: StorageLike | null = defaultStorage()) {
+    this.storage = storage;
+    this.loadFromStorage();
+  }
+
+  private loadFromStorage(): void {
+    if (!this.storage) return;
+    try {
+      const raw = this.storage.getItem(WEBHOOK_DELIVERY_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        this.records = parsed;
+        this.evictOldRecords();
+      }
+    } catch {
+      this.records = [];
+    }
+  }
+
+  private persist(): void {
+    if (!this.storage) return;
+    try {
+      this.storage.setItem(WEBHOOK_DELIVERY_STORAGE_KEY, JSON.stringify(this.records));
+    } catch {
+      // Ignore quota / private-mode write errors
+    }
+  }
 
   /** Record a new webhook alert as pending */
-  enqueue(url: string, alertId: string): DeliveryRecord {
+  enqueue(url: string, alertId: string, event?: string): DeliveryRecord {
     const record: DeliveryRecord = {
       id: `${alertId}-${Date.now()}`,
       url,
       status: "pending",
       timestamp: Date.now(),
       attempts: 0,
+      event: event ?? undefined,
     };
 
     this.records.unshift(record);
     this.evictOldRecords();
+    this.persist();
     return record;
   }
 
@@ -56,6 +106,7 @@ export class WebhookDeliveryTracker {
     record.statusCode = statusCode;
     record.lastAttemptAt = Date.now();
     record.attempts += 1;
+    this.persist();
   }
 
   /** Mark a delivery as failed with an error */
@@ -72,6 +123,7 @@ export class WebhookDeliveryTracker {
     record.errorMessage = errorMessage;
     record.lastAttemptAt = Date.now();
     record.attempts += 1;
+    this.persist();
   }
 
   /** Schedule a delivery for retry */
@@ -83,6 +135,7 @@ export class WebhookDeliveryTracker {
     record.nextRetryAt = nextRetryAt;
     record.lastAttemptAt = Date.now();
     record.attempts += 1;
+    this.persist();
   }
 
   /** Get all delivery records, newest first */
@@ -95,9 +148,20 @@ export class WebhookDeliveryTracker {
     return this.records.filter((r) => r.status === status);
   }
 
-  /** Clear all records */
+  /** Clear all records without modifying webhook configuration */
   clear(): void {
     this.records = [];
+    if (this.storage) {
+      try {
+        if (typeof this.storage.removeItem === "function") {
+          this.storage.removeItem(WEBHOOK_DELIVERY_STORAGE_KEY);
+        } else {
+          this.storage.setItem(WEBHOOK_DELIVERY_STORAGE_KEY, JSON.stringify([]));
+        }
+      } catch {
+        // ignore
+      }
+    }
   }
 
   /** Remove records older than eviction threshold and enforce max size */
@@ -116,3 +180,19 @@ export class WebhookDeliveryTracker {
 
 /** Singleton instance for the dashboard */
 export const deliveryTracker = new WebhookDeliveryTracker();
+
+/** Explicit helper to clear delivery history from storage */
+export function clearDeliveryHistory(storage: StorageLike | null = defaultStorage()): void {
+  deliveryTracker.clear();
+  if (storage) {
+    try {
+      if (typeof storage.removeItem === "function") {
+        storage.removeItem(WEBHOOK_DELIVERY_STORAGE_KEY);
+      } else {
+        storage.setItem(WEBHOOK_DELIVERY_STORAGE_KEY, JSON.stringify([]));
+      }
+    } catch {
+      // ignore
+    }
+  }
+}

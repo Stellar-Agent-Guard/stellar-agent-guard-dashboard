@@ -774,3 +774,101 @@ export function resumeStream(
 export function clearStreamRows(buffer: StreamBuffer): StreamBuffer {
   return { ...buffer, rows: [] };
 }
+
+// ── Event Visual Grouping ──────────────────────────────────────────────────
+
+export type TelemetryGrouping = "none" | "kind" | "guard" | "verdict";
+
+export interface TelemetryGroup {
+  id: string;
+  label: string;
+  count: number;
+  events: TelemetryEvent[];
+}
+
+export function labelForTelemetryKind(kind: string): string {
+  switch (kind) {
+    case "auth_checked":
+      return "Authorization decisions";
+    case "heartbeat":
+      return "Agent heartbeats";
+    case "initialized":
+      return "Account initialized";
+    case "frozen":
+      return "Admin freeze";
+    case "unfrozen":
+      return "Admin unfreeze";
+    case "policy_set":
+      return "Policy installed";
+    case "policy_revoked":
+      return "Policy revoked";
+    default:
+      return kind;
+  }
+}
+
+/**
+ * Group telemetry events without dropping any individual records or altering export semantics.
+ */
+export function groupTelemetryEvents(
+  events: readonly TelemetryEvent[],
+  grouping: TelemetryGrouping,
+  chipSources?: readonly { guard: string; label: string }[],
+): TelemetryGroup[] {
+  if (grouping === "none") {
+    return [
+      {
+        id: "all",
+        label: "All Events",
+        count: events.length,
+        events: [...events],
+      },
+    ];
+  }
+
+  const groupsMap = new Map<string, { label: string; events: TelemetryEvent[] }>();
+
+  for (const event of events) {
+    let key: string;
+    let label: string;
+
+    if (grouping === "kind") {
+      key = event.kind;
+      label = labelForTelemetryKind(event.kind);
+    } else if (grouping === "guard") {
+      key = event.contractId ?? "unknown";
+      const source = chipSources?.find((s) => s.guard === event.contractId);
+      label = source
+        ? source.label
+        : event.contractId
+          ? `Guard ${event.contractId.slice(0, 6)}…${event.contractId.slice(-4)}`
+          : "Unknown Guard";
+    } else if (grouping === "verdict") {
+      if (event.decision?.result === "blocked") {
+        key = "blocked";
+        label = "Blocked Decisions";
+      } else if (event.decision?.result === "allowed") {
+        key = "allowed";
+        label = "Allowed Decisions";
+      } else {
+        key = "lifecycle";
+        label = "Lifecycle & Admin Events";
+      }
+    } else {
+      key = "other";
+      label = "Other Events";
+    }
+
+    if (!groupsMap.has(key)) {
+      groupsMap.set(key, { label, events: [] });
+    }
+    groupsMap.get(key)!.events.push(event);
+  }
+
+  return Array.from(groupsMap.entries()).map(([id, group]) => ({
+    id,
+    label: group.label,
+    count: group.events.length,
+    events: group.events,
+  }));
+}

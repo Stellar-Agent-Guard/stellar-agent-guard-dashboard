@@ -31,12 +31,17 @@ import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { useGuard, useGuardEvents } from "./GuardProvider.tsx";
 import { short } from "./bits.tsx";
 import { NETWORK } from "../lib/guard/network.ts";
+import { useAnnounce } from "../lib/guard/useAnnounce.ts";
 import {
   AudioAlerter,
   ALERT_DEDUPE_PERSIST_LIMIT,
   alertDedupeScopeKey,
+  alertEventKey,
   alertsArmed,
   alertReasonFor,
+  acknowledgeAlert,
+  unacknowledgeAlert,
+  isAlertAcknowledged,
   audioEffective,
   buildNotificationPayload,
   createAlertTracker,
@@ -57,6 +62,7 @@ import {
   type AudioPlayReport,
   type NotificationDelivery,
   type NotificationPermissionState,
+  type SecurityAlertReason,
 } from "../lib/guard/audioAlert.ts";
 
 const REASON_LABEL: Record<NonNullable<ReturnType<typeof alertReasonFor>>, string> = {
@@ -68,6 +74,7 @@ const REASON_LABEL: Record<NonNullable<ReturnType<typeof alertReasonFor>>, strin
 export function TelemetryAlerts() {
   const events = useGuardEvents();
   const { guard, feed } = useGuard();
+  const announceCopy = useAnnounce();
   const [settings, setSettings] = useState<AlertSettings>({
     audio: false,
     desktop: false,
@@ -75,6 +82,13 @@ export function TelemetryAlerts() {
   });
   const [permission, setPermission] = useState<NotificationPermissionState>("unsupported");
   const [lastAlert, setLastAlert] = useState<string | null>(null);
+  const [activeIncident, setActiveIncident] = useState<{
+    key: string;
+    label: string;
+    guard: string;
+    reason: SecurityAlertReason;
+  } | null>(null);
+  const [incidentAcked, setIncidentAcked] = useState(false);
   // The two things the panel can only know by trying (#314): what the browser
   // did with the last notification, and whether the last chime actually played.
   const [lastDelivery, setLastDelivery] = useState<NotificationDelivery | null>(null);
@@ -156,10 +170,33 @@ export function TelemetryAlerts() {
 
       const newest = fresh[fresh.length - 1] as GuardEvent;
       const newestReason = alertReasonFor(newest);
-      if (newestReason) setLastAlert(`${REASON_LABEL[newestReason]} · ${short(guard, 6, 4)}`);
+      if (newestReason) {
+        const key = alertEventKey(newest);
+        const label = REASON_LABEL[newestReason];
+        setLastAlert(`${label} · ${short(guard, 6, 4)}`);
+        setActiveIncident({ key, label, guard, reason: newestReason });
+        setIncidentAcked(isAlertAcknowledged(key));
+      }
     };
     announce();
   }, [events, settings, scope, scopeKey, alerter, guard, notificationApi]);
+
+  const handleAcknowledge = useCallback(() => {
+    if (!activeIncident) return;
+    acknowledgeAlert(activeIncident.key, {
+      reason: activeIncident.reason,
+      guard: activeIncident.guard,
+    });
+    setIncidentAcked(true);
+    announceCopy("Incident alert acknowledged. Underlying event retained in ledger feed.");
+  }, [activeIncident, announceCopy]);
+
+  const handleUnacknowledge = useCallback(() => {
+    if (!activeIncident) return;
+    unacknowledgeAlert(activeIncident.key);
+    setIncidentAcked(false);
+    announceCopy("Incident alert reopened for operator review.");
+  }, [activeIncident, announceCopy]);
 
   /** Turn the chime on. The click is what unlocks audio, so this cannot be a checkbox. */
   const toggleAudio = useCallback(() => {
@@ -239,7 +276,57 @@ export function TelemetryAlerts() {
             {describeNotificationDelivery(lastDelivery)}
           </p>
         )}
-        {lastAlert && (
+        {activeIncident && (
+          <div
+            className="notice"
+            role="status"
+            style={{ marginTop: 8 }}
+            data-testid="incident-alert-ack"
+          >
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <strong>Security incident: {activeIncident.label}</strong>
+                <span className="tiny mono" style={{ marginLeft: 6 }}>
+                  {short(activeIncident.guard, 6, 4)}
+                </span>
+                <div className="tiny muted">
+                  {incidentAcked
+                    ? "Acknowledged by operator — underlying ledger evidence retained"
+                    : "Requires operator review"}
+                </div>
+              </div>
+              <div className="row" style={{ gap: 6 }}>
+                {incidentAcked ? (
+                  <>
+                    <span className="pill ok" aria-label="Incident alert acknowledged">
+                      Acknowledged
+                    </span>
+                    <button
+                      type="button"
+                      className="secondary"
+                      style={{ padding: "2px 6px", fontSize: "0.8em" }}
+                      onClick={handleUnacknowledge}
+                      aria-label="Reopen incident alert for review"
+                    >
+                      Reopen
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="secondary"
+                    style={{ padding: "4px 8px", fontSize: "0.85em" }}
+                    onClick={handleAcknowledge}
+                    aria-label="Acknowledge security alert"
+                  >
+                    Acknowledge
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+        {lastAlert && !activeIncident && (
           <p className="tiny" style={{ marginTop: 4 }}>
             Last alert: {lastAlert}
           </p>

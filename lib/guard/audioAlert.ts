@@ -853,3 +853,80 @@ export function saveAlertSettings(settings: AlertSettings, storage?: StorageLike
     // A private-mode write only loses the preference for this session.
   }
 }
+
+// ── Alert Acknowledgement State ───────────────────────────────────────────
+
+export const ALERT_ACKS_STORAGE_KEY = "stellar-agent-guard-dashboard.alert-acks.v1";
+export const ALERT_ACKS_LIMIT = 500;
+
+export interface AlertAckItem {
+  key: string;
+  acknowledgedAt: number;
+  reason?: SecurityAlertReason | undefined;
+  guard?: string | undefined;
+}
+
+export function loadAcknowledgedAlerts(storage?: StorageLike | null): Map<string, AlertAckItem> {
+  const store = storage === undefined ? defaultStorage() : storage;
+  if (!store) return new Map();
+  try {
+    const raw = store.getItem(ALERT_ACKS_STORAGE_KEY);
+    if (!raw) return new Map();
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return new Map(parsed.map((item: AlertAckItem) => [item.key, item]));
+    }
+  } catch {
+    // ignore corrupt storage
+  }
+  return new Map();
+}
+
+export function isAlertAcknowledged(alertKey: string, storage?: StorageLike | null): boolean {
+  return loadAcknowledgedAlerts(storage).has(alertKey);
+}
+
+export function acknowledgeAlert(
+  alertKey: string,
+  meta?: { reason?: SecurityAlertReason; guard?: string },
+  storage?: StorageLike | null,
+): void {
+  const store = storage === undefined ? defaultStorage() : storage;
+  if (!store) return;
+  const acks = loadAcknowledgedAlerts(store);
+  acks.set(alertKey, {
+    key: alertKey,
+    acknowledgedAt: Date.now(),
+    reason: meta?.reason ?? undefined,
+    guard: meta?.guard ?? undefined,
+  });
+  const entries = Array.from(acks.values()).slice(-ALERT_ACKS_LIMIT);
+  try {
+    store.setItem(ALERT_ACKS_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // ignore
+  }
+}
+
+export function unacknowledgeAlert(alertKey: string, storage?: StorageLike | null): void {
+  const store = storage === undefined ? defaultStorage() : storage;
+  if (!store) return;
+  const acks = loadAcknowledgedAlerts(store);
+  acks.delete(alertKey);
+  const entries = Array.from(acks.values());
+  try {
+    store.setItem(ALERT_ACKS_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // ignore
+  }
+}
+
+export function clearAcknowledgedAlerts(storage?: StorageLike | null): void {
+  const store = storage === undefined ? defaultStorage() : storage;
+  if (!store) return;
+  try {
+    store.setItem(ALERT_ACKS_STORAGE_KEY, JSON.stringify([]));
+  } catch {
+    // ignore
+  }
+}
