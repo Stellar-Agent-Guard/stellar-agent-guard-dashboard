@@ -194,8 +194,8 @@ export function TelemetryFeed() {
   function downloadExport(format: "csv" | "json") {
     const content =
       format === "csv"
-        ? eventsToCsv(scope.rows, guard)
-        : JSON.stringify(eventsToJson(scope.rows, guard), null, 2);
+        ? eventsToCsv(scope.rows, guard, { demo })
+        : JSON.stringify(eventsToJson(scope.rows, guard, { demo }), null, 2);
     const type = format === "csv" ? "text/csv;charset=utf-8" : "application/json";
     const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);

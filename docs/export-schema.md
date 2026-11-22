@@ -28,6 +28,7 @@ version of this export.
 | 9   | `ledger`           | Ledger sequence the event was committed in.                                         | Diagnostic events — a blocked transaction never reaches the ledger. |
 | 10  | `ledger_closed_at` | ISO-8601 close time of that ledger.                                                 | Diagnostic events.                                                  |
 | 11  | `transaction_hash` | Hash of the committed transaction.                                                  | Diagnostic events.                                                  |
+| 12  | `provenance`       | Data source provenance: `live-chain` or `demo-fixtures`.                            | Never.                                                              |
 
 ### Practical ceiling
 

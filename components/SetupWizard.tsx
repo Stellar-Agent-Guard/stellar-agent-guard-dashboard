@@ -28,8 +28,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { isInitialized, readPolicy, readStatus, type ReadResult } from "../lib/guard/chain.ts";
-import { deriveSetupSteps, readSetupState, writeSetupState } from "../lib/guard/setupChecklist.ts";
-import { isDemoMode } from "../lib/guard/demoFixtures.ts";
+import {
+  deriveNextAction,
+  deriveSetupSteps,
+  readSetupState,
+  writeSetupState,
+} from "../lib/guard/setupChecklist.ts";
+import { demoSnapshot, isDemoMode } from "../lib/guard/demoFixtures.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { ErrorBlock, short } from "./bits.tsx";
 
@@ -159,6 +164,10 @@ export function SetupWizard() {
     };
   }, [guard, demo, fetchInitialized]);
 
+  const [rehearsalActive, setRehearsalActive] = useState(false);
+  const [rehearsalStep, setRehearsalStep] = useState<"policy" | "freeze" | "verify">("policy");
+  const demoFixture = useMemo(() => (rehearsalActive ? demoSnapshot() : null), [rehearsalActive]);
+
   const activeSnapshot = snapshot?.guard === guard ? snapshot : null;
 
   const steps = useMemo(
@@ -172,6 +181,8 @@ export function SetupWizard() {
       }),
     [deployedMarker, initialized, activeSnapshot, verified],
   );
+
+  const nextAction = useMemo(() => deriveNextAction(steps), [steps]);
 
   const verify = useCallback(async () => {
     setVerifying(true);
@@ -234,11 +245,208 @@ export function SetupWizard() {
 
   return (
     <div className="panel">
-      <div className="row" style={{ justifyContent: "space-between" }}>
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <h2 style={{ margin: 0 }}>Post-deploy checklist</h2>
-        <button className="secondary" onClick={dismiss}>
-          Dismiss
-        </button>
+        <div className="row" style={{ gap: "8px" }}>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => setRehearsalActive((prev) => !prev)}
+            data-testid="rehearsal-toggle-btn"
+          >
+            {rehearsalActive ? "Exit Rehearsal" : "Rehearse Setup (Demo)"}
+          </button>
+          <button type="button" className="secondary" onClick={dismiss}>
+            Dismiss
+          </button>
+        </div>
+      </div>
+
+      {rehearsalActive && demoFixture && (
+        <div
+          className="rehearsal-banner"
+          data-testid="setup-rehearsal"
+          role="region"
+          aria-label="Guided setup rehearsal"
+          style={{
+            marginTop: 12,
+            padding: "12px 16px",
+            border: "1px dashed var(--warn, #f59e0b)",
+            borderRadius: 8,
+            background: "var(--warn-subtle, rgba(245, 158, 11, 0.08))",
+          }}
+        >
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <span className="pill warn" style={{ fontSize: "11px" }}>GUIDED REHEARSAL (DEMO)</span>
+            <span className="tiny muted">All write operations disabled</span>
+          </div>
+          <h3 style={{ margin: "8px 0 4px", fontSize: "15px" }}>
+            Safe Rehearsal with Demo Fixtures
+          </h3>
+          <p className="tiny muted" style={{ margin: "0 0 12px", lineHeight: 1.4 }}>
+            Rehearse policy checks, verify default-deny rules, and review emergency procedures without
+            connecting a wallet, sending RPC writes, or modifying live state.
+          </p>
+
+          <div className="row" style={{ gap: "6px", marginBottom: "12px" }}>
+            <button
+              type="button"
+              className={rehearsalStep === "policy" ? "primary" : "secondary"}
+              onClick={() => setRehearsalStep("policy")}
+              style={{ fontSize: "12px", padding: "4px 10px" }}
+              data-testid="rehearsal-tab-policy"
+            >
+              1. Policy Review
+            </button>
+            <button
+              type="button"
+              className={rehearsalStep === "freeze" ? "primary" : "secondary"}
+              onClick={() => setRehearsalStep("freeze")}
+              style={{ fontSize: "12px", padding: "4px 10px" }}
+              data-testid="rehearsal-tab-freeze"
+            >
+              2. Emergency Controls
+            </button>
+            <button
+              type="button"
+              className={rehearsalStep === "verify" ? "primary" : "secondary"}
+              onClick={() => setRehearsalStep("verify")}
+              style={{ fontSize: "12px", padding: "4px 10px" }}
+              data-testid="rehearsal-tab-verify"
+            >
+              3. On-Chain Verification
+            </button>
+          </div>
+
+          <div
+            style={{
+              padding: "10px",
+              background: "var(--surface, rgba(0,0,0,0.2))",
+              borderRadius: 6,
+              fontSize: "13px",
+            }}
+          >
+            {rehearsalStep === "policy" && (
+              <div>
+                <strong>Rehearsal Step 1: Policy Allowlist Review</strong>
+                <p className="tiny muted" style={{ margin: "4px 0 8px" }}>
+                  Inspect how spending limits are enforced. The demo fixture configures a 500 XLM per-tx cap,
+                  a 2,000 XLM rolling window cap, and explicit allowlists.
+                </p>
+                <button
+                  type="button"
+                  disabled
+                  aria-disabled="true"
+                  title="Write actions disabled in guided rehearsal"
+                  className="secondary"
+                  data-testid="rehearsal-disabled-write-btn"
+                  style={{ opacity: 0.5, cursor: "not-allowed" }}
+                >
+                  Save Policy to Chain (Disabled in Rehearsal)
+                </button>
+              </div>
+            )}
+
+            {rehearsalStep === "freeze" && (
+              <div>
+                <strong>Rehearsal Step 2: Emergency Response Rehearsal</strong>
+                <p className="tiny muted" style={{ margin: "4px 0 8px" }}>
+                  Admin Freeze and Dead Man&apos;s Switch (DMS) grace period (3,600s) can pause execution instantly.
+                  Test emergency operator workflows without risking real accounts.
+                </p>
+                <button
+                  type="button"
+                  disabled
+                  aria-disabled="true"
+                  title="Write actions disabled in guided rehearsal"
+                  className="secondary"
+                  data-testid="rehearsal-disabled-freeze-btn"
+                  style={{ opacity: 0.5, cursor: "not-allowed" }}
+                >
+                  Trigger Admin Freeze (Disabled in Rehearsal)
+                </button>
+              </div>
+            )}
+
+            {rehearsalStep === "verify" && (
+              <div>
+                <strong>Rehearsal Step 3: Verification Re-read</strong>
+                <p className="tiny muted" style={{ margin: "4px 0 8px" }}>
+                  Authoritative confirmation requires explicit re-reading of contract state from the chain.
+                  Setup never marks verification complete through local optimistic assumptions.
+                </p>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setRehearsalActive(false)}
+                  data-testid="rehearsal-complete-btn"
+                  style={{ fontSize: "12px" }}
+                >
+                  Finish Rehearsal
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Recommended Next Action callout box (Issue #524) */}
+      <div
+        className="setup-next-action"
+        data-testid="setup-next-action"
+        role="region"
+        aria-label="Next recommended setup action"
+        style={{
+          marginTop: 12,
+          marginBottom: 16,
+          padding: "12px 16px",
+          border: "1px solid var(--border-accent, #2563eb)",
+          borderRadius: 8,
+          background: "var(--surface-accent, rgba(37, 99, 235, 0.06))",
+        }}
+      >
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <span className="pill info" style={{ fontSize: "11px" }}>Recommended Next Action</span>
+          {nextAction.isReadOnly && (
+            <span className="pill muted tiny" style={{ fontSize: "10px" }}>Read-Only Operation</span>
+          )}
+        </div>
+        <h3 style={{ margin: "6px 0 4px", fontSize: "15px" }}>{nextAction.title}</h3>
+        <p className="tiny muted" style={{ margin: "0 0 10px", lineHeight: 1.4 }}>
+          {nextAction.detail}
+        </p>
+        <div>
+          {nextAction.stepId === "verified" ? (
+            <button
+              type="button"
+              className="primary"
+              onClick={() => void verify()}
+              disabled={verifying}
+              data-testid="next-action-btn"
+            >
+              {verifying ? "Re-verifying on-chain… (read-only)" : nextAction.actionText}
+            </button>
+          ) : nextAction.stepId === "initialized" && initialized.ok === false ? (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => void rereadInitialized()}
+              disabled={rereadingInitialized}
+              data-testid="next-action-btn"
+            >
+              {rereadingInitialized ? "Re-reading… (read-only)" : nextAction.actionText}
+            </button>
+          ) : nextAction.actionHref ? (
+            <Link
+              href={nextAction.actionHref}
+              className="button primary"
+              data-testid="next-action-link"
+              style={{ display: "inline-block", textDecoration: "none" }}
+            >
+              {nextAction.actionText} ↗
+            </Link>
+          ) : null}
+        </div>
       </div>
 
       <p className="tiny muted" style={{ marginTop: 8 }}>

@@ -39,6 +39,7 @@ export const EVENT_EXPORT_COLUMNS = [
   "ledger",
   "ledger_closed_at",
   "transaction_hash",
+  "provenance",
 ] as const;
 
 export type EventExportColumn = (typeof EVENT_EXPORT_COLUMNS)[number];
@@ -54,7 +55,11 @@ export type EventExportRow = Record<EventExportColumn, string>;
  * could not attribute. `decision` is `allowed` / `blocked` / empty (non-auth
  * events carry no decision); `reason` is the raw contract symbol.
  */
-export function eventToExportRow(event: GuardEvent, guard: string): EventExportRow {
+export function eventToExportRow(
+  event: GuardEvent,
+  guard: string,
+  isDemo?: boolean,
+): EventExportRow {
   const decision = event.decision;
   return {
     schema_version: String(EVENT_EXPORT_SCHEMA_VERSION),
@@ -68,6 +73,7 @@ export function eventToExportRow(event: GuardEvent, guard: string): EventExportR
     ledger: event.ledger === null ? "" : String(event.ledger),
     ledger_closed_at: event.ledgerClosedAt ?? "",
     transaction_hash: event.transactionHash ?? "",
+    provenance: isDemo ? "demo-fixtures" : "live-chain",
   };
 }
 
@@ -86,10 +92,15 @@ function csvCell(value: string): string {
  * The string is BOM-prefixed (U+FEFF) so spreadsheet applications read it as
  * UTF-8; the header row is the column list verbatim.
  */
-export function eventsToCsv(events: readonly GuardEvent[], guard: string): string {
+export function eventsToCsv(
+  events: readonly GuardEvent[],
+  guard: string,
+  options?: { demo?: boolean },
+): string {
+  const isDemo = options?.demo ?? false;
   const lines: string[] = [EVENT_EXPORT_COLUMNS.join(",")];
   for (const event of events) {
-    const row = eventToExportRow(event, guard);
+    const row = eventToExportRow(event, guard, isDemo);
     lines.push(EVENT_EXPORT_COLUMNS.map((column) => csvCell(row[column])).join(","));
   }
   // U+FEFF — the UTF-8 BOM, so Excel opens the file as UTF-8.
@@ -100,17 +111,23 @@ export function eventsToCsv(events: readonly GuardEvent[], guard: string): strin
 export function eventsToJson(
   events: readonly GuardEvent[],
   guard: string,
+  options?: { demo?: boolean; provenance?: string },
 ): {
   schemaVersion: number;
   columns: readonly EventExportColumn[];
   guard: string;
+  demo?: boolean;
+  provenance?: string;
   rows: EventExportRow[];
 } {
+  const isDemo = options?.demo ?? false;
   return {
     schemaVersion: EVENT_EXPORT_SCHEMA_VERSION,
     columns: [...EVENT_EXPORT_COLUMNS],
     guard,
-    rows: events.map((event) => eventToExportRow(event, guard)),
+    demo: isDemo,
+    provenance: options?.provenance ?? (isDemo ? "demo-fixtures" : "live-chain"),
+    rows: events.map((event) => eventToExportRow(event, guard, isDemo)),
   };
 }
 
