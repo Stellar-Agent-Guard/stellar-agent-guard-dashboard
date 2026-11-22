@@ -87,6 +87,7 @@ export interface FleetViewState {
   search: string;
   network: string | null;
   status: DerivedStatus | null;
+  tag?: string | null | undefined;
   /** `null` is the default order: the registry's own. */
   sortKey: SortKey | null;
   sortDirection: SortDirection;
@@ -96,6 +97,7 @@ export const DEFAULT_FLEET_VIEW: FleetViewState = {
   search: "",
   network: null,
   status: null,
+  tag: null,
   sortKey: null,
   sortDirection: "asc",
 };
@@ -106,13 +108,22 @@ export const FLEET_STATUSES: readonly DerivedStatus[] = ["Active", "Frozen", "Ex
 /** True when the view would show every row in registry order. */
 export function isDefaultFleetView(view: FleetViewState): boolean {
   return (
-    view.search === "" && view.network === null && view.status === null && view.sortKey === null
+    view.search === "" &&
+    view.network === null &&
+    view.status === null &&
+    (view.tag === null || view.tag === undefined || view.tag === "") &&
+    view.sortKey === null
   );
 }
 
 /** True when search or a filter (not just the sort) is narrowing the rows. */
 export function hasActiveFleetFilter(view: FleetViewState): boolean {
-  return view.search.trim() !== "" || view.network !== null || view.status !== null;
+  return (
+    view.search.trim() !== "" ||
+    view.network !== null ||
+    view.status !== null ||
+    (view.tag !== null && view.tag !== undefined && view.tag !== "")
+  );
 }
 
 /**
@@ -133,6 +144,7 @@ export function parseFleetView(raw: unknown, networks: readonly string[] = []): 
   const network =
     typeof input.network === "string" && networks.includes(input.network) ? input.network : null;
   const status = FLEET_STATUSES.find((candidate) => candidate === input.status) ?? null;
+  const tag = typeof input.tag === "string" && input.tag.trim() ? input.tag.trim() : null;
   const sortKey = SORT_KEYS.find((candidate) => candidate === input.sortKey) ?? null;
   const sortDirection: SortDirection =
     input.sortDirection === "asc" || input.sortDirection === "desc"
@@ -141,7 +153,7 @@ export function parseFleetView(raw: unknown, networks: readonly string[] = []): 
         ? defaultSortDirection(sortKey)
         : "asc";
 
-  return { search, network, status, sortKey, sortDirection };
+  return { search, network, status, tag, sortKey, sortDirection };
 }
 
 function defaultStorage(): StorageLike | null {
@@ -282,7 +294,7 @@ export function createFleetViewStore(options?: {
  */
 export function applyFleetView(rows: FleetRow[], view: FleetViewState): FleetRow[] {
   return sortFleet(
-    filterFleet(rows, view.search, view.network, view.status),
+    filterFleet(rows, view.search, view.network, view.status, view.tag),
     view.sortKey,
     view.sortDirection,
   );
