@@ -126,6 +126,33 @@ The rolling window is read straight from the ledger because no read function exp
 account's internal spend accounting, and it is the only way to see how much of the rolling cap is
 currently consumed.
 
+### Where the console says when it last read
+
+Because every one of those values is polled, "what is on screen" is only answerable per panel, and an
+operator who has to open a panel to learn that its poll died has already read the stale number. The
+header therefore carries one line per polling panel — _On-chain state_, _Telemetry_, _Fleet Overview_ —
+naming its cadence, when it last landed, and its liveness phase (`lib/guard/refreshStatus.ts`, rendered
+by `components/HeaderRefreshStatus.tsx`).
+
+Three rules keep that strip honest, and they are the reason it exists as its own module:
+
+- **Polling is not activity.** The strip borrows its phase from `pollHealth()` (§7), the same evaluator
+  the feed header uses, so the two surfaces cannot disagree about whether a poller is alive. A round
+  that returned nothing is _healthy_; a poller that stopped is _stopped_, however new its last stamp;
+  and a display the operator froze is reported as _polling_ **and** _display paused_, never as one
+  instead of the other.
+- **It reads nothing.** Panels push the liveness they already computed for themselves; the strip only
+  renders what was pushed, and a panel that unmounts retires its line. A strip that ran its own probe
+  would be a second, differently-timed opinion about data the panel is showing.
+- **A fixture is not a chain read.** In demo mode (`?demo=true`) the provider's timers drive synthetic
+  data, so both of its sources are withheld rather than published, and the strip says nothing about
+  data the chain never sent.
+
+Each line links to the panel's own diagnostics through the `?tab=` deep link the console already
+answers with, which both scrolls the panel into view and moves focus to its heading. The strip is
+deliberately not an ARIA live region: it moves on a five-second clock, and announcing that on every
+tick would talk over the operator rather than inform them.
+
 ---
 
 ## 5. Write path

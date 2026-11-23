@@ -309,7 +309,9 @@ export function TelemetryFeed() {
         <h2 style={{ margin: 0 }}>Telemetry</h2>
         <div className="row">
           {feed.watching && (
-            <span className={`pill ${feed.health.tone}`}>{HEALTH_LABELS[feed.health.phase]}</span>
+            <span className={`pill ${feed.health.tone}`}>
+              {POLL_PHASE_WORDS[feed.health.phase]}
+            </span>
           )}
           {stream.paused && <span className="pill warn">paused</span>}
           {/* Counted from the buffer, not from the rows on screen: a paused,
@@ -566,7 +568,7 @@ export function TelemetryFeed() {
         feed whose every poll since the first had failed.
       */}
       <p className="tiny muted" style={{ marginTop: 4 }} aria-label="Telemetry poll health">
-        <span className={`pill ${feed.health.tone}`}>{HEALTH_LABELS[feed.health.phase]}</span>{" "}
+        <span className={`pill ${feed.health.tone}`}>{POLL_PHASE_WORDS[feed.health.phase]}</span>{" "}
         {feed.health.text}
         {feed.lastPolledAt && feed.lastPolledAt !== feed.health.lastSuccessAt && (
           <>

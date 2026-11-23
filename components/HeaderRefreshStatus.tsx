@@ -70,9 +70,7 @@ export function HeaderRefreshStatus() {
               {reading.freshness}
             </time>
           )}
-          {reading.pausedWords !== null && (
-            <span className="pill warn">{reading.pausedWords}</span>
-          )}
+          {reading.pausedWords !== null && <span className="pill warn">{reading.pausedWords}</span>}
           {reading.detail !== null && <span className="refresh-detail">{reading.detail}</span>}
         </li>
       ))}
