@@ -238,6 +238,7 @@ with its source, its refresh trigger, and whether it is allowed to be wrong.
 | Registered guard instances (the fleet)               | **`localStorage`** (`stellar-agent-guard-dashboard.instances.v2.<network>`)                     | user action (add/remove/select)                              | yes, by design — it is an address list, not chain state; every row's live numbers are re-read from the chain |
 | Policy form draft                                    | component-local until submit                                                                    | user input                                                   | yes, while editing — never treated as installed until the chain re-read confirms it                          |
 | Address book                                         | **`localStorage`** (`…addressBook.v1`)                                                          | user action                                                  | yes — convenience data, carries no fund authority                                                            |
+| Operator marks on feed rows                          | **`localStorage`** (`…scoped.v1.eventMarks.<network>.<guard>`)                                  | user action (bookmark, note)                                 | yes — the mark is this browser's annotation of a row, never a fact about the guard; it is never exported     |
 | Transaction history                                  | **`localStorage`** (`…txHistory.v1`)                                                            | after each submission                                        | yes — it records what this browser submitted; the chain is authoritative                                     |
 | Layout / theme / alert / idle preferences            | **`localStorage`** (`…layout.v1`, `…namedLayouts.v1`, `theme`, `…idleTimeout.v1`, `…alerts.v1`) | user action                                                  | yes — presentation only                                                                                      |
 | Wallet-provider preference                           | **`localStorage`** (`…walletProvider.v1`)                                                       | user action (connector pick)                                 | yes — convenience, carries no authority                                                                      |
@@ -249,7 +250,14 @@ The rule that makes the table enforceable: **a `localStorage` value may only be 
 read, never a substitute for one.** The instance registry and the address book supply addresses; the
 status, policy and balance displayed for those addresses are always re-read. Test coverage for the
 persisted helpers lives beside them (`tests/unit/tabSync.test.ts`, `tests/unit/txHistory.test.ts`,
-`tests/unit/addressBook.test.ts`, `tests/unit/dashboardGrid.test.ts`, `tests/unit/useIdleTimer.test.ts`).
+`tests/unit/addressBook.test.ts`, `tests/unit/dashboardGrid.test.ts`, `tests/unit/useIdleTimer.test.ts`,
+`tests/unit/eventMarks.test.ts`).
+
+Operator marks are the one stored value that describes the console's own rows rather than the guard.
+They live in a side map keyed by the event's identity, never on the event object, so every export and
+webhook surface — each a function of the `GuardEvent`s it is handed — is structurally incapable of
+carrying one. `tests/unit/eventMarks.test.ts` pins that by logging storage reads during export rather
+than by searching the output for a word.
 
 ### Browser persistence inventory
 
@@ -260,7 +268,9 @@ is backed by the helpers' exported key constants and checked by
 `tests/unit/storageInventory.test.ts`; the short-lived bytecode cache and cross-tab transport are
 included as well. Registry, address-book, and layout records use explicit schema versions. A
 malformed, partial, unknown-future, or unsuccessfully migrated record is left in place for recovery;
-it is never used as a substitute for live chain state. Browser storage contains no secret keys.
+it is never used as a substitute for live chain state. Operator marks share that envelope and the
+per-guard scoped prefix, so the keys are namespaced by network and guard and a removed instance takes
+its filters, drafts and marks with it. Browser storage contains no secret keys.
 
 ### Complete write surface
 
