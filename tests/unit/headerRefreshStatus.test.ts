@@ -25,6 +25,7 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { afterEach, before, describe, test } from "node:test";
 import type { ReactElement } from "react";
 import { installDom, loadReact, type Act } from "./domHarness.ts";
@@ -444,5 +445,63 @@ describe("the header strip", () => {
     assert.equal(list?.getAttribute("aria-label"), "Panel refresh status");
     assert.equal(list?.querySelector("li")?.tagName, "LI");
     await unmount();
+  });
+
+  test("holds its line before a panel publishes anything", async () => {
+    // A row can only exist after hydration, while the panels it sits above are in
+    // the served HTML. A strip sized to its rows would grow the header the moment
+    // the first poller mounted and push every panel down the screen, so the slot
+    // renders empty and the sheet gives it the height the rows will need.
+    const { container, unmount } = await renderStrip();
+    const slot = container.querySelector(".refresh-strip");
+    assert.ok(slot, "an empty strip still occupies its line");
+    assert.equal(slot?.querySelector(".refresh-status"), null);
+    assert.equal(slot?.querySelectorAll(".refresh-row").length, 0);
+    await unmount();
+  });
+
+  test("fills the slot it reserved instead of trading it for a new box", async () => {
+    const { container, unmount } = await renderStrip();
+    const before = container.querySelector(".refresh-strip");
+    await act(async () => {
+      refreshSources.publish(source({ lastSuccessAt: live(3_000) }));
+    });
+    assert.equal(container.querySelector(".refresh-strip"), before);
+    assert.ok(before?.querySelector(".refresh-row"));
+    await unmount();
+  });
+});
+
+// ── the line the sheet reserves ─────────────────────────────────────────────
+
+/*
+ * jsdom has no layout engine, so what a test can pin here is the wiring the shift
+ * depends on: the slot reserves a height, the list refuses to wrap, and a row can
+ * neither shrink nor outgrow the line. `responsiveContract.test.ts` reads the
+ * stylesheet the same way for the same reason. The layout itself is proved by the
+ * Lighthouse run over the static export, quoted in the PR.
+ */
+const stylesheet = readFileSync("app/globals.css", "utf8");
+
+function rule(selector: string): string {
+  const match = stylesheet.match(new RegExp(`\\.${selector}\\s*\\{([^}]*)\\}`));
+  assert.ok(match, `expected a .${selector} rule in globals.css`);
+  return match[1] ?? "";
+}
+
+describe("the sheet holds the header at one height", () => {
+  test("the slot claims a line of its own before a row exists", () => {
+    const strip = rule("refresh-strip");
+    assert.match(strip, /flex-basis:\s*100%/);
+    assert.match(strip, /min-height:\s*var\(--refresh-line-h\)/);
+  });
+
+  test("one line is all the strip gets, so a crowded strip scrolls instead of growing", () => {
+    assert.match(rule("refresh-status"), /flex-wrap:\s*nowrap/);
+    assert.match(rule("refresh-strip"), /overflow-x:\s*auto/);
+    // A row allowed to shrink would be squeezed by its siblings and re-measure on
+    // every clock tick; one allowed to wrap would grow the header.
+    assert.match(rule("refresh-row"), /flex:\s*0 0 auto/);
+    assert.match(rule("refresh-row"), /white-space:\s*nowrap/);
   });
 });

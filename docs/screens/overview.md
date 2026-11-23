@@ -13,9 +13,11 @@ The primary console screen provides full visibility into the active guard accoun
   they focus it, never click it — and a separate block re-reads `status()` once, on demand, to answer
   whether the write landed. See
   [the incident action list](../../SPEC.md#the-incident-action-list-on-the-overview).
-- **Refresh Strip**: One line in the site header per panel that polls, stating its cadence, when its
-  last round landed, and whether it is `polling`, `connecting`, `poll failing`, `no response` or
-  `stopped`. The strip reads nothing itself — panels report their own liveness and withdraw it when
-  they unmount — and a frozen display is shown as `display paused` beside the phase rather than in
-  place of it. Each line links to that panel's diagnostics. See
+- **Refresh Strip**: One row, on the single line the site header sets aside for it, per panel that
+  polls, stating its cadence, when its last round landed, and whether it is `polling`, `connecting`,
+  `poll failing`, `no response` or `stopped`. The strip reads nothing itself — panels report their own
+  liveness and withdraw it when they unmount — and a frozen display is shown as `display paused` beside
+  the phase rather than in place of it. The line is reserved whether or not anything has published yet,
+  so the panels below it never move when the first round lands; a strip with more rows than width
+  scrolls sideways. Each row links to that panel's diagnostics. See
   [the read path](../../SPEC.md#where-the-console-says-when-it-last-read).

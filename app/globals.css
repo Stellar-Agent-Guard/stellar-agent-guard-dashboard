@@ -101,12 +101,41 @@ header.configure-header h2 {
  * The per-panel refresh strip (#528). A third flex child of `header.top` that
  * claims a whole line of its own, so it reads as a caption to the console below
  * rather than competing with the brand and the network pill.
+ *
+ * The wrapper exists to hold that line in the *served* markup, before any panel
+ * has mounted a poller to describe. Its rows can only appear after hydration, so
+ * a wrapper that sized itself to them would grow the header and push every panel
+ * down the page - a shift charged to the largest block on the screen. One line
+ * high, whatever lands in it: the header is the same height before the rows as
+ * after, at any viewport width, and it does not depend on how wide the panel
+ * names happen to render in this platform's font.
+ *
+ * The line therefore does not wrap. When the panels outnumber the width - three
+ * rows on a phone, or three on `/fleet` at a desktop width - the strip scrolls
+ * sideways instead of growing, and the row it cannot show is still one flick away
+ * and still in the tab order. The scrollbar is suppressed because a classic bar
+ * would cost more of a 25px line than the line can spare.
  */
-.refresh-status {
+.refresh-strip {
+  --refresh-line-h: 25px;
   flex-basis: 100%;
+  min-height: var(--refresh-line-h);
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 18px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.refresh-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.refresh-status {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0 18px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -117,7 +146,8 @@ header.configure-header h2 {
   display: flex;
   align-items: center;
   gap: 7px;
-  min-width: 0;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .refresh-row > a {

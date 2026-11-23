@@ -37,6 +37,12 @@ const CLOCK_TICK_MS = 5000;
  *     a screen reader several times a minute, so there is no `aria-live` and no
  *     `role="status"` here. The strip is positioned content the operator reads on
  *     demand; the panel's own alerts stay the announced channel.
+ *   - **It takes its line before it has anything to say.** Rows only exist after
+ *     hydration, but the page around them is in the served HTML. A strip that grew
+ *     with them would push every panel down the moment the timers mounted, which
+ *     is a layout shift on the largest block on the screen. `.refresh-strip` holds
+ *     exactly one line in the served markup, at any width, so the header is the
+ *     same height before the rows arrive as after.
  */
 export function HeaderRefreshStatus() {
   const sources = useSyncExternalStore(
@@ -52,28 +58,33 @@ export function HeaderRefreshStatus() {
   }, []);
 
   const readings = sources.map((source) => describeRefresh(source, nowMs));
-  if (readings.length === 0) return null;
 
   return (
-    <ul className="refresh-status" aria-label="Panel refresh status">
-      {readings.map((reading) => (
-        <li key={reading.id} className="refresh-row">
-          <Link href={reading.diagnosticsHref} aria-label={reading.diagnosticsLabel}>
-            {reading.label}
-          </Link>
-          <span className={`pill ${reading.tone}`}>{reading.phaseWords}</span>
-          <span className="refresh-cadence">{reading.cadence}</span>
-          {reading.freshnessIso === null ? (
-            <span className="refresh-freshness">{reading.freshness}</span>
-          ) : (
-            <time className="refresh-freshness" dateTime={reading.freshnessIso}>
-              {reading.freshness}
-            </time>
-          )}
-          {reading.pausedWords !== null && <span className="pill warn">{reading.pausedWords}</span>}
-          {reading.detail !== null && <span className="refresh-detail">{reading.detail}</span>}
-        </li>
-      ))}
-    </ul>
+    <div className="refresh-strip">
+      {readings.length > 0 && (
+        <ul className="refresh-status" aria-label="Panel refresh status">
+          {readings.map((reading) => (
+            <li key={reading.id} className="refresh-row">
+              <Link href={reading.diagnosticsHref} aria-label={reading.diagnosticsLabel}>
+                {reading.label}
+              </Link>
+              <span className={`pill ${reading.tone}`}>{reading.phaseWords}</span>
+              <span className="refresh-cadence">{reading.cadence}</span>
+              {reading.freshnessIso === null ? (
+                <span className="refresh-freshness">{reading.freshness}</span>
+              ) : (
+                <time className="refresh-freshness" dateTime={reading.freshnessIso}>
+                  {reading.freshness}
+                </time>
+              )}
+              {reading.pausedWords !== null && (
+                <span className="pill warn">{reading.pausedWords}</span>
+              )}
+              {reading.detail !== null && <span className="refresh-detail">{reading.detail}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

@@ -130,11 +130,11 @@ currently consumed.
 
 Because every one of those values is polled, "what is on screen" is only answerable per panel, and an
 operator who has to open a panel to learn that its poll died has already read the stale number. The
-header therefore carries one line per polling panel — _On-chain state_, _Telemetry_, _Fleet Overview_ —
+header therefore carries one row per polling panel — _On-chain state_, _Telemetry_, _Fleet Overview_ —
 naming its cadence, when it last landed, and its liveness phase (`lib/guard/refreshStatus.ts`, rendered
 by `components/HeaderRefreshStatus.tsx`).
 
-Three rules keep that strip honest, and they are the reason it exists as its own module:
+Four rules keep that strip honest, and they are the reason it exists as its own module:
 
 - **Polling is not activity.** The strip borrows its phase from `pollHealth()` (§7), the same evaluator
   the feed header uses, so the two surfaces cannot disagree about whether a poller is alive. A round
@@ -147,8 +147,13 @@ Three rules keep that strip honest, and they are the reason it exists as its own
 - **A fixture is not a chain read.** In demo mode (`?demo=true`) the provider's timers drive synthetic
   data, so both of its sources are withheld rather than published, and the strip says nothing about
   data the chain never sent.
+- **Its line is taken before it is filled.** A row can only exist once a panel has mounted and
+  published, which is after the served HTML has already painted the page under the header. So the
+  strip reserves one line in that markup and never more: rows go into the space the header already
+  gave up, the header is the same height before a poll as after one, and a screen with more panels
+  than width scrolls the strip sideways instead of pushing the console down.
 
-Each line links to the panel's own diagnostics through the `?tab=` deep link the console already
+Each row links to the panel's own diagnostics through the `?tab=` deep link the console already
 answers with, which both scrolls the panel into view and moves focus to its heading. The strip is
 deliberately not an ARIA live region: it moves on a five-second clock, and announcing that on every
 tick would talk over the operator rather than inform them.
