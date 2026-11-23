@@ -11,3 +11,4 @@ Interactive no-code form for configuring smart account guardrails:
 - **Active Execution Windows**: Restricts execution to specific ledger timestamp intervals.
 - **Pause Switch**: Global pause switch for routine maintenance.
 - **Dead-Man Grace Window**: Configures maximum allowable inactivity period in seconds.
+- **Network Context & RPC Configuration**: Shows active network and sanitized RPC hostname with credential redaction. Features role separation between read-only RPC reads and wallet write destinations, an operator-controlled read-only endpoint probe, and explicit confirmation before write network changes.
