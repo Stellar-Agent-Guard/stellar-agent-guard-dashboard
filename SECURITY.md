@@ -42,7 +42,7 @@ is maintained in [`STORAGE_INVENTORY`](./lib/guard/storageInventory.ts):
 | `localStorage`   | `stellar-agent-guard-dashboard.txHistory.v1`                                                                                                                                                  | Browser-recorded transaction hashes, operations, outcomes, and fees    |
 | `localStorage`   | `stellar-agent-guard-dashboard.layout.v1`, `stellar-agent-guard-dashboard.namedLayouts.v1`, `stellar-agent-guard-dashboard.fleet-view.v1`                                                     | Dashboard layout and fleet-view preferences                            |
 | `localStorage`   | `stellar-agent-guard-dashboard.idleTimeout.v1`, `stellar-agent-guard-dashboard.alerts.v1`, `stellar-agent-guard-dashboard.walletProvider.v1`, `stellar-agent-guard-dashboard.setup-wizard.v1` | Idle timeout, alert, preferred-wallet, and setup-checklist preferences |
-| `localStorage`   | `stellar-agent-guard-dashboard.scoped.v1.{base}.{network}.{guard}` where `base` is `feedFilter` or `policyDraft`                                                                              | Per-guard feed filters and policy drafts                               |
+| `localStorage`   | `stellar-agent-guard-dashboard.scoped.v1.{base}.{network}.{guard}` where `base` is `feedFilter`, `policyDraft` or `eventMarks`                                                                | Per-guard feed filters, policy drafts and operator marks               |
 | `localStorage`   | `stellar-agent-guard-dashboard.webhooks.v1`                                                                                                                                                   | User-configured webhook destinations and event preferences             |
 | `localStorage`   | `stellar-agent-guard-dashboard.tab-sync.v1`                                                                                                                                                   | Short-lived cross-tab event transport                                  |
 | `localStorage`   | `theme`, `sidebar-collapsed`, `display-density`, `privacy-mask`                                                                                                                               | Presentation preferences                                               |
@@ -52,6 +52,12 @@ Webhook destinations are stored as user-entered browser data. The configured
 Soroban RPC endpoint is not a local-storage key; it is supplied through the
 dashboard's build configuration. None of these browser values should be treated
 as trusted authorization state or as a substitute for on-chain enforcement.
+
+Operator notes on telemetry rows are the one free-text field this console
+persists, so they are checked before the write: `lib/guard/eventMarks.ts`
+refuses a note containing a string shaped like a Stellar secret key and reports
+the refusal without echoing the text back, and the notes that are stored stay in
+a side map that no export, transaction or webhook path is handed.
 
 ## Reporting a Vulnerability
 

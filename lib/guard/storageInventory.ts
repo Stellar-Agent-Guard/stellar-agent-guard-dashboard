@@ -106,7 +106,7 @@ export const STORAGE_INVENTORY: readonly StorageInventoryEntry[] = [
   {
     key: `${SCOPED_STORAGE_PREFIX}.{base}.{network}.{guard}`,
     area: "localStorage",
-    purpose: `Per-guard drafts and filters (${SCOPED_STORAGE_BASES.join(", ")})`,
+    purpose: `Per-guard drafts, filters and event marks (${SCOPED_STORAGE_BASES.join(", ")})`,
     category: "user-entered",
     containsPublicMetadata: true,
   },
