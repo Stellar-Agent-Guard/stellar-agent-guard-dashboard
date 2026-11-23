@@ -157,6 +157,45 @@ header.configure-header h2 {
   }
 }
 
+/*
+ * The incident panel's action rows (#527).
+ *
+ * A row stacks its heading (name plus the control that reaches the write) above
+ * the sentences that qualify it, in the order an operator decides: what, where,
+ * what it requires. Rows are divided by a border rather than by background
+ * tints, because a tint is the first thing a forced-colour mode throws away and
+ * the division is what keeps "offered" from reading as "not offered".
+ */
+.incident-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.incident-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.incident-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.incident-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 nav.tabs {
   display: flex;
   gap: 4px;

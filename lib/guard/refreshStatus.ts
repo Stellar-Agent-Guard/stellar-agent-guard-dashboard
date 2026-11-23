@@ -45,7 +45,7 @@
 
 import { OVERDUE_INTERVALS, POLL_PHASE_WORDS, pollHealth, type PollPhase } from "./feedHealth.ts";
 import { POLLING } from "./polling.ts";
-import { formatTimeAgo } from "./time.ts";
+import { sinceWords } from "./time.ts";
 
 /** The panels with a chain poller behind them. */
 export type RefreshPanelId = "status" | "telemetry" | "fleet";
@@ -187,9 +187,7 @@ export function describeRefresh(source: RefreshSource, nowMs: number): RefreshRe
   let freshness = "never read";
   let freshnessIso: string | null = null;
   if (health.lastSuccessAt !== null) {
-    const thenSecs = Math.floor(Date.parse(health.lastSuccessAt) / 1000);
-    const phrase = formatTimeAgo(thenSecs, Math.floor(nowMs / 1000));
-    freshness = phrase === "just now" ? "read just now" : `read ${phrase} ago`;
+    freshness = `read ${sinceWords(Date.parse(health.lastSuccessAt), nowMs)}`;
     freshnessIso = health.lastSuccessAt;
   } else if (health.lastFailureAt !== null) {
     freshness = "no successful read yet";

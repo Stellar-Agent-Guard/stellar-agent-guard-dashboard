@@ -206,6 +206,39 @@ Details that are load-bearing rather than incidental:
 fund-moving or liveness-forging power. The admin can replace the key the account authenticates
 (`rotate_agent_key`) but can never authenticate as the agent.
 
+### The incident action list on the overview
+
+The table above is what the console is able to do. An operator mid-incident needs the narrower answer:
+what is worth doing to _this_ account, in the state the chain reports right now. That is the incident
+panel's only job (`lib/guard/incidentActions.ts`, rendered by `components/IncidentPanel.tsx`), and it is
+built on three rules.
+
+- **Every action is spoken about.** The panel returns a partition, not a shortlist: freeze, unfreeze and
+  revoke each appear either as an offer or as a refusal carrying its reason. "Not needed", "not
+  performed from this console" and "could not be worked out" are three different sentences, and an
+  omitted row cannot tell them apart. `ACTIONS_HELD_ELSEWHERE` therefore names policy installation, key
+  rotation and the heartbeat with the screen that owns each — or, for the heartbeat, with the fact that
+  no screen owns it.
+- **An offer is a hand-off, never a write.** Each row moves focus to the control that already performs
+  the action and prints the confirmation _that control_ requires. The panel opens no second dialog, and
+  it focuses rather than clicks, so the operator still starts the write themselves. Two confirmations
+  that disagree about what they cover is worse than one, which is also why the copy states plainly that
+  only `freeze` has a dialog — `unfreeze` and `revoke_policy` submit on the click, and the wallet prompt
+  is the confirmation.
+- **The live read gates every write, including freeze.** A failed status read is passed in as the same
+  sentence the Emergency panel's disabled button already carries (§4, issue #348), so this panel cannot
+  offer what that one has inert. The asymmetry that invites — freeze is the safe action, so surely it
+  survives an unknown state — is deliberately not taken. The single unbacked window is before the first
+  read has landed at all, which is how Emergency already behaves; the row is labelled as not
+  chain-derived instead of being withheld or presented as a recommendation.
+
+The panel's third block, **Verify on chain**, is one `status()` re-read the operator starts. It never
+runs on a timer, because a re-read taken while a write is still in flight agrees with the _old_ state and
+an automatic agreement reads as a confirmation. A flag counts as changed only when both reads answered
+it — the same discipline as the transition log (§8) — so a read that started or stopped answering is
+reported as _partly unread_, never as a change. _No change_ is styled as a fact rather than as success:
+the panel does not know which write the operator performed, and agreement equally means it did not land.
+
 ---
 
 ## 6. Deployment invariants

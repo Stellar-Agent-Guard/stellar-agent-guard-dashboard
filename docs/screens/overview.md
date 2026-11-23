@@ -7,6 +7,12 @@ The primary console screen provides full visibility into the active guard accoun
 - **Dead-Man Switch Status**: Displays countdown timer until the agent's heartbeat grace period expires.
 - **Panic Button**: Immediate access to the emergency freeze modal.
 - **Telemetry Feed**: Live scrolling feed of recent `event_auth_checked` authorization events.
+- **Incident Actions**: The admin writes worth doing to this account in the state the chain reports,
+  each with what it does and the confirmation the existing control asks for; anything not offered is
+  listed with its reason rather than left out. Rows hand off to the control that performs the write —
+  they focus it, never click it — and a separate block re-reads `status()` once, on demand, to answer
+  whether the write landed. See
+  [the incident action list](../../SPEC.md#the-incident-action-list-on-the-overview).
 - **Refresh Strip**: One line in the site header per panel that polls, stating its cadence, when its
   last round landed, and whether it is `polling`, `connecting`, `poll failing`, `no response` or
   `stopped`. The strip reads nothing itself — panels report their own liveness and withdraw it when
