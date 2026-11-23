@@ -120,10 +120,14 @@ export function eventsToJson(
  * The date is UTC (ISO), taken from `now` so callers (and tests) can pin it;
  * the guard prefix keeps exports from different guards distinguishable at a
  * glance, and the row count disambiguates same-day re-exports.
+ *
+ * `ndjson` is accepted because that download is the same feed projection in a
+ * different arrangement — a fixed `guard-telemetry.ndjson` name gave every
+ * guard and every day the same file, so two exports collided on download.
  */
 export function exportFilename(
   guard: string,
-  ext: "csv" | "json",
+  ext: "csv" | "json" | "ndjson",
   rowCount: number,
   now: number = Date.now(),
 ): string {

@@ -277,7 +277,7 @@ describe("the preview counts match the generated export", () => {
   });
 });
 
-describe("no secrets, wallet material, or browser-local data can be exported", () => {
+describe("the CSV and JSON exports carry no secrets, wallet material, or browser-local data", () => {
   test("the decoded payload is named as omitted and never appears in either format", () => {
     // Whatever an event's `data` carries — a caller address, a memo, a seed-like
     // string — the export must not echo it. This is the check the issue asks for:
@@ -304,8 +304,14 @@ describe("no secrets, wallet material, or browser-local data can be exported", (
   test("the preview states the omission in words the operator can check", () => {
     const lines = describeExportScope(buildExportScope({ events: [], range: RANGE }));
     const last = lines[lines.length - 1] ?? "";
-    assert.match(last, /Not exported: data/);
-    assert.match(last, /wallet material or secrets/);
+    assert.match(last, /Not exported by CSV or JSON: data/);
+    // The sentence used to promise that "no wallet material or secrets can
+    // appear" while sitting above four buttons, two of which write `data`.
+    // A preview has to hold for every download beneath it, so it now names the
+    // formats that omit the payload and the two that carry it;
+    // `exportDiagnosticOrigin.test.ts` reads that claim against real bytes.
+    assert.match(last, /NDJSON and audit log carry it/);
+    assert.doesNotMatch(last, /no wallet material or secrets can appear/);
   });
 
   test("nothing outside the offered events reaches the scope", () => {

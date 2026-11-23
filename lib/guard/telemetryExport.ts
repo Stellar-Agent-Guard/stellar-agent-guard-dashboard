@@ -70,10 +70,18 @@ export const TELEMETRY_CSV_COLUMNS = [
   "data",
 ] as const;
 
+/** One of this format's columns; the row map below is keyed by it. */
+export type TelemetryExportColumn = (typeof TELEMETRY_CSV_COLUMNS)[number];
+
 /** Compact JSON that survives `bigint` (ScVal decoding produces them). */
 function dataJson(data: unknown): string {
-  return JSON.stringify(data, (_key, value: unknown) =>
-    typeof value === "bigint" ? value.toString() : value,
+  // `data` is `unknown`, and `JSON.stringify(undefined)` returns `undefined`
+  // rather than text. Written as `null`, both because that is what the payload
+  // is — absent — and because the alternative is a cell reading `undefined`.
+  return (
+    JSON.stringify(data, (_key, value: unknown) =>
+      typeof value === "bigint" ? value.toString() : value,
+    ) ?? "null"
   );
 }
 
@@ -86,19 +94,31 @@ function csvRow(cells: string[]): string {
   return cells.map(csvCell).join(",");
 }
 
+/**
+ * One event as this format's own field map.
+ *
+ * Keyed by the column list rather than positional, so a writer cannot emit a
+ * row that is missing a column, and so `source` — the origin discriminator
+ * issue #490 is about — has to be supplied for the file to compile at all.
+ */
+function rowFields(event: GuardEvent): Record<TelemetryExportColumn, string> {
+  return {
+    kind: event.kind,
+    topic: event.topic,
+    decision: event.decision?.result ?? "",
+    reason: event.decision?.reason ?? "",
+    source: event.source,
+    ledger: event.ledger === null || event.ledger === undefined ? "" : String(event.ledger),
+    ledger_closed_at: event.ledgerClosedAt ?? "",
+    transaction_hash: event.transactionHash ?? "",
+    contract_id: event.contractId ?? "",
+    data: dataJson(event.data),
+  };
+}
+
 function rowCells(event: GuardEvent): string[] {
-  return [
-    event.kind,
-    event.topic,
-    event.decision?.result ?? "",
-    event.decision?.reason ?? "",
-    event.source,
-    event.ledger === null || event.ledger === undefined ? "" : String(event.ledger),
-    event.ledgerClosedAt ?? "",
-    event.transactionHash ?? "",
-    event.contractId ?? "",
-    dataJson(event.data),
-  ];
+  const fields = rowFields(event);
+  return TELEMETRY_CSV_COLUMNS.map((column) => fields[column]);
 }
 
 /** The events as CSV: fixed header, one row per event, trailing newline. */
@@ -111,23 +131,30 @@ export function telemetryToCsv(events: GuardEvent[]): string {
   return `${lines.join("\n")}\n`;
 }
 
-/** One JSON document per line (trailing newline), for log pipelines. */
+/**
+ * One JSON document per line (trailing newline), for log pipelines.
+ *
+ * The keys come from `TELEMETRY_CSV_COLUMNS` in column order, and both writers
+ * read the same `rowFields()` map, so appending a column extends this output
+ * too rather than silently leaving the new field out of the machine-readable
+ * format that a SIEM is already reading.
+ *
+ * `source` is the origin discriminator and is never omitted or guessed: a
+ * refused simulation has `source: "diagnostic"` with an empty `ledger`,
+ * `ledger_closed_at` and `transaction_hash`, which is what keeps it from
+ * parsing as a settled chain event.
+ */
 export function telemetryToNdjson(events: GuardEvent[]): string {
   const lines = events.map((event) => {
-    const [kind, topic, decision, reason, source, ledger, closedAt, hash, contractId, data] =
-      rowCells(event);
-    return JSON.stringify({
-      kind,
-      topic,
-      decision,
-      reason,
-      source,
-      ledger,
-      ledger_closed_at: closedAt,
-      transaction_hash: hash,
-      contract_id: contractId,
-      data: JSON.parse(data ?? "null") as unknown,
-    });
+    const fields = rowFields(event);
+    const record: Record<string, unknown> = {};
+    for (const column of TELEMETRY_CSV_COLUMNS) {
+      // The payload cell is compact JSON; keeping it structured is the whole
+      // reason a pipeline reads this format rather than the CSV.
+      record[column] =
+        column === "data" ? (JSON.parse(fields[column] || "null") as unknown) : fields[column];
+    }
+    return JSON.stringify(record);
   });
   return lines.length > 0 ? `${lines.join("\n")}\n` : "";
 }

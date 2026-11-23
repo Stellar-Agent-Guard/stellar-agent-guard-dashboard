@@ -7,6 +7,7 @@
   - [Bytecode Verification & Pinning](concepts/bytecode-verification-pinning.md)
   - [Dual-Freeze Semantics](concepts/dual-freeze-semantics.md)
   - [No Mock State](concepts/no-mock-state.md)
+  - [Historical Event Availability](concepts/historical-event-availability.md)
 - [Screens & Actions](screens/)
   - [Overview Screen](screens/overview.md)
   - [Policy Configurator](screens/policy-configurator.md)

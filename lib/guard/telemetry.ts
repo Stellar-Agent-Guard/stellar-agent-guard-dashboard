@@ -277,7 +277,21 @@ export class GuardFeed {
     this.stopped = true;
   }
 
-  /** True once `stop()` has been called. Exposed for lifecycle assertions. */
+  /**
+   * Poll again, keeping this feed's cursor.
+   *
+   * `GuardFeedCoordinator` caches one feed per guard identity, so the instance a
+   * stopped watch released is the very instance the next watch is handed back —
+   * and a stopped `pollOnce()` returns an empty page *successfully*, so a
+   * re-armed-but-still-stopped feed reads as "healthy, nothing happened" while
+   * the RPC is never asked (#488). Resuming rather than rebuilding is also the
+   * only restart that keeps the cursor, which is what a manual refresh requires.
+   */
+  resume(): void {
+    this.stopped = false;
+  }
+
+  /** True once `stop()` has been called and `resume()` has not undone it. */
   isStopped(): boolean {
     return this.stopped;
   }

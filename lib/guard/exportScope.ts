@@ -24,28 +24,153 @@
  * would be a lie. So undated rows are kept and counted separately, and the preview
  * says so.
  *
- * No secret or wallet material can enter, by construction rather than by review:
- * the column list is imported from `eventExport.ts` (so the preview cannot drift
- * from the exporter), and that list has no column fed by `event.data`, which is
- * where an event's decoded payload lives. The input to this module is
- * `GuardEvent[]` — nothing reads browser storage, so "unrelated browser-local
+ * No secret or wallet material can enter the **CSV or JSON** export, by
+ * construction rather than by review: their column list is imported from
+ * `eventExport.ts` (so the preview cannot drift from the exporter), and that list
+ * has no column fed by `event.data`, which is where an event's decoded payload
+ * lives. The NDJSON and audit-log formats *do* write `data` — they are forensic
+ * records, and `EXPORT_FORMAT_SCHEMAS` says which is which rather than leaving
+ * the operator to infer it from one shared field list. The input to this module
+ * is `GuardEvent[]` — nothing reads browser storage, so "unrelated browser-local
  * data" cannot be reached even accidentally.
  */
 
 import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { EVENT_EXPORT_COLUMNS } from "./eventExport.ts";
+import { TELEMETRY_CSV_COLUMNS } from "./telemetryExport.ts";
+import { AUDIT_EVENT_FIELDS } from "./exportFormats.ts";
 import type { TimeRange } from "./ledgerTime.ts";
 
 /**
- * The event fields the exporter deliberately never writes.
+ * The event fields the CSV and JSON exporters deliberately never write.
  *
  * `data` is the decoded contract payload (`{ by }` for admin events, and for an
  * auth decision whatever the caller carried). It is the only field on a
  * `GuardEvent` that can hold operator-relevant but export-sensitive material, so
- * naming the omission in the preview is what makes "secrets are not in here" a
- * statement the operator can check rather than one they must trust.
+ * naming the omission in the preview is what makes "those two files carry no
+ * secrets" a statement the operator can check rather than one they must trust.
+ * The NDJSON and audit-log formats write it, and say so in the same preview.
  */
 export const EXPORT_OMITTED_FIELDS = ["data"] as const;
+
+/** The downloads the panel offers, by what they are called in the preview. */
+export type ExportFormatId = "csv" | "json" | "ndjson" | "audit";
+
+/**
+ * What one export format actually writes.
+ *
+ * The field lists are imported from the writers rather than retyped, because the
+ * preview is the operator's only view of the file before they take it: a list
+ * copied by hand goes stale in exactly the way that matters — a field added to
+ * an exporter and never named to the person downloading it.
+ *
+ * `originFields` is the point of #490. A refused simulation was never broadcast,
+ * so a diagnostic row must not read as a settled one in any format, and the way
+ * a reader tells them apart is named here rather than left to be discovered in a
+ * spreadsheet.
+ */
+export interface ExportFormatSchema {
+  id: ExportFormatId;
+  /** How the panel's own button names this download. */
+  button: string;
+  fields: readonly string[];
+  originFields: readonly string[];
+  /** Whether the decoded event payload (`data`) is written by this format. */
+  carriesPayload: boolean;
+  /** The one thing the field list cannot say: how the bytes are arranged. */
+  note: string;
+}
+
+export const EXPORT_FORMAT_SCHEMAS: readonly ExportFormatSchema[] = [
+  {
+    id: "csv",
+    button: "Export CSV",
+    fields: EVENT_EXPORT_COLUMNS,
+    originFields: ["source"],
+    carriesPayload: false,
+    note: "BOM-prefixed, so Excel reads it as UTF-8",
+  },
+  {
+    id: "json",
+    button: "Export JSON",
+    // One writer family: the JSON export is the same rows, plus the version and
+    // column list around them.
+    fields: EVENT_EXPORT_COLUMNS,
+    originFields: ["source"],
+    carriesPayload: false,
+    note: "one object: schemaVersion, columns, guard, rows",
+  },
+  {
+    id: "ndjson",
+    button: "Export NDJSON",
+    fields: TELEMETRY_CSV_COLUMNS,
+    originFields: ["source"],
+    carriesPayload: true,
+    note: "one object per line, no header",
+  },
+  {
+    id: "audit",
+    button: "Export audit log",
+    fields: AUDIT_EVENT_FIELDS,
+    // A diagnostic row has no ledger close, so the audit record says which clock
+    // its `timestamp` came from as well as where the row came from.
+    originFields: ["source", "timestampSource"],
+    carriesPayload: true,
+    note: "a header line, then one record per event, with the raw event XDR",
+  },
+];
+
+export function exportFormatSchema(id: ExportFormatId): ExportFormatSchema {
+  const schema = EXPORT_FORMAT_SCHEMAS.find((entry) => entry.id === id);
+  if (!schema) throw new Error(`no export schema for "${id}"`);
+  return schema;
+}
+
+/**
+ * The tooltip for one export button, built from the same table the preview uses.
+ *
+ * Written as a function rather than as four strings in the component so the
+ * control can never advertise a field list the writer disagrees with.
+ */
+export function exportFormatTitle(id: ExportFormatId): string {
+  const schema = exportFormatSchema(id);
+  return (
+    `${schema.button} writes ${schema.fields.length} field(s): ` +
+    `${schema.fields.join(", ")} — origin in ${schema.originFields.join(" and ")}, ` +
+    `${schema.carriesPayload ? "including" : "without"} the decoded event payload. ` +
+    `${schema.note}. Fields are documented in docs/export-schema.md.`
+  );
+}
+
+/**
+ * The formats that share one field list, as preview lines.
+ *
+ * CSV and JSON are the same columns — they share the imported array, so they
+ * group by that identity rather than by a re-joined string — and read as one
+ * line instead of two that differ only in the name of the button.
+ */
+function fieldLines(schemas: readonly ExportFormatSchema[]): string[] {
+  const groups: { names: string[]; schema: ExportFormatSchema }[] = [];
+  for (const schema of schemas) {
+    const name = schema.button.replace(/^Export /, "").toLowerCase();
+    const existing = groups.find((group) => group.schema.fields === schema.fields);
+    if (existing) existing.names.push(name);
+    else groups.push({ names: [name], schema });
+  }
+  return groups.map((group) => {
+    const origin = group.schema.originFields.map((field) => `"${field}"`).join(" and ");
+    const payload = group.schema.carriesPayload ? "and the decoded payload" : "no decoded payload";
+    return `Fields (${group.names.join(", ")}): ${group.schema.fields.join(", ")} — origin in ${origin}, ${payload}`;
+  });
+}
+
+/**
+ * How a diagnostic row distinguishes itself, in the words of the format that
+ * carries it — the claim #490 asks every export to be able to support.
+ */
+export const DIAGNOSTIC_ROW_STATEMENT =
+  'A refused simulation reads as one: its origin field is "diagnostic", and it has no ledger, ' +
+  "no ledger close time and no transaction hash, because it was never broadcast.";
 
 export interface ExportScope<T extends GuardEvent = GuardEvent> {
   /** Inclusive lower bound actually applied, ISO, or null when unbounded. */
@@ -182,9 +307,14 @@ export function describeExportScope(scope: ExportScope): string[] {
       `${scope.undatedIncluded} undated row(s) included regardless of range — a refused decision has no ledger close time`,
     );
   }
-  lines.push(`Fields: ${scope.fields.join(", ")}`);
+  // #490: the field list belongs to each format, not to the panel. One shared
+  // list would describe one download and misdescribe three — including the
+  // claim about the decoded payload, which is true of CSV and JSON only.
+  lines.push(...fieldLines(EXPORT_FORMAT_SCHEMAS));
+  lines.push(DIAGNOSTIC_ROW_STATEMENT);
   lines.push(
-    `Not exported: ${scope.omittedFields.join(", ")} — the decoded event payload, so no wallet material or secrets can appear`,
+    `Not exported by CSV or JSON: ${scope.omittedFields.join(", ")} — the decoded event payload; ` +
+      "the NDJSON and audit log carry it, as their field lists above say.",
   );
   return lines;
 }
