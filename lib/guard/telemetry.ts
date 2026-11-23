@@ -485,9 +485,6 @@ export class GuardFeedCoordinator<T extends PolledFeed = PolledFeed> {
     if (this.feed && this.currentContextKey === key && this.feed.guard === guard) return this.feed;
     if (this.feed) {
       this.stats.abandoned += 1;
-      if (typeof (this.feed as any).stop === "function") {
-        (this.feed as any).stop();
-      }
     }
     this.currentContextKey = key;
     this.feed = this.factory(guard, contextKey);
