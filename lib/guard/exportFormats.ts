@@ -19,6 +19,7 @@
  * the exact bytes.
  */
 
+import { redactDiagnostics } from "./inputSanitizer.ts";
 import { toHex } from "./scval.ts";
 import type { TelemetryEvent } from "./telemetry.ts";
 import { EMPTY_TELEMETRY_FILTER, type TelemetryFilter } from "./telemetryExport.ts";
@@ -102,6 +103,16 @@ export interface AuditEventRecord {
   } | null;
 }
 
+/**
+ * Redact secret-shaped values (secret seeds, URL credentials, bearer tokens)
+ * anywhere inside a JSON-safe value, keeping its structure. The decoded event
+ * body can carry free text, and an audit log is a file that leaves the
+ * browser (issue #547).
+ */
+function redactJson(value: unknown): unknown {
+  return JSON.parse(redactDiagnostics(JSON.stringify(value ?? null))) as unknown;
+}
+
 export function toAuditRecord(event: TelemetryEvent): AuditEventRecord {
   const observedAt = event.observedAt ?? null;
   const timestamp = event.ledgerClosedAt ?? observedAt;
@@ -119,7 +130,7 @@ export function toAuditRecord(event: TelemetryEvent): AuditEventRecord {
     ledgerClosedAt: event.ledgerClosedAt,
     observedAt,
     transactionHash: event.transactionHash,
-    data: toJsonSafe(event.data),
+    data: redactJson(toJsonSafe(event.data)),
     raw: event.raw
       ? {
           eventId: event.raw.eventId,

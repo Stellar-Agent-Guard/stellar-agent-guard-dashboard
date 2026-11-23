@@ -10,6 +10,7 @@
 
 import type { GuardEvent } from "stellar-agent-guard-sdk";
 import { neutralizeFormulaCell } from "./csv.ts";
+import { redactDiagnostics } from "./inputSanitizer.ts";
 
 export type VerdictFilter = "all" | "allowed" | "blocked";
 
@@ -55,7 +56,8 @@ export function filterGuardEvents<T extends GuardEvent>(
 /**
  * The CSV header, in order. `data` is the event body as compact JSON — it is
  * quoted like any other field, so a body containing commas or newlines stays
- * one cell.
+ * one cell. Secret-shaped values in it (secret seeds, URL credentials, bearer
+ * tokens) are replaced with `[REDACTED]` before it is written.
  */
 export const TELEMETRY_CSV_COLUMNS = [
   "kind",
@@ -97,7 +99,10 @@ function rowCells(event: GuardEvent): string[] {
     event.ledgerClosedAt ?? "",
     event.transactionHash ?? "",
     event.contractId ?? "",
-    dataJson(event.data),
+    // The body is contract-decoded data and can carry free text; anything
+    // secret-shaped in it is redacted so a download stays public-data-only
+    // (issue #547). Addresses and hashes are kept.
+    redactDiagnostics(dataJson(event.data)),
   ];
 }
 

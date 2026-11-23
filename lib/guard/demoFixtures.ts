@@ -36,6 +36,14 @@ import { NETWORK, PHASE1_ARTIFACT } from "./network.ts";
 /** The exact badge copy the interface shows whenever demo data is on screen. */
 export const DEMO_BADGE_TEXT = "DEMO MODE — Static Fixture Data";
 
+/**
+ * Why nothing can be signed in demo mode. Demo data describes no real account,
+ * so a write would act on a guard the operator never chose: connecting a
+ * wallet is refused on every route, which makes every write unreachable.
+ */
+export const DEMO_READ_ONLY_TEXT =
+  "Demo mode is read-only: connecting a wallet and every write (deploy, policy, freeze) are disabled. Open the console without ?demo=true to operate a real guard.";
+
 /** The environment variable that switches demo mode on at build/run time. */
 export const DEMO_ENV_FLAG = "NEXT_PUBLIC_DEMO_MODE";
 

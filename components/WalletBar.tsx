@@ -9,6 +9,7 @@ import {
   looksLikeContractAddress,
   type GuardInstance,
 } from "../lib/guard/instance.ts";
+import { DEMO_READ_ONLY_TEXT } from "../lib/guard/demoFixtures.ts";
 import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 import { IDLE_TIMEOUT_OPTIONS } from "../lib/guard/useIdleTimer.ts";
 import {
@@ -240,10 +241,16 @@ export function WalletBar() {
               </>
             ) : (
               <>
-                <button onClick={() => setPickerOpen(true)} disabled={connecting}>
+                <button onClick={() => setPickerOpen(true)} disabled={connecting || demo}>
                   {connecting ? "Waiting for wallet…" : "Connect admin wallet"}
                 </button>
-                {!connecting && <span className="tiny muted">Reading stays available.</span>}
+                {demo ? (
+                  <span className="tiny muted" data-testid="demo-read-only">
+                    {DEMO_READ_ONLY_TEXT}
+                  </span>
+                ) : (
+                  !connecting && <span className="tiny muted">Reading stays available.</span>
+                )}
               </>
             )}
           </div>

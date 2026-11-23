@@ -35,6 +35,17 @@ The feed keeps the **250 most recent events** (newest first), so an export
 contains at most 250 data rows and always reflects what the operator can see.
 Export earlier if you need more history; the feed is a console, not an archive.
 
+## Secrets never leave in an export
+
+Every download is public data only. The CSV and JSON exports above carry no
+decoded event payload at all. The telemetry CSV/NDJSON and the NDJSON audit log
+do carry the decoded body (`data`), and any secret-shaped value in it is
+replaced with `[REDACTED]` before the file is written: a Stellar secret seed,
+a credential in a URL query or basic-auth part, or a bearer token. Public
+identifiers (`G…` accounts, `C…` contracts, transaction hashes) are kept.
+`tests/unit/artifactSecrets.test.ts` seeds secret-shaped values into every
+artifact writer and scans the output.
+
 ## Cell conventions
 
 - **Every cell is a string.** Ledger sequences and the schema version are
