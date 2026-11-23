@@ -43,6 +43,23 @@ export const OVERDUE_INTERVALS = 3;
  */
 export type PollPhase = "off" | "pending" | "healthy" | "failing" | "overdue";
 
+/**
+ * The phase in as few words as a header pill has room for. Short, and never the
+ * same word twice: "polling" used to cover both a live feed and a stuck one,
+ * which is the conflation #311 is about.
+ *
+ * Exported because two surfaces state it — the feed's own pill and the console
+ * header's refresh strip (#528) — and a phase that reads "polling" on one and
+ * "live" on the other is the same bug wearing two shirts.
+ */
+export const POLL_PHASE_WORDS: Record<PollPhase, string> = {
+  off: "stopped",
+  pending: "connecting",
+  healthy: "polling",
+  failing: "poll failing",
+  overdue: "no response",
+};
+
 export interface PollHealthInput {
   watching: boolean;
   /** A round is currently in flight. */

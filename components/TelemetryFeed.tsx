@@ -26,7 +26,7 @@ import { loadScopedValue, saveScopedValue } from "../lib/guard/guardScoped.ts";
 import { useAnnounce } from "../lib/guard/useAnnounce.ts";
 import { eventsToCsv, eventsToJson, exportFilename } from "../lib/guard/eventExport.ts";
 import { buildExportScope, describeExportScope } from "../lib/guard/exportScope.ts";
-import type { PollPhase } from "../lib/guard/feedHealth.ts";
+import { POLL_PHASE_WORDS } from "../lib/guard/feedHealth.ts";
 import { streamPaused, streamResumed } from "../lib/guard/announceCopy.ts";
 import { BlockedEventBadge } from "./BlockedEventBadge.tsx";
 import { useDemoMode } from "../lib/guard/useDemoMode.ts";
@@ -50,19 +50,6 @@ import {
 
 /** The scoped-state base under which each guard's feed filter is remembered. */
 const SCOPED_FILTER_BASE = "feedFilter";
-
-/**
- * The header pill wording for each poll phase (#311). Short, and never the same
- * word twice: "polling" covered both a live feed and a stuck one before, which is
- * the conflation this issue is about.
- */
-const HEALTH_LABELS: Record<PollPhase, string> = {
-  off: "stopped",
-  pending: "connecting",
-  healthy: "polling",
-  failing: "poll failing",
-  overdue: "no response",
-};
 
 /** Human names for the topic filter's options, keyed by the topic symbol. */
 const TOPIC_LABELS: Record<string, string> = {
