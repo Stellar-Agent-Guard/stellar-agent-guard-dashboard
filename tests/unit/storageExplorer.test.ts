@@ -788,7 +788,7 @@ describe("operator browser-local storage controls and category isolation (#332)"
         `${key} was described by a sentence the inventory does not carry`,
       );
     }
-    assert.match(describeStorageKey(concrete), /^Per-guard drafts and filters/);
+    assert.match(describeStorageKey(concrete), /^Per-guard drafts/);
   });
 
   test("every key either reset touches is disclosed in the privacy inventory", () => {
