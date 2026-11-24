@@ -369,8 +369,11 @@ describe("error mapping across providers", () => {
         `${id}: user cancellation is mapped to WalletUserRejectedError`,
       );
       assert.ok(
-        mapConnectorError(new Error("Wallet refused transaction: policy violation"), id, "sign") instanceof
-          WalletRefusedError,
+        mapConnectorError(
+          new Error("Wallet refused transaction: policy violation"),
+          id,
+          "sign",
+        ) instanceof WalletRefusedError,
         `${id}: provider or policy refusal is distinguished from user cancellation`,
       );
       assert.ok(

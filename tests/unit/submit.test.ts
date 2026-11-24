@@ -883,7 +883,10 @@ describe("a declined signature is its own outcome (#291)", () => {
     assert.equal(isWalletCancellation(new Error("User cancelled")), true);
     assert.equal(isWalletCancellation(new Error("Permission denied by wallet policy")), false);
 
-    assert.equal(isWalletRefusal(new WalletRefusedError("freighter", "sign", "policy violation")), true);
+    assert.equal(
+      isWalletRefusal(new WalletRefusedError("freighter", "sign", "policy violation")),
+      true,
+    );
     assert.equal(isWalletRefusal(new Error("Transaction refused: unauthorized")), true);
     assert.equal(isWalletRefusal(new Error("User cancelled")), false);
 

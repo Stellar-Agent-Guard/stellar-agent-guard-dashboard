@@ -86,11 +86,7 @@ export function WalletBar() {
     interruptionState === null ? null : recoveryGuidance(interruptionState.interruption);
 
   // Active pending write state for disconnect safety guidance (issue #516)
-  const pendingWrite = useSyncExternalStore(
-    subscribePendingWrite,
-    getPendingWrite,
-    () => null,
-  );
+  const pendingWrite = useSyncExternalStore(subscribePendingWrite, getPendingWrite, () => null);
 
   // ── Endpoint health (issue #346) ────────────────────────────────────────
   // One read-only probe when the bar mounts, then only when the operator asks
@@ -600,11 +596,13 @@ export function WalletPickerModal({
         >
           <strong>Read-only connection preview</strong>
           <span className="tiny" style={{ display: "block", marginTop: 4 }}>
-            Connecting requests read-only access to your public Stellar address and active network ({NETWORK.name}).
+            Connecting requests read-only access to your public Stellar address and active network (
+            {NETWORK.name}).
           </span>
           <span className="tiny muted" style={{ display: "block", marginTop: 4 }}>
-            No secret keys or signing authority are ever requested. Every contract write is individually user-initiated.
-            Observer mode remains active on cancel — all live telemetry, status reads, and contract inspections remain available without a wallet.
+            No secret keys or signing authority are ever requested. Every contract write is
+            individually user-initiated. Observer mode remains active on cancel — all live
+            telemetry, status reads, and contract inspections remain available without a wallet.
           </span>
         </div>
 

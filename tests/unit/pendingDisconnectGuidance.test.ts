@@ -99,8 +99,12 @@ describe("pending disconnect guidance (#516)", () => {
       root!.render(
         React.createElement(PendingDisconnectModal, {
           pendingWrite: { phase: "submission", txHash: "abc123hash" },
-          onConfirm: () => { confirmed = true; },
-          onClose: () => { closed = true; },
+          onConfirm: () => {
+            confirmed = true;
+          },
+          onClose: () => {
+            closed = true;
+          },
         }),
       );
     });

@@ -295,23 +295,16 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
   const [showIncidentSummary, setShowIncidentSummary] = useState(false);
   const [lastReadError, setLastReadError] = useState<string | null>(null);
   const [lastSuccessfulRead, setLastSuccessfulRead] = useState<string | null>(null);
-  // Account change tracking while confirmation dialog is open (issue #515)
-  const confirmingAccountRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (phase === "confirming") {
-      if (confirmingAccountRef.current === null) {
-        confirmingAccountRef.current = wallet?.address ?? "";
-      }
-    } else {
-      confirmingAccountRef.current = null;
-    }
-  }, [phase, wallet?.address]);
+  // Account change tracking while confirmation dialog is open (issue #515).
+  // Captured when the dialog opens rather than in a ref, so the comparison is
+  // render-safe and the frozen address survives wallet updates.
+  const [confirmingAccount, setConfirmingAccount] = useState<string | null>(null);
 
   const freezeAccountChanged = Boolean(
     phase === "confirming" &&
-      confirmingAccountRef.current &&
-      wallet?.address &&
-      confirmingAccountRef.current !== wallet.address,
+    confirmingAccount &&
+    wallet?.address &&
+    confirmingAccount !== wallet.address,
   );
   // A freeze that is signing or awaiting the post-write read is a pending
   // write: an update must not replace the app underneath it (#398).
@@ -618,6 +611,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
             onClick={() => {
               setAcknowledged(false);
               setChallengeInput("");
+              setConfirmingAccount(wallet?.address ?? "");
               setPhase("confirming");
               setReport(null);
               // Re-read the balance at the decision point, not just at mount:
@@ -752,20 +746,26 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
               >
                 <strong>Wallet account changed during confirmation</strong>
                 <p className="tiny" style={{ margin: "4px 0" }}>
-                  The wallet account changed from <span className="mono">{confirmingAccountRef.current}</span> to{" "}
-                  <span className="mono">{wallet?.address}</span> while this dialog was open.
+                  The wallet account changed from <span className="mono">{confirmingAccount}</span>{" "}
+                  to <span className="mono">{wallet?.address}</span> while this dialog was open.
                   Freeze simulation was prepared for the previous account.
                 </p>
                 <p className="tiny muted" style={{ margin: "4px 0" }}>
-                  <strong>Recovery:</strong> Cancel this confirmation to re-simulate freeze for the current account,
-                  or switch your wallet back to <span className="mono">{confirmingAccountRef.current}</span>.
+                  <strong>Recovery:</strong> Cancel this confirmation to re-simulate freeze for the
+                  current account, or switch your wallet back to{" "}
+                  <span className="mono">{confirmingAccount}</span>.
                 </p>
               </div>
             )}
             <div className="row">
               <button
                 className="danger"
-                disabled={!acknowledged || !challengeSatisfied || pendingFreeze !== null || freezeAccountChanged}
+                disabled={
+                  !acknowledged ||
+                  !challengeSatisfied ||
+                  pendingFreeze !== null ||
+                  freezeAccountChanged
+                }
                 onClick={() => {
                   if (freezeAccountChanged) return;
                   void run("freeze");

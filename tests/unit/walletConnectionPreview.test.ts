@@ -28,11 +28,13 @@ describe("WalletPickerModal read-only connection preview (#514)", () => {
     document.body.innerHTML = "";
   });
 
-  async function renderModal(props: {
-    connecting?: boolean;
-    onClose?: () => void;
-    onChoose?: (provider: any) => void;
-  } = {}): Promise<void> {
+  async function renderModal(
+    props: {
+      connecting?: boolean;
+      onClose?: () => void;
+      onChoose?: (provider: any) => void;
+    } = {},
+  ): Promise<void> {
     const host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);
@@ -77,15 +79,24 @@ describe("WalletPickerModal read-only connection preview (#514)", () => {
 
   test("keeps observer mode available on cancel", async () => {
     let closed = false;
-    await renderModal({ onClose: () => { closed = true; } });
+    await renderModal({
+      onClose: () => {
+        closed = true;
+      },
+    });
 
-    const cancelButton = document.querySelector('[data-testid="cancel-wallet-picker"]') as HTMLButtonElement;
+    const cancelButton = document.querySelector(
+      '[data-testid="cancel-wallet-picker"]',
+    ) as HTMLButtonElement;
     assert.ok(cancelButton, "cancel button is present");
     assert.match(cancelButton.textContent || "", /Keep observing/i);
 
     const observerNotice = document.querySelector('[data-testid="observer-mode-note"]');
     assert.ok(observerNotice, "observer mode notice is present");
-    assert.match(observerNotice.textContent || "", /every read on this page works without a wallet/i);
+    assert.match(
+      observerNotice.textContent || "",
+      /every read on this page works without a wallet/i,
+    );
 
     await act(() => {
       cancelButton.click();
@@ -95,7 +106,11 @@ describe("WalletPickerModal read-only connection preview (#514)", () => {
 
   test("connecting is user-initiated per provider", async () => {
     let chosenProvider: string | null = null;
-    await renderModal({ onChoose: (p) => { chosenProvider = p; } });
+    await renderModal({
+      onChoose: (p) => {
+        chosenProvider = p;
+      },
+    });
 
     const buttons = Array.from(document.querySelectorAll("button"));
     const connectFreighter = buttons.find((btn) => btn.textContent?.includes("Connect"));

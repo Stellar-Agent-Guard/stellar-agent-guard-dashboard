@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useState } from "react";
 import type { PolicyDiff, DiffEntry } from "../lib/guard/policyDiff.ts";
 import { useGuard } from "./GuardProvider.tsx";
 import { short } from "./bits.tsx";
@@ -51,8 +51,10 @@ export function PolicyDiffModal({
     // Rendered outside GuardProvider (e.g. isolated test)
   }
 
-  const initialAccountRef = useRef<string | undefined>(expectedAccount ?? liveAddress);
-  const targetAccount = expectedAccount ?? initialAccountRef.current;
+  // Capture the account the dialog was opened for, once, so a wallet switch
+  // while it is open is reported instead of silently retargeting the change.
+  const [initialAccount] = useState<string | undefined>(() => expectedAccount ?? liveAddress);
+  const targetAccount = expectedAccount ?? initialAccount;
   const accountChanged = Boolean(targetAccount && liveAddress && targetAccount !== liveAddress);
 
   const changes = diff.entries.filter((entry) => entry.status !== "unchanged");
@@ -81,13 +83,15 @@ export function PolicyDiffModal({
           >
             <strong>Active account changed during review</strong>
             <p className="tiny" style={{ margin: "4px 0" }}>
-              The connected account changed from <span className="mono">{short(targetAccount!, 8, 6)}</span> to{" "}
-              <span className="mono">{short(liveAddress!, 8, 6)}</span> while this confirmation was open.
-              This policy change was prepared and simulated for the previous account.
+              The connected account changed from{" "}
+              <span className="mono">{short(targetAccount!, 8, 6)}</span> to{" "}
+              <span className="mono">{short(liveAddress!, 8, 6)}</span> while this confirmation was
+              open. This policy change was prepared and simulated for the previous account.
             </p>
             <p className="tiny muted" style={{ margin: "4px 0" }}>
-              <strong>Recovery:</strong> Cancel this confirmation to re-run policy review with the active account,
-              or switch your wallet back to <span className="mono">{short(targetAccount!, 8, 6)}</span>.
+              <strong>Recovery:</strong> Cancel this confirmation to re-run policy review with the
+              active account, or switch your wallet back to{" "}
+              <span className="mono">{short(targetAccount!, 8, 6)}</span>.
             </p>
           </div>
         )}

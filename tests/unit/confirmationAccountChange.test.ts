@@ -5,9 +5,7 @@ import { PolicyDiffModal } from "../../components/PolicyDiffModal.tsx";
 import type { PolicyDiff } from "../../lib/guard/policyDiff.ts";
 
 const SAMPLE_DIFF: PolicyDiff = {
-  entries: [
-    { field: "per_tx_cap", oldValue: 1000n, newValue: 2000n, status: "modified" },
-  ],
+  entries: [{ field: "per_tx_cap", oldValue: 1000n, newValue: 2000n, status: "modified" }],
   warnings: [],
 };
 
@@ -35,12 +33,14 @@ describe("confirmation dialog account change protection (#515)", () => {
     document.body.innerHTML = "";
   });
 
-  async function renderPolicyDiffModal(props: {
-    expectedAccount?: string;
-    currentAccount?: string;
-    onConfirm?: () => void;
-    onCancel?: () => void;
-  } = {}): Promise<void> {
+  async function renderPolicyDiffModal(
+    props: {
+      expectedAccount?: string;
+      currentAccount?: string;
+      onConfirm?: () => void;
+      onCancel?: () => void;
+    } = {},
+  ): Promise<void> {
     const host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);
@@ -48,8 +48,10 @@ describe("confirmation dialog account change protection (#515)", () => {
       root!.render(
         React.createElement(PolicyDiffModal, {
           diff: SAMPLE_DIFF,
-          expectedAccount: props.expectedAccount ?? "GBBD7223BM5VCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNS",
-          currentAccount: props.currentAccount ?? "GBBD7223BM5VCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNS",
+          expectedAccount:
+            props.expectedAccount ?? "GBBD7223BM5VCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNS",
+          currentAccount:
+            props.currentAccount ?? "GBBD7223BM5VCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNS",
           onConfirm: props.onConfirm ?? (() => {}),
           onCancel: props.onCancel ?? (() => {}),
         }),
@@ -62,14 +64,16 @@ describe("confirmation dialog account change protection (#515)", () => {
     await renderPolicyDiffModal({
       expectedAccount: "GBBD7223BM5VCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNS",
       currentAccount: "GBBD7223BM5VCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNS",
-      onConfirm: () => { confirmed = true; },
+      onConfirm: () => {
+        confirmed = true;
+      },
     });
 
     const warning = document.querySelector('[data-testid="confirmation-account-changed"]');
     assert.equal(warning, null, "no account changed warning when accounts match");
 
-    const confirmButton = Array.from(document.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.includes("Confirm and sign"),
+    const confirmButton = Array.from(document.querySelectorAll("button")).find((btn) =>
+      btn.textContent?.includes("Confirm and sign"),
     ) as HTMLButtonElement;
     assert.ok(confirmButton, "confirm button is present");
     assert.equal(confirmButton.disabled, false, "confirm button is enabled");
@@ -88,7 +92,9 @@ describe("confirmation dialog account change protection (#515)", () => {
     await renderPolicyDiffModal({
       expectedAccount: originalAccount,
       currentAccount: switchedAccount,
-      onConfirm: () => { confirmed = true; },
+      onConfirm: () => {
+        confirmed = true;
+      },
     });
 
     const warning = document.querySelector('[data-testid="confirmation-account-changed"]');
@@ -98,14 +104,10 @@ describe("confirmation dialog account change protection (#515)", () => {
       /Active account changed during review/i,
       "names the account change issue",
     );
-    assert.match(
-      warning.textContent || "",
-      /Recovery:/i,
-      "displays explicit recovery path",
-    );
+    assert.match(warning.textContent || "", /Recovery:/i, "displays explicit recovery path");
 
-    const confirmButton = Array.from(document.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.includes("Confirm and sign"),
+    const confirmButton = Array.from(document.querySelectorAll("button")).find((btn) =>
+      btn.textContent?.includes("Confirm and sign"),
     ) as HTMLButtonElement;
     assert.ok(confirmButton, "confirm button is present");
     assert.equal(confirmButton.disabled, true, "confirm button is disabled on account change");
@@ -122,11 +124,13 @@ describe("confirmation dialog account change protection (#515)", () => {
     await renderPolicyDiffModal({
       expectedAccount: "GBBD7223BM5VCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNS",
       currentAccount: "GCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNSGBBD7223BM5V",
-      onCancel: () => { cancelled = true; },
+      onCancel: () => {
+        cancelled = true;
+      },
     });
 
-    const cancelButton = Array.from(document.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.includes("Cancel"),
+    const cancelButton = Array.from(document.querySelectorAll("button")).find((btn) =>
+      btn.textContent?.includes("Cancel"),
     ) as HTMLButtonElement;
     assert.ok(cancelButton, "cancel button is available");
 
