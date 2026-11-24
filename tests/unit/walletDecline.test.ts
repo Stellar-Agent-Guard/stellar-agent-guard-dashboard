@@ -50,6 +50,11 @@ const submitted: InvokeResult = {
   ledger: 201,
   events: null,
 };
+const unknown: InvokeResult = {
+  kind: "unknown",
+  hash: "ef".repeat(32),
+  detail: "the send request ended without a response; verify this hash on chain before retrying",
+};
 
 function step(label: string, result: InvokeResult): DeployStep {
   return { label, result };
@@ -89,6 +94,7 @@ describe("classifyDeploySteps", () => {
   it("keeps a pre-broadcast refusal, an on-chain rejection and a decline apart", () => {
     assert.equal(classifyDeploySteps([step(CREATE_LABEL, refused)]).kind, "refused");
     assert.equal(classifyDeploySteps([step(CREATE_LABEL, failed)]).kind, "failed");
+    assert.equal(classifyDeploySteps([step(CREATE_LABEL, unknown)]).kind, "unknown");
     assert.equal(classifyDeploySteps([step(CREATE_LABEL, submitted)]).kind, "created");
   });
 
@@ -130,6 +136,18 @@ describe("the deploy panel's outcome wording (#291)", () => {
     assert.match(view.headline, /included and rejected on chain/i);
     assert.equal(view.tone, "error");
     assert.equal(view.retryable, false);
+  });
+
+  it("keeps an unconfirmed deploy submission distinct and never offers a retry", () => {
+    const view = deployOutcomeView(
+      outcome([step(UPLOAD_LABEL, submitted), step(CREATE_LABEL, unknown)]),
+    );
+    assert.match(view.headline, /earlier deploy step landed/i);
+    assert.match(view.headline, /submission was not confirmed/i);
+    assert.match(view.headline, /verify the hash/i);
+    assert.equal(view.tone, "warn");
+    assert.equal(view.retryable, false);
+    assert.equal(view.detail, unknown.detail);
   });
 
   it("keeps the three created-contract headlines it always had", () => {
@@ -183,6 +201,15 @@ describe("the initialize panel's outcome wording (#291)", () => {
     assert.match(view.headline, /exported for offline signing/i);
     assert.match(view.headline, /nothing was broadcast/i);
     assert.equal(view.retryable, false, "an export is finished work, not a failure to retry");
+  });
+
+  it("keeps an unconfirmed initialize distinct and does not offer a retry", () => {
+    const view = initOutcomeView(unknown);
+    assert.match(view.headline, /submission was not confirmed/i);
+    assert.match(view.headline, /verify the hash/i);
+    assert.equal(view.tone, "warn");
+    assert.equal(view.retryable, false);
+    assert.equal(view.detail, unknown.detail);
   });
 
   it("reports a landed initialize as landed", () => {

@@ -16,6 +16,7 @@
 - [Operator Runbooks](runbooks/)
   - [Emergency Freeze & Incident Response](runbooks/emergency-freeze.md)
   - [Routine Policy Updates & Audit](runbooks/policy-updates.md)
+  - [Submission Timeout: Verifying an Ambiguous Transaction](runbooks/submission-timeout.md)
 - [Guides](guides/)
   - [Agent Integration](guides/agent-integration.md)
   - [Air-Gapped Multisig Signing](guides/air-gapped-multisig-signing.md)

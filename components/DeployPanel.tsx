@@ -151,6 +151,15 @@ export function deployOutcomeView(outcome: DeployOutcome): OutcomeView {
         retryable: false,
         detail: progress.detail,
       };
+    case "unknown":
+      return {
+        headline: partial
+          ? "An earlier deploy step landed, but the next submission was not confirmed — verify the hash on chain before retrying"
+          : "Deploy submission was not confirmed — verify the hash on chain before retrying",
+        tone: "warn",
+        retryable: false,
+        detail: progress.detail,
+      };
     default:
       if (outcome.verified) {
         return {
@@ -193,6 +202,14 @@ export function initOutcomeView(result: InvokeResult): OutcomeView {
         headline: "initialize was declined in the wallet — nothing was broadcast",
         tone: "warn",
         retryable: true,
+        detail: result.detail,
+      };
+    case "unknown":
+      return {
+        headline:
+          "initialize submission was not confirmed — verify the hash on chain before retrying",
+        tone: "warn",
+        retryable: false,
         detail: result.detail,
       };
     case "refused":
