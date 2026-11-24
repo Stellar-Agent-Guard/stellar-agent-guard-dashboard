@@ -24,6 +24,7 @@ import type { TelemetryEvent } from "../lib/guard/telemetry.ts";
 import { NETWORK } from "../lib/guard/network.ts";
 import { defaultGuardLabel } from "../lib/guard/instance.ts";
 import { announce } from "../lib/guard/useAnnounce.ts";
+import { deliveryTracker } from "../lib/guard/WebhookAlertBridge.tsx";
 import {
   buildWebhookPayload,
   countBlockedInWindow,
@@ -128,12 +129,22 @@ export function WebhookAlertBridge() {
         },
         settings.secret,
       );
+      const record = deliveryTracker.enqueue(settings.url, `${event}-${now}`, event);
       void dispatchWebhook(payload, settings)
         .then((result) => {
           // Only a delivery that actually happened arms the cooldown: a failed
           // POST must stay eligible so the next poll can try again rather than
           // waiting out a cooldown for an alert that was never sent.
-          if (result.ok) lastSentAt.current[event] = now;
+          if (result.ok) {
+            lastSentAt.current[event] = now;
+            deliveryTracker.markDelivered(record.id, result.status ?? 200);
+          } else {
+            deliveryTracker.markFailed(
+              record.id,
+              result.status ?? undefined,
+              result.error ?? result.outcome,
+            );
+          }
           announce(
             result.ok
               ? `Webhook dispatched: ${event}`
@@ -141,7 +152,8 @@ export function WebhookAlertBridge() {
             result.ok ? "polite" : "assertive",
           );
         })
-        .catch(() => {
+        .catch((err) => {
+          deliveryTracker.markFailed(record.id, undefined, String(err));
           // `dispatchWebhook` reports failures as values; this only guards
           // against a throw from something outside it, so the console keeps
           // running either way.

@@ -14,6 +14,7 @@
   - [Deploy Panel](screens/deploy-panel.md)
   - [Panic Button & Freeze](screens/panic-freeze.md)
   - [Telemetry Feed](screens/telemetry-feed.md)
+  - [Webhook Alerts](screens/webhook-settings.md)
 - [Operator Runbooks](runbooks/)
   - [Emergency Freeze & Incident Response](runbooks/emergency-freeze.md)
   - [Routine Policy Updates & Audit](runbooks/policy-updates.md)

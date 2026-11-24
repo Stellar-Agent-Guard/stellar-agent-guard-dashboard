@@ -4,6 +4,7 @@ import * as guardOps from "./guardOps.ts";
 import type { GuardSnapshot } from "./guardOps.ts";
 import { NETWORK } from "./network.ts";
 import { formatStroops } from "./formatters.ts";
+import type { StorageLike } from "./instance.ts";
 
 export type DerivedStatus = "Active" | "Frozen" | "Expired" | "Unknown";
 
@@ -15,13 +16,176 @@ export interface FleetRow {
   spend24h: bigint;
   dmsCountdownSecs: bigint | null;
   network: string;
-  retry?: () => Promise<FleetRow>;
+  tags?: string[] | undefined;
+  displayName?: string | undefined;
+  retry?: (() => Promise<FleetRow>) | undefined;
+}
+
+function defaultStorage(): StorageLike | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+// ── Browser-local operator tags (issue #472 & #480) ────────────────────────
+
+export const FLEET_TAGS_STORAGE_KEY = "stellar-agent-guard-dashboard.fleet-tags.v1";
+
+export function loadFleetTags(
+  network: string,
+  storage?: StorageLike | null,
+): Record<string, string[]> {
+  const s = storage === undefined ? defaultStorage() : storage;
+  if (!s) return {};
+  try {
+    const raw = s.getItem(FLEET_TAGS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    const netTags = (parsed as Record<string, unknown>)[network];
+    if (typeof netTags !== "object" || netTags === null || Array.isArray(netTags)) return {};
+    const result: Record<string, string[]> = {};
+    for (const [addr, tags] of Object.entries(netTags as Record<string, unknown>)) {
+      if (Array.isArray(tags)) {
+        result[addr] = tags.filter(
+          (t): t is string => typeof t === "string" && t.trim().length > 0,
+        );
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+export function saveFleetTags(
+  network: string,
+  tagsByAddress: Record<string, string[]>,
+  storage?: StorageLike | null,
+): void {
+  const s = storage === undefined ? defaultStorage() : storage;
+  if (!s) return;
+  try {
+    let allData: Record<string, Record<string, string[]>> = {};
+    const raw = s.getItem(FLEET_TAGS_STORAGE_KEY);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          allData = parsed as Record<string, Record<string, string[]>>;
+        }
+      } catch {}
+    }
+    allData[network] = tagsByAddress;
+    s.setItem(FLEET_TAGS_STORAGE_KEY, JSON.stringify(allData));
+  } catch {}
+}
+
+export function getGuardTags(
+  network: string,
+  address: string,
+  storage?: StorageLike | null,
+): string[] {
+  const map = loadFleetTags(network, storage);
+  return map[address] ?? [];
+}
+
+export function setGuardTags(
+  network: string,
+  address: string,
+  tags: string[],
+  storage?: StorageLike | null,
+): void {
+  const map = loadFleetTags(network, storage);
+  map[address] = tags;
+  saveFleetTags(network, map, storage);
+}
+
+// ── Display names (issue #473 & #480) ──────────────────────────────────────
+
+export const FLEET_NAMES_STORAGE_KEY = "stellar-agent-guard-dashboard.fleet-names.v1";
+
+export function loadFleetNames(
+  network: string,
+  storage?: StorageLike | null,
+): Record<string, string> {
+  const s = storage === undefined ? defaultStorage() : storage;
+  if (!s) return {};
+  try {
+    const raw = s.getItem(FLEET_NAMES_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    const netNames = (parsed as Record<string, unknown>)[network];
+    if (typeof netNames !== "object" || netNames === null || Array.isArray(netNames)) return {};
+    const result: Record<string, string> = {};
+    for (const [addr, name] of Object.entries(netNames as Record<string, unknown>)) {
+      if (typeof name === "string" && name.trim().length > 0) {
+        result[addr] = name.trim();
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+export function saveFleetNames(
+  network: string,
+  namesByAddress: Record<string, string>,
+  storage?: StorageLike | null,
+): void {
+  const s = storage === undefined ? defaultStorage() : storage;
+  if (!s) return;
+  try {
+    let allData: Record<string, Record<string, string>> = {};
+    const raw = s.getItem(FLEET_NAMES_STORAGE_KEY);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          allData = parsed as Record<string, Record<string, string>>;
+        }
+      } catch {}
+    }
+    allData[network] = namesByAddress;
+    s.setItem(FLEET_NAMES_STORAGE_KEY, JSON.stringify(allData));
+  } catch {}
+}
+
+export function getPreferredDisplayName(
+  network: string,
+  address: string,
+  defaultLabel: string,
+  storage?: StorageLike | null,
+): string {
+  const map = loadFleetNames(network, storage);
+  return map[address] || defaultLabel;
+}
+
+export function setPreferredDisplayName(
+  network: string,
+  address: string,
+  displayName: string,
+  storage?: StorageLike | null,
+): void {
+  const map = loadFleetNames(network, storage);
+  if (!displayName.trim()) {
+    delete map[address];
+  } else {
+    map[address] = displayName.trim();
+  }
+  saveFleetNames(network, map, storage);
 }
 
 export async function pollFleet(
   server: rpc.Server,
   contacts: Contact[],
   _readSnapshot = guardOps.readGuardSnapshot,
+  storage?: StorageLike | null,
 ): Promise<FleetRow[]> {
   const promises = contacts.map(async (contact) => {
     try {
@@ -61,8 +225,10 @@ export async function pollFleet(
         spend24h,
         dmsCountdownSecs,
         network: NETWORK.name,
+        tags: getGuardTags(NETWORK.name, contact.address, storage),
+        displayName: getPreferredDisplayName(NETWORK.name, contact.address, contact.label, storage),
         retry: async (): Promise<FleetRow> => {
-          const results = await pollFleet(server, [contact], _readSnapshot);
+          const results = await pollFleet(server, [contact], _readSnapshot, storage);
           return results[0]!;
         },
       };
@@ -75,8 +241,10 @@ export async function pollFleet(
         spend24h: 0n,
         dmsCountdownSecs: null,
         network: NETWORK.name,
+        tags: getGuardTags(NETWORK.name, contact.address, storage),
+        displayName: getPreferredDisplayName(NETWORK.name, contact.address, contact.label, storage),
         retry: async (): Promise<FleetRow> => {
-          const results = await pollFleet(server, [contact], _readSnapshot);
+          const results = await pollFleet(server, [contact], _readSnapshot, storage);
           return results[0]!;
         },
       };

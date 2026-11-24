@@ -264,6 +264,18 @@ export function FleetTable() {
   const allVisibleSelected =
     visibleAddresses.length > 0 && visibleAddresses.every((address) => selected.includes(address));
 
+  const handleRowRetry = async (targetRow: FleetRow) => {
+    if (!targetRow.retry) return;
+    try {
+      const updated = await targetRow.retry();
+      setRows((current) =>
+        current.map((r) => (r.contact.address === updated.contact.address ? updated : r)),
+      );
+    } catch {
+      // Row retry failure remains row-scoped
+    }
+  };
+
   const toggleSelected = (address: string) => {
     setCleanupError(null);
     setSelected((current) =>
@@ -747,7 +759,7 @@ export function FleetTable() {
                                 <button
                                   className="secondary"
                                   style={{ padding: "4px 8px", fontSize: "0.8em" }}
-                                  onClick={() => row.retry!()}
+                                  onClick={() => void handleRowRetry(row)}
                                   disabled={row.derivedStatus !== "Unknown"}
                                 >
                                   Retry

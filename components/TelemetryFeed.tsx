@@ -6,7 +6,9 @@ import type { GuardEvent } from "stellar-agent-guard-sdk";
 import {
   STREAM_BUFFER_LIMIT,
   describeFeedGap,
+  groupTelemetryEvents,
   type TelemetryEvent,
+  type TelemetryGrouping,
 } from "../lib/guard/telemetry.ts";
 import { useGuard, useGuardEvents } from "./GuardProvider.tsx";
 import { TelemetryAlerts } from "./TelemetryAlerts.tsx";
@@ -265,16 +267,13 @@ export function TelemetryFeed() {
     [events, selectedGuards],
   );
   // The three controls, the bookmark view and the exports all act on the same
-  // projection, so a CSV/NDJSON download is provably the filtered view on screen —
-  // one row in, one line out, never a hidden superset. The guard chip feeds that
-  // same projection, so an export is the filtered multi-guard view and nothing
-  // more. A bookmark narrows it the same way, and the export preview above the
-  // table counts exactly what it left out.
+  // projection, so a CSV/NDJSON download is provably the filtered view on screen.
   const byFilter = filterGuardEvents(guardVisible, filter);
   const rows = bookmarkedOnly
     ? byFilter.filter((event) => eventMarks.markFor(event)?.bookmarked === true)
     : byFilter;
   const filterActive = isFilterActive(filter) || selectedGuards.size > 0 || bookmarkedOnly;
+  const [grouping, setGrouping] = useState<TelemetryGrouping>("none");
 
   /*
     Two counts, because they answer different questions and conflating them is how
@@ -318,6 +317,12 @@ export function TelemetryFeed() {
         : instances.map((instance) => ({ guard: instance.guard, label: instance.label })),
     [feed.guards, instances],
   );
+
+  // Not a `useMemo`, for the same reason as `scope`: `rows` is rebuilt on every
+  // render, so a memo would recompute anyway while claiming a stability it does
+  // not have — the compiler's `preserve-manual-memoization` rule flags exactly
+  // that mismatch.
+  const groups = groupTelemetryEvents(rows, grouping, chipSources);
 
   /**
    * Download the structured audit log: a header line naming the guard, network
@@ -590,6 +595,34 @@ export function TelemetryFeed() {
           }
           style={{ maxWidth: 240 }}
         />
+        <label
+          className="tiny muted"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+        >
+          Group by
+          <select
+            aria-label="Group events"
+            value={grouping}
+            onChange={(event) => {
+              const next = event.target.value as TelemetryGrouping;
+              setGrouping(next);
+              if (next !== "none") {
+                const nextGroups = groupTelemetryEvents(rows, next, chipSources);
+                announce(
+                  `Grouped into ${nextGroups.length} groups across ${rows.length} events`,
+                  "polite",
+                );
+              } else {
+                announce("Grouping removed, showing chronological stream", "polite");
+              }
+            }}
+          >
+            <option value="none">No grouping (chronological)</option>
+            <option value="kind">Event type</option>
+            <option value="guard">Guard</option>
+            <option value="verdict">Decision / Verdict</option>
+          </select>
+        </label>
         <button
           className="secondary"
           onClick={() => downloadExport("csv")}
@@ -920,17 +953,46 @@ export function TelemetryFeed() {
         <div className="scrolly table-stack">
           <table className={`events stack ${densityState === "compact" ? "compact" : ""}`}>
             {feedHead}
-            <tbody>
-              {rows.map((event) => (
-                <TelemetryRow
-                  key={event.id}
-                  event={event}
-                  guardLabel={attributionLabel(event.contractId, chipSources)}
-                  mark={eventMarks.markFor(event)}
-                  onMark={applyMark}
-                />
-              ))}
-            </tbody>
+            {grouping === "none" ? (
+              <tbody>
+                {rows.map((event) => (
+                  <TelemetryRow
+                    key={event.id}
+                    event={event}
+                    guardLabel={attributionLabel(event.contractId, chipSources)}
+                    mark={eventMarks.markFor(event)}
+                    onMark={applyMark}
+                  />
+                ))}
+              </tbody>
+            ) : (
+              groups.map((group) => (
+                <tbody key={group.id} data-group={group.id}>
+                  <tr
+                    className="group-header"
+                    style={{ background: "var(--surface-sunken, rgba(255,255,255,0.04))" }}
+                  >
+                    <td colSpan={6} style={{ fontWeight: 600, padding: "8px 12px" }}>
+                      <span className="row" style={{ alignItems: "center", gap: 8 }}>
+                        <span>{group.label}</span>
+                        <span className="pill tiny muted">
+                          {group.count} event{group.count === 1 ? "" : "s"}
+                        </span>
+                      </span>
+                    </td>
+                  </tr>
+                  {group.events.map((event) => (
+                    <TelemetryRow
+                      key={event.id}
+                      event={event}
+                      guardLabel={attributionLabel(event.contractId, chipSources)}
+                      mark={eventMarks.markFor(event)}
+                      onMark={applyMark}
+                    />
+                  ))}
+                </tbody>
+              ))
+            )}
           </table>
         </div>
       )}
