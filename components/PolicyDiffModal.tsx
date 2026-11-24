@@ -1,6 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import type { PolicyDiff, DiffEntry } from "../lib/guard/policyDiff.ts";
+import { useGuard } from "./GuardProvider.tsx";
+import { short } from "./bits.tsx";
 
 /**
  * Each status three ways: a glyph, a word, and the class the stylesheet paints.
@@ -58,13 +61,31 @@ function renderValue(value: unknown): string {
  */
 export function PolicyDiffModal({
   diff,
+  expectedAccount,
+  currentAccount,
   onConfirm,
   onCancel,
 }: {
   diff: PolicyDiff;
+  expectedAccount?: string | undefined;
+  currentAccount?: string | undefined;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  let liveAddress: string | undefined = currentAccount;
+  try {
+    const guardContext = useGuard();
+    liveAddress = currentAccount ?? guardContext.wallet?.address;
+  } catch {
+    // Rendered outside GuardProvider (e.g. isolated test)
+  }
+
+  // Capture the account the dialog was opened for, once, so a wallet switch
+  // while it is open is reported instead of silently retargeting the change.
+  const [initialAccount] = useState<string | undefined>(() => expectedAccount ?? liveAddress);
+  const targetAccount = expectedAccount ?? initialAccount;
+  const accountChanged = Boolean(targetAccount && liveAddress && targetAccount !== liveAddress);
+
   const changes = diff.entries.filter((entry) => entry.status !== "unchanged");
 
   return (
@@ -81,6 +102,28 @@ export function PolicyDiffModal({
           Review what will change before the wallet is prompted to sign. Signing installs the new
           policy and resets the rolling window.
         </p>
+
+        {accountChanged && (
+          <div
+            className="notice warn"
+            role="alert"
+            data-testid="confirmation-account-changed"
+            style={{ margin: "10px 0" }}
+          >
+            <strong>Active account changed during review</strong>
+            <p className="tiny" style={{ margin: "4px 0" }}>
+              The connected account changed from{" "}
+              <span className="mono">{short(targetAccount!, 8, 6)}</span> to{" "}
+              <span className="mono">{short(liveAddress!, 8, 6)}</span> while this confirmation was
+              open. This policy change was prepared and simulated for the previous account.
+            </p>
+            <p className="tiny muted" style={{ margin: "4px 0" }}>
+              <strong>Recovery:</strong> Cancel this confirmation to re-run policy review with the
+              active account, or switch your wallet back to{" "}
+              <span className="mono">{short(targetAccount!, 8, 6)}</span>.
+            </p>
+          </div>
+        )}
 
         {diff.warnings.length > 0 && (
           <div className="notice diff-warnings" role="alert">
@@ -134,7 +177,15 @@ export function PolicyDiffModal({
         )}
 
         <div className="row" style={{ marginTop: 14 }}>
-          <button onClick={onConfirm}>Confirm and sign</button>
+          <button
+            disabled={changes.length === 0 || accountChanged}
+            onClick={() => {
+              if (accountChanged) return;
+              onConfirm();
+            }}
+          >
+            Confirm and sign
+          </button>
           <button className="secondary" onClick={onCancel}>
             Cancel
           </button>
