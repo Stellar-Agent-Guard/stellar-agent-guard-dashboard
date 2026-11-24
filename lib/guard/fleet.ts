@@ -49,7 +49,9 @@ export function loadFleetTags(
     const result: Record<string, string[]> = {};
     for (const [addr, tags] of Object.entries(netTags as Record<string, unknown>)) {
       if (Array.isArray(tags)) {
-        result[addr] = tags.filter((t): t is string => typeof t === "string" && t.trim().length > 0);
+        result[addr] = tags.filter(
+          (t): t is string => typeof t === "string" && t.trim().length > 0,
+        );
       }
     }
     return result;

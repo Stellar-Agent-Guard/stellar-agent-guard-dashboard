@@ -58,7 +58,11 @@ describe("Alert Operator Acknowledgement State", () => {
     acknowledgeAlert(key1, { reason: "blocked", guard: "CGUARD_VAULT" }, fakeStorage);
 
     assert.equal(isAlertAcknowledged(key1, fakeStorage), true);
-    assert.equal(isAlertAcknowledged(key2, fakeStorage), false, "Peer alert remains unacknowledged");
+    assert.equal(
+      isAlertAcknowledged(key2, fakeStorage),
+      false,
+      "Peer alert remains unacknowledged",
+    );
 
     const acks = loadAcknowledgedAlerts(fakeStorage);
     const item1 = acks.get(key1);
@@ -76,7 +80,11 @@ describe("Alert Operator Acknowledgement State", () => {
     acknowledgeAlert(key, { reason: "blocked" }, fakeStorage);
 
     assert.equal(sampleEvent1.kind, beforeKind, "Underlying event kind must remain untouched");
-    assert.equal(sampleEvent1.decision?.result, beforeDecision, "Underlying event decision must remain untouched");
+    assert.equal(
+      sampleEvent1.decision?.result,
+      beforeDecision,
+      "Underlying event decision must remain untouched",
+    );
   });
 
   test("unacknowledgeAlert removes acknowledgement", () => {

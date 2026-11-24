@@ -64,7 +64,10 @@ describe("Telemetry Visual Grouping", () => {
     assert.equal(groups.length, 1);
     assert.equal(groups[0]!.id, "all");
     assert.equal(groups[0]!.count, 5);
-    assert.deepEqual(groups[0]!.events.map((e) => e.id), ["ev-1", "ev-2", "ev-3", "ev-4", "ev-5"]);
+    assert.deepEqual(
+      groups[0]!.events.map((e) => e.id),
+      ["ev-1", "ev-2", "ev-3", "ev-4", "ev-5"],
+    );
   });
 
   test("grouping=kind groups by event kind without dropping events", () => {
@@ -75,7 +78,10 @@ describe("Telemetry Visual Grouping", () => {
     assert.ok(authGroup);
     assert.equal(authGroup.label, "Authorization decisions");
     assert.equal(authGroup.count, 3);
-    assert.deepEqual(authGroup.events.map((e) => e.id), ["ev-1", "ev-2", "ev-5"]);
+    assert.deepEqual(
+      authGroup.events.map((e) => e.id),
+      ["ev-1", "ev-2", "ev-5"],
+    );
 
     const hbGroup = groups.find((g) => g.id === "heartbeat")!;
     assert.ok(hbGroup);

@@ -105,7 +105,10 @@ describe("Fleet partial chain failure resilience", () => {
       }
       return {
         guard: address,
-        status: { ok: true, value: { admin_frozen: false, heartbeat_expired: false, last_heartbeat: 0n, now: 0n } },
+        status: {
+          ok: true,
+          value: { admin_frozen: false, heartbeat_expired: false, last_heartbeat: 0n, now: 0n },
+        },
         policy: { ok: false },
         window: { ok: false },
       } as any;
@@ -125,8 +128,14 @@ describe("Fleet partial chain failure resilience", () => {
     assert.deepEqual(tagsHealthy, ["staging"]);
 
     // Verify display names were not wiped or altered
-    assert.equal(getPreferredDisplayName(NETWORK.name, addressFailing, "fallback", fakeStorage), "Core Vault Guard");
-    assert.equal(getPreferredDisplayName(NETWORK.name, addressHealthy, "fallback", fakeStorage), "Staging Bot");
+    assert.equal(
+      getPreferredDisplayName(NETWORK.name, addressFailing, "fallback", fakeStorage),
+      "Core Vault Guard",
+    );
+    assert.equal(
+      getPreferredDisplayName(NETWORK.name, addressHealthy, "fallback", fakeStorage),
+      "Staging Bot",
+    );
   });
 
   test("retrying a failed row re-executes cleanly without corrupting other rows", async () => {
@@ -142,7 +151,10 @@ describe("Fleet partial chain failure resilience", () => {
       }
       return {
         guard: address,
-        status: { ok: true, value: { admin_frozen: false, heartbeat_expired: false, last_heartbeat: 0n, now: 0n } },
+        status: {
+          ok: true,
+          value: { admin_frozen: false, heartbeat_expired: false, last_heartbeat: 0n, now: 0n },
+        },
         policy: { ok: false },
         window: { ok: false },
       } as any;
@@ -179,6 +191,9 @@ describe("Fleet partial chain failure resilience", () => {
 
     // Metadata is preserved across network views
     assert.deepEqual(getGuardTags("testnet", validGuard1, fakeStorage), ["critical", "ops"]);
-    assert.equal(getPreferredDisplayName("testnet", validGuard1, "fallback", fakeStorage), "Primary Sentinel");
+    assert.equal(
+      getPreferredDisplayName("testnet", validGuard1, "fallback", fakeStorage),
+      "Primary Sentinel",
+    );
   });
 });

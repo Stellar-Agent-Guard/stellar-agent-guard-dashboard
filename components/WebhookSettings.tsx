@@ -90,7 +90,9 @@ export function WebhookSettingsModal({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [ping, setPing] = useState<DispatchResult | null>(null);
-  const [deliveries, setDeliveries] = useState<DeliveryRecord[]>(() => deliveryTracker.getRecords());
+  const [deliveries, setDeliveries] = useState<DeliveryRecord[]>(() =>
+    deliveryTracker.getRecords(),
+  );
   const dialogRef = useRef<HTMLDivElement>(null);
 
   const networkName = NETWORK.name;
@@ -431,7 +433,12 @@ export function WebhookSettingsModal({ onClose }: { onClose: () => void }) {
           ) : (
             <div
               className="scrolly"
-              style={{ maxHeight: 150, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 4 }}
+              style={{
+                maxHeight: 150,
+                overflowY: "auto",
+                border: "1px solid var(--border)",
+                borderRadius: 4,
+              }}
             >
               <table className="tiny stack" style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>

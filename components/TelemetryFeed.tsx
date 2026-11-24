@@ -331,10 +331,11 @@ export function TelemetryFeed() {
     [feed.guards, instances],
   );
 
-  const groups = useMemo(
-    () => groupTelemetryEvents(rows, grouping, chipSources),
-    [rows, grouping, chipSources],
-  );
+  // Not a `useMemo`, for the same reason as `scope`: `rows` is rebuilt on every
+  // render, so a memo would recompute anyway while claiming a stability it does
+  // not have — the compiler's `preserve-manual-memoization` rule flags exactly
+  // that mismatch.
+  const groups = groupTelemetryEvents(rows, grouping, chipSources);
 
   /**
    * Download the structured audit log: a header line naming the guard, network
