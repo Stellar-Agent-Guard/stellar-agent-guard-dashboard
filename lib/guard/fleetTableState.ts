@@ -28,7 +28,13 @@ import {
   type SortDirection,
   type SortKey,
 } from "./fleet.ts";
+import { FLEET_VIEW_STORAGE_KEY } from "./presentationStorageKeys.ts";
 import type { StorageLike } from "./instance.ts";
+
+// Defined beside the other presentation keys so `lib/guard/storage.ts` can list
+// it without importing this module — which would close an import cycle. Re-exported
+// as part of this module's surface, since this is the code the key belongs to.
+export { FLEET_VIEW_STORAGE_KEY };
 
 export type FleetTableState =
   { kind: "loading" } | { kind: "registry-empty" } | { kind: "filter-empty" } | { kind: "rows" };
@@ -76,9 +82,6 @@ export function fleetEmptyCopy(state: FleetTableState): { title: string; hint: s
 // countdown) is ever written here, and the registry key is never touched: the
 // next poll decides what each row is, and a remembered "Frozen" filter simply
 // selects whichever rows read as frozen *now*.
-
-/** Storage key for the remembered view. Versioned so a shape change cannot be misread. */
-export const FLEET_VIEW_STORAGE_KEY = "stellar-agent-guard-dashboard.fleet-view.v1";
 
 /** Cap on remembered search text, so a pasted blob cannot bloat storage. */
 export const FLEET_SEARCH_MAX_LENGTH = 200;
