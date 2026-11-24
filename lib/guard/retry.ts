@@ -127,8 +127,10 @@ export function isWalletCancellation(error: unknown): boolean {
   // boundary sees it, so a decline it has already classified stays a decline.
   if (name === "WalletCancellationError") return true;
   // The bare Freighter adapter reports the decline inside a generic `WalletError`,
-  // so its text is the only thing that says which it was.
-  if (name !== "WalletError") return false;
+  // and some adapters drop the class altogether, so the operator's own wording is
+  // the only thing left that says which it was. Only that wording counts: an error
+  // that never names the operator ("the network rejected the transaction") stays
+  // unclassified, and a provider's own refusal stays a refusal.
   return WALLET_DECLINE.test(messageOf(error));
 }
 
