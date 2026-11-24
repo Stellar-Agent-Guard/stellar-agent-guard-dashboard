@@ -26,7 +26,7 @@ export function Tabs() {
     { href: "/configure", label: "Configure" },
   ];
   return (
-    <nav className="tabs">
+    <nav className="tabs" aria-label="Primary">
       {tabs.map((tab) => (
         <Link
           key={tab.href}

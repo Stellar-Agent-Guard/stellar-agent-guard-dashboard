@@ -26,6 +26,26 @@ string is parsed per render, and every tier is stated in words as well as in col
 There is **no sound**. An operator console runs unattended and muted, and a noise that can
 only be silenced in the tab that made it is not an alert.
 
+## Row action menu
+
+Every row ends in an **Actions** button, named for its row (for example "Actions for
+Authorization decision, blocked, ledger 100"). It is a menu button: Enter, Space or
+ArrowDown opens it (ArrowUp opens on the last item), ArrowUp/ArrowDown/Home/End move
+between items, Escape closes it and returns focus to the button, and Tab closes it and
+carries on to the next control, so the feed is never a keyboard trap. Items: **Copy
+contract address**, **Copy transaction hash** (only when the row has one; a diagnostic row
+was never broadcast) and **Show/Hide details**. A failed copy, for example in an insecure
+context, is reported in a visible status line and announced, never swallowed.
+
+## Date-range picker
+
+The preset group is a radio group with one tab stop; arrow keys move the selection.
+Choosing a preset applies it and announces it. **Custom Range** opens two date-time inputs
+whose `max` is the current time, so future dates are disabled, and a hint tied to both
+inputs says so. An invalid range (missing, inverted or in the future) is announced, linked
+to the inputs with `aria-describedby`, and focus moves to the first input. Applying a valid
+range announces it and keeps focus on **Apply range**. Escape closes the custom panel, goes
+back to the previous preset and returns focus to the **Custom Range** radio.
 ## Pausing and resuming
 
 `Pause stream` freezes the table; it does not freeze the feed.
