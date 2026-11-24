@@ -533,13 +533,18 @@ export function PolicyForm() {
       if (!validation.ok) return;
       const installed =
         snapshot?.policy.ok && snapshot.policy.value !== null ? snapshot.policy.value : null;
-      // The approval carries the draft it was shown for and the guard it is for.
-      setPendingApproval(
-        bindToScope(activeScope, {
-          draft: effective,
-          diff: computePolicyDiff(installed, validation.config),
-        }),
-      );
+      // Only a semantic increase in authority needs the extra review checkpoint.
+      // Routine edits still pass through runInstall, which performs final validation,
+      // enforced simulation, wallet signing, and the authoritative post-write read.
+      const approved = bindToScope(activeScope, {
+        draft: effective,
+        diff: computePolicyDiff(installed, validation.config),
+      });
+      if (approved.value.diff?.highImpact) {
+        setPendingApproval(approved);
+        return;
+      }
+      await runInstall(false, approved);
       return;
     }
     await runInstall(true, bindToScope(activeScope, { draft: effective, diff: null }));
