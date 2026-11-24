@@ -126,6 +126,38 @@ The rolling window is read straight from the ledger because no read function exp
 account's internal spend accounting, and it is the only way to see how much of the rolling cap is
 currently consumed.
 
+### Where the console says when it last read
+
+Because every one of those values is polled, "what is on screen" is only answerable per panel, and an
+operator who has to open a panel to learn that its poll died has already read the stale number. The
+header therefore carries one row per polling panel — _On-chain state_, _Telemetry_, _Fleet Overview_ —
+naming its cadence, when it last landed, and its liveness phase (`lib/guard/refreshStatus.ts`, rendered
+by `components/HeaderRefreshStatus.tsx`).
+
+Four rules keep that strip honest, and they are the reason it exists as its own module:
+
+- **Polling is not activity.** The strip borrows its phase from `pollHealth()` (§7), the same evaluator
+  the feed header uses, so the two surfaces cannot disagree about whether a poller is alive. A round
+  that returned nothing is _healthy_; a poller that stopped is _stopped_, however new its last stamp;
+  and a display the operator froze is reported as _polling_ **and** _display paused_, never as one
+  instead of the other.
+- **It reads nothing.** Panels push the liveness they already computed for themselves; the strip only
+  renders what was pushed, and a panel that unmounts retires its line. A strip that ran its own probe
+  would be a second, differently-timed opinion about data the panel is showing.
+- **A fixture is not a chain read.** In demo mode (`?demo=true`) the provider's timers drive synthetic
+  data, so both of its sources are withheld rather than published, and the strip says nothing about
+  data the chain never sent.
+- **Its line is taken before it is filled.** A row can only exist once a panel has mounted and
+  published, which is after the served HTML has already painted the page under the header. So the
+  strip reserves one line in that markup and never more: rows go into the space the header already
+  gave up, the header is the same height before a poll as after one, and a screen with more panels
+  than width scrolls the strip sideways instead of pushing the console down.
+
+Each row links to the panel's own diagnostics through the `?tab=` deep link the console already
+answers with, which both scrolls the panel into view and moves focus to its heading. The strip is
+deliberately not an ARIA live region: it moves on a five-second clock, and announcing that on every
+tick would talk over the operator rather than inform them.
+
 ---
 
 ## 5. Write path
@@ -178,6 +210,39 @@ Details that are load-bearing rather than incidental:
 `heartbeat` being unavailable here is not an omission to fix: the admin key deliberately has no
 fund-moving or liveness-forging power. The admin can replace the key the account authenticates
 (`rotate_agent_key`) but can never authenticate as the agent.
+
+### The incident action list on the overview
+
+The table above is what the console is able to do. An operator mid-incident needs the narrower answer:
+what is worth doing to _this_ account, in the state the chain reports right now. That is the incident
+panel's only job (`lib/guard/incidentActions.ts`, rendered by `components/IncidentPanel.tsx`), and it is
+built on three rules.
+
+- **Every action is spoken about.** The panel returns a partition, not a shortlist: freeze, unfreeze and
+  revoke each appear either as an offer or as a refusal carrying its reason. "Not needed", "not
+  performed from this console" and "could not be worked out" are three different sentences, and an
+  omitted row cannot tell them apart. `ACTIONS_HELD_ELSEWHERE` therefore names policy installation, key
+  rotation and the heartbeat with the screen that owns each — or, for the heartbeat, with the fact that
+  no screen owns it.
+- **An offer is a hand-off, never a write.** Each row moves focus to the control that already performs
+  the action and prints the confirmation _that control_ requires. The panel opens no second dialog, and
+  it focuses rather than clicks, so the operator still starts the write themselves. Two confirmations
+  that disagree about what they cover is worse than one, which is also why the copy states plainly that
+  only `freeze` has a dialog — `unfreeze` and `revoke_policy` submit on the click, and the wallet prompt
+  is the confirmation.
+- **The live read gates every write, including freeze.** A failed status read is passed in as the same
+  sentence the Emergency panel's disabled button already carries (§4, issue #348), so this panel cannot
+  offer what that one has inert. The asymmetry that invites — freeze is the safe action, so surely it
+  survives an unknown state — is deliberately not taken. The single unbacked window is before the first
+  read has landed at all, which is how Emergency already behaves; the row is labelled as not
+  chain-derived instead of being withheld or presented as a recommendation.
+
+The panel's third block, **Verify on chain**, is one `status()` re-read the operator starts. It never
+runs on a timer, because a re-read taken while a write is still in flight agrees with the _old_ state and
+an automatic agreement reads as a confirmation. A flag counts as changed only when both reads answered
+it — the same discipline as the transition log (§8) — so a read that started or stopped answering is
+reported as _partly unread_, never as a change. _No change_ is styled as a fact rather than as success:
+the panel does not know which write the operator performed, and agreement equally means it did not land.
 
 ---
 

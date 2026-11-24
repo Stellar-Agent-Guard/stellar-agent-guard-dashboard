@@ -28,7 +28,7 @@ import { loadScopedValue, saveScopedValue } from "../lib/guard/guardScoped.ts";
 import { useAnnounce } from "../lib/guard/useAnnounce.ts";
 import { eventsToCsv, eventsToJson, exportFilename } from "../lib/guard/eventExport.ts";
 import { buildExportScope, describeExportScope } from "../lib/guard/exportScope.ts";
-import type { PollPhase } from "../lib/guard/feedHealth.ts";
+import { POLL_PHASE_WORDS, type PollPhase } from "../lib/guard/feedHealth.ts";
 import {
   markNotStored,
   markRejected,
@@ -71,19 +71,6 @@ import {
 
 /** The scoped-state base under which each guard's feed filter is remembered. */
 const SCOPED_FILTER_BASE = "feedFilter";
-
-/**
- * The header pill wording for each poll phase (#311). Short, and never the same
- * word twice: "polling" covered both a live feed and a stuck one before, which is
- * the conflation this issue is about.
- */
-const HEALTH_LABELS: Record<PollPhase, string> = {
-  off: "stopped",
-  pending: "connecting",
-  healthy: "polling",
-  failing: "poll failing",
-  overdue: "no response",
-};
 
 /** Human names for the topic filter's options, keyed by the topic symbol. */
 const TOPIC_LABELS: Record<string, string> = {
@@ -447,7 +434,9 @@ export function TelemetryFeed() {
         <h2 style={{ margin: 0 }}>Telemetry</h2>
         <div className="row">
           {feed.watching && (
-            <span className={`pill ${feed.health.tone}`}>{HEALTH_LABELS[feed.health.phase]}</span>
+            <span className={`pill ${feed.health.tone}`}>
+              {POLL_PHASE_WORDS[feed.health.phase]}
+            </span>
           )}
           {stream.paused && <span className="pill warn">paused</span>}
           {/* Counted from the buffer, not from the rows on screen: a paused,
@@ -783,7 +772,7 @@ export function TelemetryFeed() {
         feed whose every poll since the first had failed.
       */}
       <p className="tiny muted" style={{ marginTop: 4 }} aria-label="Telemetry poll health">
-        <span className={`pill ${feed.health.tone}`}>{HEALTH_LABELS[feed.health.phase]}</span>{" "}
+        <span className={`pill ${feed.health.tone}`}>{POLL_PHASE_WORDS[feed.health.phase]}</span>{" "}
         {feed.health.text}
         {feed.lastPolledAt && feed.lastPolledAt !== feed.health.lastSuccessAt && (
           <>
