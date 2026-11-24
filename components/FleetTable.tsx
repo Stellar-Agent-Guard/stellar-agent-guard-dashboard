@@ -253,10 +253,7 @@ export function FleetTable() {
       </div>
 
       {/* Read-only fleet risk summary card (issue #475) */}
-      <FleetRiskSummaryCard
-        rows={rows}
-        onSelectGuard={(addr) => router.push(`/?guard=${addr}`)}
-      />
+      <FleetRiskSummaryCard rows={rows} onSelectGuard={(addr) => router.push(`/?guard=${addr}`)} />
 
       <div className="split" style={{ marginTop: 12 }}>
         <label className="field" style={{ marginBottom: 0, flex: 2 }}>
@@ -549,7 +546,11 @@ export function FleetTable() {
                     {row.network}
                   </td>
                   <td data-label="Status">{renderStatus(row.derivedStatus)}</td>
-                  <td className="tiny" data-label="Policy Age" data-testid={`policy-age-${row.contact.address}`}>
+                  <td
+                    className="tiny"
+                    data-label="Policy Age"
+                    data-testid={`policy-age-${row.contact.address}`}
+                  >
                     {row.policyAge?.display ?? "unavailable"}
                   </td>
                   <td data-label="Tags">
@@ -764,12 +765,20 @@ export function FleetRiskSummaryCard({
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <strong>Live Fleet Risk Summary (Read-Only)</strong>
         <span className="tiny muted">
-          Aggregated from {summary.successfulReads} successful read{summary.successfulReads !== 1 ? "s" : ""}
+          Aggregated from {summary.successfulReads} successful read
+          {summary.successfulReads !== 1 ? "s" : ""}
         </span>
       </div>
 
-      <div className="row" style={{ gap: 12, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
-        <div data-testid="risk-card-frozen" className="row" style={{ gap: 6, alignItems: "center" }}>
+      <div
+        className="row"
+        style={{ gap: 12, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}
+      >
+        <div
+          data-testid="risk-card-frozen"
+          className="row"
+          style={{ gap: 6, alignItems: "center" }}
+        >
           <span className="pill danger tiny">{summary.frozen.length} Frozen</span>
           {summary.frozen.map((item) => (
             <button
@@ -785,7 +794,11 @@ export function FleetRiskSummaryCard({
           ))}
         </div>
 
-        <div data-testid="risk-card-expired" className="row" style={{ gap: 6, alignItems: "center" }}>
+        <div
+          data-testid="risk-card-expired"
+          className="row"
+          style={{ gap: 6, alignItems: "center" }}
+        >
           <span className="pill warn tiny">{summary.expiredDms.length} DMS Expired</span>
           {summary.expiredDms.map((item) => (
             <button
@@ -801,7 +814,11 @@ export function FleetRiskSummaryCard({
           ))}
         </div>
 
-        <div data-testid="risk-card-missing-policy" className="row" style={{ gap: 6, alignItems: "center" }}>
+        <div
+          data-testid="risk-card-missing-policy"
+          className="row"
+          style={{ gap: 6, alignItems: "center" }}
+        >
           <span className="pill warn tiny">{summary.missingPolicy.length} Missing Policy</span>
           {summary.missingPolicy.map((item) => (
             <button
@@ -817,7 +834,11 @@ export function FleetRiskSummaryCard({
           ))}
         </div>
 
-        <div data-testid="risk-card-healthy" className="row" style={{ gap: 6, alignItems: "center" }}>
+        <div
+          data-testid="risk-card-healthy"
+          className="row"
+          style={{ gap: 6, alignItems: "center" }}
+        >
           <span className="pill ok tiny">{summary.activeHealthy.length} Healthy</span>
         </div>
       </div>

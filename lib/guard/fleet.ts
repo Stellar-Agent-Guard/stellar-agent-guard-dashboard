@@ -95,7 +95,9 @@ export function loadFleetTags(
     const result: Record<string, string[]> = {};
     for (const [addr, tags] of Object.entries(netTags as Record<string, unknown>)) {
       if (Array.isArray(tags)) {
-        result[addr] = tags.filter((t): t is string => typeof t === "string" && t.trim().length > 0);
+        result[addr] = tags.filter(
+          (t): t is string => typeof t === "string" && t.trim().length > 0,
+        );
       }
     }
     return result;
@@ -170,10 +172,7 @@ export function removeGuardTag(
   return updated;
 }
 
-export function getAllFleetTags(
-  network: string,
-  storage?: StorageLike | null,
-): string[] {
+export function getAllFleetTags(network: string, storage?: StorageLike | null): string[] {
   const map = loadFleetTags(network, storage);
   const tagSet = new Set<string>();
   for (const tags of Object.values(map)) {
@@ -283,7 +282,8 @@ export function computeFleetRiskSummary(rows: FleetRow[]): FleetRiskSummary {
   const expiredDms: FleetRiskItem[] = [];
   const missingPolicy: FleetRiskItem[] = [];
   const activeHealthy: FleetRiskItem[] = [];
-  const failedOrExcluded: Array<{ address: string; label: string; error?: string | undefined }> = [];
+  const failedOrExcluded: Array<{ address: string; label: string; error?: string | undefined }> =
+    [];
 
   for (const row of rows) {
     if (!row.snapshot || !row.snapshot.status || !row.snapshot.status.ok) {
@@ -434,7 +434,14 @@ export type SortKey = "label" | "address" | "status" | "spend" | "expiration" | 
 export type SortDirection = "asc" | "desc";
 
 /** Every sort key, in the order the table's sort control lists them. */
-export const SORT_KEYS: readonly SortKey[] = ["label", "address", "status", "spend", "expiration", "age"];
+export const SORT_KEYS: readonly SortKey[] = [
+  "label",
+  "address",
+  "status",
+  "spend",
+  "expiration",
+  "age",
+];
 
 /**
  * The direction a key sorts in before the operator flips it: spend is
@@ -513,8 +520,10 @@ export function sortFleet(
         if (aMissing && bMissing) return a.index - b.index;
       }
       if (sortKey === "age") {
-        const aMissing = a.row.policyAge?.ageSecs === null || a.row.policyAge?.ageSecs === undefined;
-        const bMissing = b.row.policyAge?.ageSecs === null || b.row.policyAge?.ageSecs === undefined;
+        const aMissing =
+          a.row.policyAge?.ageSecs === null || a.row.policyAge?.ageSecs === undefined;
+        const bMissing =
+          b.row.policyAge?.ageSecs === null || b.row.policyAge?.ageSecs === undefined;
         if (aMissing !== bMissing) return aMissing ? 1 : -1;
         if (aMissing && bMissing) return a.index - b.index;
       }
