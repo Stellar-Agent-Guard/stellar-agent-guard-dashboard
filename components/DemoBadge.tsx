@@ -46,9 +46,7 @@ export function DemoBadge() {
       }}
     >
       <span className="pill info tiny">LIVE CHAIN</span>
-      <span className="tiny muted">
-        {NETWORK.name} — Authoritative on-chain reads
-      </span>
+      <span className="tiny muted">{NETWORK.name} — Authoritative on-chain reads</span>
     </div>
   );
 }

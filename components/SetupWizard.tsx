@@ -277,15 +277,17 @@ export function SetupWizard() {
           }}
         >
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-            <span className="pill warn" style={{ fontSize: "11px" }}>GUIDED REHEARSAL (DEMO)</span>
+            <span className="pill warn" style={{ fontSize: "11px" }}>
+              GUIDED REHEARSAL (DEMO)
+            </span>
             <span className="tiny muted">All write operations disabled</span>
           </div>
           <h3 style={{ margin: "8px 0 4px", fontSize: "15px" }}>
             Safe Rehearsal with Demo Fixtures
           </h3>
           <p className="tiny muted" style={{ margin: "0 0 12px", lineHeight: 1.4 }}>
-            Rehearse policy checks, verify default-deny rules, and review emergency procedures without
-            connecting a wallet, sending RPC writes, or modifying live state.
+            Rehearse policy checks, verify default-deny rules, and review emergency procedures
+            without connecting a wallet, sending RPC writes, or modifying live state.
           </p>
 
           <div className="row" style={{ gap: "6px", marginBottom: "12px" }}>
@@ -330,8 +332,8 @@ export function SetupWizard() {
               <div>
                 <strong>Rehearsal Step 1: Policy Allowlist Review</strong>
                 <p className="tiny muted" style={{ margin: "4px 0 8px" }}>
-                  Inspect how spending limits are enforced. The demo fixture configures a 500 XLM per-tx cap,
-                  a 2,000 XLM rolling window cap, and explicit allowlists.
+                  Inspect how spending limits are enforced. The demo fixture configures a 500 XLM
+                  per-tx cap, a 2,000 XLM rolling window cap, and explicit allowlists.
                 </p>
                 <button
                   type="button"
@@ -351,8 +353,9 @@ export function SetupWizard() {
               <div>
                 <strong>Rehearsal Step 2: Emergency Response Rehearsal</strong>
                 <p className="tiny muted" style={{ margin: "4px 0 8px" }}>
-                  Admin Freeze and Dead Man&apos;s Switch (DMS) grace period (3,600s) can pause execution instantly.
-                  Test emergency operator workflows without risking real accounts.
+                  Admin Freeze and Dead Man&apos;s Switch (DMS) grace period (3,600s) can pause
+                  execution instantly. Test emergency operator workflows without risking real
+                  accounts.
                 </p>
                 <button
                   type="button"
@@ -372,8 +375,9 @@ export function SetupWizard() {
               <div>
                 <strong>Rehearsal Step 3: Verification Re-read</strong>
                 <p className="tiny muted" style={{ margin: "4px 0 8px" }}>
-                  Authoritative confirmation requires explicit re-reading of contract state from the chain.
-                  Setup never marks verification complete through local optimistic assumptions.
+                  Authoritative confirmation requires explicit re-reading of contract state from the
+                  chain. Setup never marks verification complete through local optimistic
+                  assumptions.
                 </p>
                 <button
                   type="button"
@@ -406,9 +410,13 @@ export function SetupWizard() {
         }}
       >
         <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-          <span className="pill info" style={{ fontSize: "11px" }}>Recommended Next Action</span>
+          <span className="pill info" style={{ fontSize: "11px" }}>
+            Recommended Next Action
+          </span>
           {nextAction.isReadOnly && (
-            <span className="pill muted tiny" style={{ fontSize: "10px" }}>Read-Only Operation</span>
+            <span className="pill muted tiny" style={{ fontSize: "10px" }}>
+              Read-Only Operation
+            </span>
           )}
         </div>
         <h3 style={{ margin: "6px 0 4px", fontSize: "15px" }}>{nextAction.title}</h3>

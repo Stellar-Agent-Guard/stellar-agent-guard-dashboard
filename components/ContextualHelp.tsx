@@ -64,7 +64,10 @@ export function ContextualHelp() {
         aria-label="Open contextual help and terminology guide"
         title="Screen help and safety glossary"
       >
-        <span aria-hidden="true" style={{ fontWeight: "bold" }}>?</span> Help
+        <span aria-hidden="true" style={{ fontWeight: "bold" }}>
+          ?
+        </span>{" "}
+        Help
       </button>
 
       {isOpen && (
@@ -86,9 +89,14 @@ export function ContextualHelp() {
             onClick={(e) => e.stopPropagation()}
             style={{ maxWidth: "680px", maxHeight: "85vh", overflowY: "auto" }}
           >
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div
+              className="row"
+              style={{ justifyContent: "space-between", alignItems: "flex-start" }}
+            >
               <div>
-                <span className="pill info" style={{ marginBottom: 4 }}>Contextual Help</span>
+                <span className="pill info" style={{ marginBottom: 4 }}>
+                  Contextual Help
+                </span>
                 <h2 id="contextual-help-title" style={{ margin: "4px 0" }}>
                   {currentScreen.title}
                 </h2>
@@ -150,7 +158,10 @@ export function ContextualHelp() {
             </div>
 
             <div className="section" style={{ marginTop: 20 }}>
-              <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+              <div
+                className="row"
+                style={{ justifyContent: "space-between", alignItems: "center" }}
+              >
                 <h3 style={{ fontSize: "14px", margin: 0 }}>Grounded Terminology</h3>
                 <input
                   type="search"
@@ -180,7 +191,9 @@ export function ContextualHelp() {
                       borderRadius: 6,
                     }}
                   >
-                    <dt style={{ fontWeight: "bold", fontSize: "13px", display: "flex", gap: "8px" }}>
+                    <dt
+                      style={{ fontWeight: "bold", fontSize: "13px", display: "flex", gap: "8px" }}
+                    >
                       <span>{item.term}</span>
                       {item.contractEnforced ? (
                         <span className="pill info tiny" style={{ fontSize: "10px" }}>
@@ -192,7 +205,9 @@ export function ContextualHelp() {
                         </span>
                       )}
                     </dt>
-                    <dd style={{ margin: "4px 0 0", fontSize: "12px", color: "var(--muted, #aaa)" }}>
+                    <dd
+                      style={{ margin: "4px 0 0", fontSize: "12px", color: "var(--muted, #aaa)" }}
+                    >
                       {item.definition}
                     </dd>
                   </div>

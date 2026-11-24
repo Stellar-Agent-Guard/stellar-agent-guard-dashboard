@@ -298,7 +298,10 @@ describe("Component integration: ContextualHelp & SetupWizard", () => {
     };
 
     const mockContext = {
-      server: new Proxy({}, { get: () => () => Promise.reject(new Error("network disabled")) }) as any,
+      server: new Proxy(
+        {},
+        { get: () => () => Promise.reject(new Error("network disabled")) },
+      ) as any,
       guard: GUARD,
       setGuard: () => {},
       instances: [],
@@ -326,7 +329,9 @@ describe("Component integration: ContextualHelp & SetupWizard", () => {
     assert.dom(document.body).containsText("Recommended Next Action");
 
     // Check rehearsal toggle exists
-    const rehearsalToggle = document.querySelector('[data-testid="rehearsal-toggle-btn"]') as HTMLButtonElement;
+    const rehearsalToggle = document.querySelector(
+      '[data-testid="rehearsal-toggle-btn"]',
+    ) as HTMLButtonElement;
     assert.ok(rehearsalToggle, "Rehearsal toggle button should exist");
     assert.equal(rehearsalToggle.textContent?.includes("Rehearse Setup"), true);
 
@@ -342,7 +347,9 @@ describe("Component integration: ContextualHelp & SetupWizard", () => {
     assert.dom(document.body).containsText("Safe Rehearsal with Demo Fixtures");
 
     // Verify all write actions are disabled in rehearsal
-    const writeBtn = document.querySelector('[data-testid="rehearsal-disabled-write-btn"]') as HTMLButtonElement;
+    const writeBtn = document.querySelector(
+      '[data-testid="rehearsal-disabled-write-btn"]',
+    ) as HTMLButtonElement;
     assert.ok(writeBtn);
     assert.equal(writeBtn.disabled, true);
     assert.equal(writeBtn.getAttribute("aria-disabled"), "true");

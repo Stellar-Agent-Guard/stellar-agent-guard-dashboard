@@ -114,7 +114,8 @@ export const SCREEN_HELP_MAP: Record<string, ScreenHelpContent> = {
       {
         label: "Policy Configurator Documentation",
         href: "docs/screens/policy-configurator.md",
-        description: "How to configure per-tx caps, rolling windows, asset allowlists, and protocol rules.",
+        description:
+          "How to configure per-tx caps, rolling windows, asset allowlists, and protocol rules.",
       },
     ],
   },
@@ -203,7 +204,8 @@ export function detectScreenFromHash(hash: string): ScreenHelpContent {
   const cleanHash = hash.replace(/^[#/]+/, "").toLowerCase();
   if (cleanHash.includes("policy")) return SCREEN_HELP_MAP.policy!;
   if (cleanHash.includes("deploy") || cleanHash.includes("setup")) return SCREEN_HELP_MAP.deploy!;
-  if (cleanHash.includes("telemetry") || cleanHash.includes("feed")) return SCREEN_HELP_MAP.telemetry!;
+  if (cleanHash.includes("telemetry") || cleanHash.includes("feed"))
+    return SCREEN_HELP_MAP.telemetry!;
   if (cleanHash.includes("fleet")) return SCREEN_HELP_MAP.fleet!;
   if (cleanHash.includes("webhook")) return SCREEN_HELP_MAP.webhooks!;
   return SCREEN_HELP_MAP.overview!;

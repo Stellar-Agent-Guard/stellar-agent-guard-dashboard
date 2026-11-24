@@ -234,7 +234,8 @@ export function deriveNextAction(steps: readonly SetupStep[]): NextSetupAction {
     return {
       stepId: "initialized",
       title: "Initialize Guard Contract",
-      detail: "Initialize the contract with admin and agent keypair addresses. This write action must be executed once and never replayed automatically.",
+      detail:
+        "Initialize the contract with admin and agent keypair addresses. This write action must be executed once and never replayed automatically.",
       actionText: "Initialize in Deploy Panel",
       actionHref: "#deploy",
       isReadOnly: false,
@@ -246,7 +247,8 @@ export function deriveNextAction(steps: readonly SetupStep[]): NextSetupAction {
     return {
       stepId: "policy",
       title: "Install Initial Guard Policy",
-      detail: "The guard is in default-deny mode. Install an allowlist policy to permit approved agent transactions.",
+      detail:
+        "The guard is in default-deny mode. Install an allowlist policy to permit approved agent transactions.",
       actionText: "Install Policy in Configurator",
       actionHref: "#policy",
       isReadOnly: false,
@@ -258,7 +260,8 @@ export function deriveNextAction(steps: readonly SetupStep[]): NextSetupAction {
     return {
       stepId: "verified",
       title: "Verify Policy On-Chain",
-      detail: "Execute an authoritative live re-read of status() and policy() to confirm the guard is correctly enforcing policies.",
+      detail:
+        "Execute an authoritative live re-read of status() and policy() to confirm the guard is correctly enforcing policies.",
       actionText: "Verify status & policy (read-only)",
       isReadOnly: true,
     };
@@ -267,7 +270,8 @@ export function deriveNextAction(steps: readonly SetupStep[]): NextSetupAction {
   return {
     stepId: "complete",
     title: "Guard Fully Configured & Verified",
-    detail: "All post-deploy checklist steps are satisfied. The guard is live and enforcing on-chain policies.",
+    detail:
+      "All post-deploy checklist steps are satisfied. The guard is live and enforcing on-chain policies.",
     actionText: "Monitor in Telemetry Feed",
     actionHref: "#telemetry",
     isReadOnly: true,
