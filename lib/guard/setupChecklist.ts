@@ -49,6 +49,8 @@ export const SETUP_STEPS: ReadonlyArray<{ id: SetupStepId; label: string }> = [
 export interface SetupInputs {
   /** Address predicted at deploy time, or null when nothing was deployed here. */
   deployedMarker: string | null;
+  /** True when inspecting an existing deployed guard instance on-chain. */
+  alreadyDeployed?: boolean;
   /** Live `isInitialized` read (contract storage says `initialize` has run). */
   initialized: ReadResult<boolean>;
   /** Live `status()` read. */
@@ -70,21 +72,24 @@ export interface SetupInputs {
  */
 export function deriveSetupSteps(inputs: SetupInputs): SetupStep[] {
   return [
-    deriveDeployed(inputs.deployedMarker),
+    deriveDeployed(inputs.deployedMarker, inputs.alreadyDeployed),
     deriveInitialized(inputs.initialized),
     derivePolicy(inputs.status, inputs.policy),
     deriveVerified(inputs.verified),
   ];
 }
 
-function deriveDeployed(marker: string | null): SetupStep {
+function deriveDeployed(marker: string | null, alreadyDeployed?: boolean): SetupStep {
+  const isDeployed = Boolean(marker || alreadyDeployed);
   return {
     id: "deployed",
     label: SETUP_STEPS[0]!.label,
-    state: marker ? "done" : "pending",
+    state: isDeployed ? "done" : "pending",
     detail: marker
       ? `Contract address predicted at deploy time: ${marker}`
-      : "No deploy recorded in this browser. Deploy a guard on the Configure screen to begin.",
+      : alreadyDeployed
+        ? "Guard contract is deployed and reachable on-chain"
+        : "No deploy recorded in this browser. Deploy a guard on the Configure screen to begin.",
   };
 }
 
@@ -183,6 +188,94 @@ function deriveVerified(verified: ReadResult<{ hasPolicy: boolean }> | null): Se
  */
 export function defaultDenyWarning(status: ReadResult<GuardStatus>): boolean {
   return status.ok && !status.value.has_policy;
+}
+
+export interface NextSetupAction {
+  stepId: SetupStepId | "complete";
+  title: string;
+  detail: string;
+  actionText: string;
+  actionHref?: string;
+  isReadOnly: boolean;
+}
+
+/**
+ * Derive the single explicit next safe action for an operator from fresh step states.
+ *
+ * Invariant: Never replays writes automatically. For read errors, explicitly requires
+ * re-reading the chain rather than retrying deployment or policy installation writes.
+ */
+export function deriveNextAction(steps: readonly SetupStep[]): NextSetupAction {
+  const errorStep = steps.find((s) => s.state === "error");
+  if (errorStep) {
+    return {
+      stepId: errorStep.id,
+      title: `Resolve ${errorStep.label} read error`,
+      detail: `A required on-chain read failed: ${errorStep.detail}. Re-read the chain before taking action; never replay writes for read errors.`,
+      actionText: "Re-read on-chain state (read-only)",
+      isReadOnly: true,
+    };
+  }
+
+  const deployedStep = steps.find((s) => s.id === "deployed");
+  if (deployedStep && deployedStep.state === "pending") {
+    return {
+      stepId: "deployed",
+      title: "Deploy Guard Contract",
+      detail: "Deploy the guard contract to Soroban to establish an on-chain enforcement point.",
+      actionText: "Go to Deploy Panel",
+      actionHref: "#deploy",
+      isReadOnly: false,
+    };
+  }
+
+  const initStep = steps.find((s) => s.id === "initialized");
+  if (initStep && initStep.state === "pending") {
+    return {
+      stepId: "initialized",
+      title: "Initialize Guard Contract",
+      detail:
+        "Initialize the contract with admin and agent keypair addresses. This write action must be executed once and never replayed automatically.",
+      actionText: "Initialize in Deploy Panel",
+      actionHref: "#deploy",
+      isReadOnly: false,
+    };
+  }
+
+  const policyStep = steps.find((s) => s.id === "policy");
+  if (policyStep && policyStep.state === "pending") {
+    return {
+      stepId: "policy",
+      title: "Install Initial Guard Policy",
+      detail:
+        "The guard is in default-deny mode. Install an allowlist policy to permit approved agent transactions.",
+      actionText: "Install Policy in Configurator",
+      actionHref: "#policy",
+      isReadOnly: false,
+    };
+  }
+
+  const verifyStep = steps.find((s) => s.id === "verified");
+  if (verifyStep && verifyStep.state === "pending") {
+    return {
+      stepId: "verified",
+      title: "Verify Policy On-Chain",
+      detail:
+        "Execute an authoritative live re-read of status() and policy() to confirm the guard is correctly enforcing policies.",
+      actionText: "Verify status & policy (read-only)",
+      isReadOnly: true,
+    };
+  }
+
+  return {
+    stepId: "complete",
+    title: "Guard Fully Configured & Verified",
+    detail:
+      "All post-deploy checklist steps are satisfied. The guard is live and enforcing on-chain policies.",
+    actionText: "Monitor in Telemetry Feed",
+    actionHref: "#telemetry",
+    isReadOnly: true,
+  };
 }
 
 // ── Stored wizard state (exactly two keys) ─────────────────────────────────

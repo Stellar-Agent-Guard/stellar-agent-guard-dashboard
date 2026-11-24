@@ -6,6 +6,7 @@ import { Tabs } from "./bits.tsx";
 import { AriaAnnouncer } from "./AriaAnnouncer.tsx";
 import { ThemeProvider } from "./ThemeProvider.tsx";
 import { PrivacyToggle, ThemeToggle } from "./ThemeToggle.tsx";
+import { ContextualHelp } from "./ContextualHelp.tsx";
 import { SIDEBAR_COLLAPSED_STORAGE_KEY } from "../lib/guard/presentationStorageKeys.ts";
 
 /**
@@ -108,15 +109,18 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
                 <h1>Stellar Agent Guard</h1>
                 <span>operator console</span>
               </div>
-              <button
-                className="secondary"
-                onClick={() => setDrawerOpen(true)}
-                aria-label="Open navigation menu"
-                aria-controls="mobile-drawer"
-                aria-expanded={drawerOpen}
-              >
-                ☰
-              </button>
+              <div className="row" style={{ gap: "8px", alignItems: "center" }}>
+                <ContextualHelp />
+                <button
+                  className="secondary"
+                  onClick={() => setDrawerOpen(true)}
+                  aria-label="Open navigation menu"
+                  aria-controls="mobile-drawer"
+                  aria-expanded={drawerOpen}
+                >
+                  ☰
+                </button>
+              </div>
             </div>
           )}
 
@@ -127,8 +131,9 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
                 <h1>Stellar Agent Guard</h1>
                 <span>operator console</span>
               </div>
-              <div className="row">
+              <div className="row" style={{ gap: "8px", alignItems: "center" }}>
                 <span className="pill">Soroban testnet</span>
+                <ContextualHelp />
                 <a href="https://github.com/aigbagbobila/stellar-agent-guard-contracts">
                   contracts
                 </a>
@@ -186,7 +191,10 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
                 <div className="spacer"></div>
               </div>
             )}
-            <div className="content">{children}</div>
+            <div className="content">
+              <DemoBadge />
+              {children}
+            </div>
           </main>
         </div>
 

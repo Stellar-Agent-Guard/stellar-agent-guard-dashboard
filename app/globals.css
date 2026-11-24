@@ -1739,9 +1739,22 @@ code {
   button,
   nav,
   .theme-toggle,
-  .wallet-bar,
-  .demo-badge {
+  .wallet-bar {
     display: none !important;
+  }
+  .demo-badge,
+  .mode-indicator {
+    display: flex !important;
+    border: 2px dashed #b45309 !important;
+    background: #fef3c7 !important;
+    color: #92400e !important;
+    padding: 8px 12px !important;
+    margin-bottom: 12px !important;
+  }
+  .mode-indicator.live {
+    border: 1px solid #0284c7 !important;
+    background: #e0f2fe !important;
+    color: #0369a1 !important;
   }
   .print-only {
     display: block !important;
