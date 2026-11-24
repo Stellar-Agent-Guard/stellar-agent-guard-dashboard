@@ -606,6 +606,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
           <button
             className="danger"
             ref={triggerRef}
+            data-incident-action="freeze"
             disabled={freezeControl.disabled}
             title={freezeControl.title}
             onClick={() => {
@@ -625,6 +626,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
           <button
             className="secondary"
             ref={unfreezeRef}
+            data-incident-action="unfreeze"
             disabled={unfreezeControl.disabled}
             title={unfreezeControl.title}
             onClick={() => void run("unfreeze")}

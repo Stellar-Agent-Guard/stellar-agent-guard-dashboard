@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import Link from "next/link";
 import { formatStroopsWithUnit } from "../lib/guard/formatters.ts";
 import { POLLING, jitteredInterval } from "../lib/guard/polling.ts";
+import { refreshSources, type RefreshSource } from "../lib/guard/refreshStatus.ts";
 import {
   pollFleet,
   defaultSortDirection,
@@ -40,6 +41,33 @@ import {
 
 // One store for the tab: the remembered view (search, filters, sort), never row data.
 const fleetViewStore = createFleetViewStore({ networks: [NETWORK.name] });
+
+/** Drawn once per page load, then shared by the timer and the strip's overdue window. */
+const FLEET_INTERVAL_MS = jitteredInterval(POLLING.fleetMs);
+
+/**
+ * The fleet poller's own liveness, beside the rows it produced (#528).
+ *
+ * `pollFleet` never rejects: a guard it cannot read comes back as a row with an
+ * `error` and no snapshot. So "the round failed" is a count, not an exception -
+ * and it is only a failure when there was something to read. An empty registry is
+ * a round that answered perfectly and had nothing to say.
+ */
+const INITIAL_FLEET_READ: FleetRead = {
+  polling: false,
+  lastSuccessAt: null,
+  lastFailureAt: null,
+  error: null,
+  rowsRead: 0,
+};
+
+interface FleetRead {
+  polling: boolean;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  error: string | null;
+  rowsRead: number;
+}
 
 /**
  * What the confirmation says about the boundary of a cleanup: this browser's
@@ -86,6 +114,8 @@ export function FleetTable() {
   const { search, network: networkFilter, status: statusFilter, sortKey, sortDirection } = view;
   const updateView = (patch: Partial<FleetViewState>) => fleetViewStore.set({ ...view, ...patch });
 
+  const [fleetRead, setFleetRead] = useState<FleetRead>(INITIAL_FLEET_READ);
+
   useEffect(() => {
     let mounted = true;
     const fetchFleet = async () => {
@@ -95,20 +125,87 @@ export function FleetTable() {
         label: i.label,
         addedAt: "",
       }));
-      const result = await pollFleet(server, contacts);
-      if (mounted) {
+      setFleetRead((current) => ({ ...current, polling: true }));
+      try {
+        const result = await pollFleet(server, contacts);
+        if (!mounted) return;
         setRows(result);
         setLoading(false);
+        const answered = result.filter((row) => row.snapshot !== null).length;
+        const failed = result.find((row) => row.error !== undefined);
+        const completedAt = new Date().toISOString();
+        setFleetRead((current) =>
+          contacts.length === 0 || answered > 0
+            ? {
+                polling: false,
+                // The success stamp moves on a round that returned nothing: an
+                // empty registry is a live poller with no guards, which is not the
+                // same fault as a poller that cannot reach the network.
+                lastSuccessAt: completedAt,
+                lastFailureAt: current.lastFailureAt,
+                // One guard unreadable among several is that row's failure, shown
+                // on the row; the round itself answered.
+                error: answered === 0 && failed ? (failed.error ?? null) : null,
+                rowsRead: answered,
+              }
+            : {
+                polling: false,
+                lastSuccessAt: current.lastSuccessAt,
+                lastFailureAt: completedAt,
+                error: failed ? (failed.error ?? null) : "every guard read failed",
+                rowsRead: 0,
+              },
+        );
+      } catch (error) {
+        if (!mounted) return;
+        const failedAt = new Date().toISOString();
+        setFleetRead((current) => ({
+          polling: false,
+          lastSuccessAt: current.lastSuccessAt,
+          lastFailureAt: failedAt,
+          error: error instanceof Error ? error.message : String(error),
+          rowsRead: 0,
+        }));
       }
     };
 
     fetchFleet();
-    const interval = setInterval(fetchFleet, jitteredInterval(POLLING.fleetMs));
+    const interval = setInterval(fetchFleet, FLEET_INTERVAL_MS);
     return () => {
       mounted = false;
       clearInterval(interval);
     };
   }, [server, refreshKey]);
+
+  const fleetSource = useMemo<RefreshSource>(
+    () => ({
+      id: "fleet",
+      intervalMs: FLEET_INTERVAL_MS,
+      // The timer runs for as long as this table is mounted, registry or not.
+      watching: true,
+      polling: fleetRead.polling,
+      lastSuccessAt: fleetRead.lastSuccessAt,
+      lastAttemptAt: null,
+      lastFailureAt: fleetRead.lastFailureAt,
+      error: fleetRead.error,
+      deliveredInLastRound: fleetRead.rowsRead,
+      paused: false,
+    }),
+    [fleetRead],
+  );
+
+  useEffect(() => {
+    refreshSources.publish(fleetSource);
+  }, [fleetSource]);
+
+  // The fleet poller only exists on this screen; the strip must not keep showing a
+  // cadence for a timer that stopped when the operator navigated away.
+  useEffect(
+    () => () => {
+      refreshSources.retire("fleet");
+    },
+    [],
+  );
 
   // Derived from the rows as last read, so a poll that changes a guard's status
   // immediately moves it in or out of the filtered, sorted view.
