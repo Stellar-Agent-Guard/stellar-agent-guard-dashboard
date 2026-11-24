@@ -45,6 +45,21 @@ jobs:
       - name: No-server boundary
         run: npm run check:no-server
 
+      # The vendored SDK tarball is a security-sensitive build input. This hashes
+      # the committed bytes against vendor/sdk-provenance.json and the lockfile
+      # without unpacking or running anything from the tarball.
+      - name: Vendored SDK provenance
+        run: npm run check:sdk-provenance
+
+      # Names README routes with no page (and pages with no README entry).
+      - name: Route documentation
+        run: npm run check:doc-routes
+
+      # Secret-like content scan. Prints rule/path/line only, never the match,
+      # and appends the outcome to the job summary; a finding fails the job.
+      - name: Security scan
+        run: npm run check:security-scan
+
       # Formatting is a separate gate from linting: eslint-config-next carries
       # no stylistic rules, so prettier is the only thing that can catch
       # whitespace/line-ending drift. It runs before the tests so a format
