@@ -14,7 +14,12 @@ import {
   type SortKey,
   type FleetPolicyReport,
 } from "../lib/guard/fleet.ts";
-import { defaultGuardLabel, loadInstances, rememberInstance, type GuardInstance } from "../lib/guard/instance.ts";
+import {
+  defaultGuardLabel,
+  loadInstances,
+  rememberInstance,
+  type GuardInstance,
+} from "../lib/guard/instance.ts";
 import { freezeGuard } from "../lib/guard/guardOps.ts";
 import { freezeFailed, freezeSubmitted, writeFailureReason } from "../lib/guard/announceCopy.ts";
 import { announce } from "../lib/guard/useAnnounce.ts";
@@ -466,17 +471,41 @@ export function FleetTable() {
                       </th>
                     );
                   case "guard":
-                    return <th key="guard" scope="col">Guard</th>;
+                    return (
+                      <th key="guard" scope="col">
+                        Guard
+                      </th>
+                    );
                   case "network":
-                    return <th key="network" scope="col">Network</th>;
+                    return (
+                      <th key="network" scope="col">
+                        Network
+                      </th>
+                    );
                   case "status":
-                    return <th key="status" scope="col">Status</th>;
+                    return (
+                      <th key="status" scope="col">
+                        Status
+                      </th>
+                    );
                   case "spend":
-                    return <th key="spend" scope="col">24h Spend</th>;
+                    return (
+                      <th key="spend" scope="col">
+                        24h Spend
+                      </th>
+                    );
                   case "dms":
-                    return <th key="dms" scope="col">DMS Countdown</th>;
+                    return (
+                      <th key="dms" scope="col">
+                        DMS Countdown
+                      </th>
+                    );
                   case "actions":
-                    return <th key="actions" scope="col">Actions</th>;
+                    return (
+                      <th key="actions" scope="col">
+                        Actions
+                      </th>
+                    );
                   default:
                     return null;
                 }
@@ -507,7 +536,10 @@ export function FleetTable() {
                   <strong>{empty!.title}</strong>
                   <span className="tiny muted">{empty!.hint}</span>
                   <p className="tiny muted" style={{ maxWidth: 520, margin: "8px auto 0 auto" }}>
-                    Fleet membership is browser-local: guards only appear here if registered in this browser&apos;s registry. If you deployed a guard via CLI or another machine, register its address below to monitor it. Registration saves this address locally; it does NOT deploy, verify, or create a contract on-chain.
+                    Fleet membership is browser-local: guards only appear here if registered in this
+                    browser&apos;s registry. If you deployed a guard via CLI or another machine,
+                    register its address below to monitor it. Registration saves this address
+                    locally; it does NOT deploy, verify, or create a contract on-chain.
                   </p>
                   <div className="row" style={{ marginTop: 12, justifyContent: "center", gap: 12 }}>
                     <button className="secondary" onClick={() => setShowRegisterModal(true)}>
@@ -532,10 +564,16 @@ export function FleetTable() {
                       Clear search and filters
                     </button>
                   </div>
-                  <div className="notice info" style={{ maxWidth: 520, margin: "16px auto 0 auto", textAlign: "left" }}>
+                  <div
+                    className="notice info"
+                    style={{ maxWidth: 520, margin: "16px auto 0 auto", textAlign: "left" }}
+                  >
                     <strong>Cannot find a deployed guard?</strong>
                     <p className="tiny muted" style={{ margin: "4px 0" }}>
-                      Fleet membership is browser-local: guards only appear here if registered in this browser&apos;s registry. If you deployed a guard via CLI or another machine, register its address below to monitor it. Registration saves this address locally; it does NOT deploy, verify, or create a contract on-chain.
+                      Fleet membership is browser-local: guards only appear here if registered in
+                      this browser&apos;s registry. If you deployed a guard via CLI or another
+                      machine, register its address below to monitor it. Registration saves this
+                      address locally; it does NOT deploy, verify, or create a contract on-chain.
                     </p>
                     <button
                       className="secondary"
@@ -580,7 +618,11 @@ export function FleetTable() {
                           </td>
                         );
                       case "status":
-                        return <td key="status" data-label="Status">{renderStatus(row.derivedStatus)}</td>;
+                        return (
+                          <td key="status" data-label="Status">
+                            {renderStatus(row.derivedStatus)}
+                          </td>
+                        );
                       case "spend":
                         return (
                           <td key="spend" className="mono tiny" data-label="24h Spend">
@@ -650,10 +692,7 @@ export function FleetTable() {
       )}
 
       {showPolicyReport && (
-        <PolicyReportModal
-          rows={rows}
-          onClose={() => setShowPolicyReport(false)}
-        />
+        <PolicyReportModal rows={rows} onClose={() => setShowPolicyReport(false)} />
       )}
 
       {showRegisterModal && (
@@ -816,7 +855,8 @@ export function ColumnLayoutModal({
       >
         <strong id="column-layout-title">Customize Fleet Columns</strong>
         <p className="tiny muted">
-          Choose which columns to show and adjust their display order. Layout preferences are saved in this browser.
+          Choose which columns to show and adjust their display order. Layout preferences are saved
+          in this browser.
         </p>
 
         <div style={{ marginTop: 12 }}>
@@ -831,7 +871,15 @@ export function ColumnLayoutModal({
                 alignItems: "center",
               }}
             >
-              <label className="row" style={{ alignItems: "center", gap: 8, margin: 0, cursor: col.canHide ? "pointer" : "default" }}>
+              <label
+                className="row"
+                style={{
+                  alignItems: "center",
+                  gap: 8,
+                  margin: 0,
+                  cursor: col.canHide ? "pointer" : "default",
+                }}
+              >
                 <input
                   type="checkbox"
                   checked={col.visible}
@@ -885,13 +933,7 @@ export function ColumnLayoutModal({
 /**
  * Multi-guard policy review report modal (issue #477).
  */
-export function PolicyReportModal({
-  rows,
-  onClose,
-}: {
-  rows: FleetRow[];
-  onClose: () => void;
-}) {
+export function PolicyReportModal({ rows, onClose }: { rows: FleetRow[]; onClose: () => void }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const report = useMemo(() => generateFleetPolicyReport(rows), [rows]);
 
@@ -936,7 +978,8 @@ export function PolicyReportModal({
           <div className="notice warn" role="alert" style={{ marginTop: 10 }}>
             <strong>Partial Report</strong>
             <span className="tiny">
-              {report.failedReads} of {report.totalGuards} guard reads failed. Unread guards are NOT empty policies; their policy status cannot be asserted until connectivity is restored.
+              {report.failedReads} of {report.totalGuards} guard reads failed. Unread guards are NOT
+              empty policies; their policy status cannot be asserted until connectivity is restored.
             </span>
           </div>
         )}
@@ -971,7 +1014,9 @@ export function PolicyReportModal({
               {report.entries.map((entry) => (
                 <tr key={entry.guard}>
                   <td data-label="Guard">
-                    <div><strong>{entry.label}</strong></div>
+                    <div>
+                      <strong>{entry.label}</strong>
+                    </div>
                     <div className="mono tiny">{entry.guard}</div>
                   </td>
                   <td data-label="Outcome">
@@ -1068,7 +1113,10 @@ export function RegisterGuardModal({
       >
         <strong id="register-guard-title">Register Deployed Guard</strong>
         <p className="tiny muted" style={{ marginTop: 6, lineHeight: 1.4 }}>
-          Fleet membership is browser-local: guards only appear here if registered in this browser&apos;s registry. If you deployed a guard via CLI or another machine, register its address below to monitor it. Registration saves this address locally; it does NOT deploy, verify, or create a contract on-chain.
+          Fleet membership is browser-local: guards only appear here if registered in this
+          browser&apos;s registry. If you deployed a guard via CLI or another machine, register its
+          address below to monitor it. Registration saves this address locally; it does NOT deploy,
+          verify, or create a contract on-chain.
         </p>
 
         <form onSubmit={handleSubmit} style={{ marginTop: 12 }}>
@@ -1107,9 +1155,7 @@ export function RegisterGuardModal({
             <button type="button" className="secondary" onClick={onClose}>
               Cancel
             </button>
-            <button type="submit">
-              Register Guard
-            </button>
+            <button type="submit">Register Guard</button>
           </div>
         </form>
       </div>
@@ -1194,7 +1240,8 @@ export function RegistryMergeModal({
       >
         <strong id="registry-merge-title">Import &amp; Merge Registry</strong>
         <p className="tiny muted" style={{ marginTop: 4 }}>
-          Merge guards into this browser&apos;s local registry. No contracts are deployed or changed on-chain. Conflicts require explicit confirmation before changes are applied.
+          Merge guards into this browser&apos;s local registry. No contracts are deployed or changed
+          on-chain. Conflicts require explicit confirmation before changes are applied.
         </p>
 
         {!preview ? (
@@ -1223,11 +1270,7 @@ export function RegistryMergeModal({
               <button type="button" className="secondary" onClick={onClose}>
                 Cancel
               </button>
-              <button
-                type="button"
-                disabled={!inputJson.trim()}
-                onClick={handlePreview}
-              >
+              <button type="button" disabled={!inputJson.trim()} onClick={handlePreview}>
                 Preview Merge
               </button>
             </div>
@@ -1235,9 +1278,15 @@ export function RegistryMergeModal({
         ) : (
           <div style={{ marginTop: 12 }}>
             <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
-              <span className="tiny"><strong>Additions:</strong> {preview.additions.length}</span>
-              <span className="tiny"><strong>Conflicts:</strong> {preview.conflicts.length}</span>
-              <span className="tiny"><strong>Skipped:</strong> {preview.skips.length}</span>
+              <span className="tiny">
+                <strong>Additions:</strong> {preview.additions.length}
+              </span>
+              <span className="tiny">
+                <strong>Conflicts:</strong> {preview.conflicts.length}
+              </span>
+              <span className="tiny">
+                <strong>Skipped:</strong> {preview.skips.length}
+              </span>
               {preview.invalid.length > 0 && (
                 <span className="tiny" style={{ color: "var(--danger, #f87171)" }}>
                   <strong>Invalid:</strong> {preview.invalid.length}
@@ -1276,7 +1325,9 @@ export function RegistryMergeModal({
                           </td>
                           <td className="mono tiny">{c.guard.slice(0, 8)}...</td>
                           <td className="tiny">{c.currentLabel}</td>
-                          <td className="tiny"><strong>{c.importedLabel}</strong></td>
+                          <td className="tiny">
+                            <strong>{c.importedLabel}</strong>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1290,8 +1341,14 @@ export function RegistryMergeModal({
                 <strong className="tiny">New Guards to Add:</strong>
                 <div className="scrolly" style={{ maxHeight: 100, marginTop: 4 }}>
                   {preview.additions.map((a) => (
-                    <div key={a.guard} className="row tiny" style={{ justifyContent: "space-between", padding: "2px 0" }}>
-                      <span><strong>{a.label}</strong> ({a.network})</span>
+                    <div
+                      key={a.guard}
+                      className="row tiny"
+                      style={{ justifyContent: "space-between", padding: "2px 0" }}
+                    >
+                      <span>
+                        <strong>{a.label}</strong> ({a.network})
+                      </span>
                       <span className="mono">{a.guard.slice(0, 12)}...</span>
                     </div>
                   ))}
@@ -1323,7 +1380,9 @@ export function RegistryMergeModal({
                   onClick={handleConfirm}
                   disabled={preview.additions.length === 0 && preview.conflicts.length === 0}
                 >
-                  Confirm Merge ({preview.additions.length + Object.values(conflictChoices).filter(Boolean).length})
+                  Confirm Merge (
+                  {preview.additions.length + Object.values(conflictChoices).filter(Boolean).length}
+                  )
                 </button>
               </div>
             </div>

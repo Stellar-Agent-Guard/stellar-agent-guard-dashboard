@@ -291,13 +291,7 @@ export function applyFleetView(rows: FleetRow[], view: FleetViewState): FleetRow
 // ── Operator Column Layout Preferences (Issue #476) ──────────────────────────
 
 export type FleetColumnId =
-  | "selection"
-  | "guard"
-  | "network"
-  | "status"
-  | "spend"
-  | "dms"
-  | "actions";
+  "selection" | "guard" | "network" | "status" | "spend" | "dms" | "actions";
 
 export interface FleetColumnConfig {
   id: FleetColumnId;
@@ -361,10 +355,7 @@ export function loadFleetColumns(storage?: StorageLike | null): FleetColumnConfi
  * Persist presentation preferences for fleet columns.
  * Only stores column IDs and visibility bits.
  */
-export function saveFleetColumns(
-  columns: FleetColumnConfig[],
-  storage?: StorageLike | null,
-): void {
+export function saveFleetColumns(columns: FleetColumnConfig[], storage?: StorageLike | null): void {
   const store = storage === undefined ? defaultStorage() : storage;
   if (!store) return;
   try {

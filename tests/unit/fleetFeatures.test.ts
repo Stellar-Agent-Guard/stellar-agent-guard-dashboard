@@ -13,10 +13,7 @@ import {
   formatFleetPolicyReportMarkdown,
   type FleetRow,
 } from "../../lib/guard/fleet.ts";
-import {
-  previewRegistryMerge,
-  isValidGuardAddress,
-} from "../../lib/guard/registry.ts";
+import { previewRegistryMerge, isValidGuardAddress } from "../../lib/guard/registry.ts";
 import {
   rememberInstance,
   loadSavedInstances,
@@ -158,20 +155,23 @@ test("Safe multi-guard policy review report (#477)", async (t) => {
     assert.match(report.entries[0]?.policySummary ?? "", /Per-Tx: 10/);
   });
 
-  await t.test("marks report as partial and highlights failed reads without masking as empty policies", () => {
-    const report = generateFleetPolicyReport([row1, row2]);
-    assert.equal(report.totalGuards, 2);
-    assert.equal(report.successfulReads, 1);
-    assert.equal(report.failedReads, 1);
-    assert.equal(report.isPartial, true);
+  await t.test(
+    "marks report as partial and highlights failed reads without masking as empty policies",
+    () => {
+      const report = generateFleetPolicyReport([row1, row2]);
+      assert.equal(report.totalGuards, 2);
+      assert.equal(report.successfulReads, 1);
+      assert.equal(report.failedReads, 1);
+      assert.equal(report.isPartial, true);
 
-    const failedEntry = report.entries.find((e) => e.guard === row2.contact.address);
-    assert.ok(failedEntry);
-    assert.equal(failedEntry.readOutcome, "failed");
-    assert.equal(failedEntry.error, "RPC timeout");
-    assert.equal(failedEntry.hasPolicy, null);
-    assert.match(failedEntry.policySummary, /READ FAILED/);
-  });
+      const failedEntry = report.entries.find((e) => e.guard === row2.contact.address);
+      assert.ok(failedEntry);
+      assert.equal(failedEntry.readOutcome, "failed");
+      assert.equal(failedEntry.error, "RPC timeout");
+      assert.equal(failedEntry.hasPolicy, null);
+      assert.match(failedEntry.policySummary, /READ FAILED/);
+    },
+  );
 
   await t.test("formats markdown report with explicit partial banner and table headers", () => {
     const report = generateFleetPolicyReport([row1, row2]);
@@ -194,8 +194,13 @@ test("Absent guard registration (#478)", async (t) => {
     const initial = loadSavedInstances({ network: "testnet", storage });
     assert.equal(initial.length, 0);
 
-    const updated = rememberInstance(VALID_GUARD_1, "New Deployed Guard", { network: "testnet", storage });
-    assert.ok(updated.some((inst) => inst.guard === VALID_GUARD_1 && inst.label === "New Deployed Guard"));
+    const updated = rememberInstance(VALID_GUARD_1, "New Deployed Guard", {
+      network: "testnet",
+      storage,
+    });
+    assert.ok(
+      updated.some((inst) => inst.guard === VALID_GUARD_1 && inst.label === "New Deployed Guard"),
+    );
   });
 });
 
@@ -226,34 +231,35 @@ test("Guarded local registry merge preview (#479)", async (t) => {
     assert.equal(preview2.ok, false);
   });
 
-  await t.test("categorizes additions, duplicates, conflicts, and invalid entries without storage changes", () => {
-    const importPayload = [
-      // Addition (new guard)
-      { guard: VALID_GUARD_2, label: "Imported Guard 2", network: "testnet" },
-      // Duplicate skip (identical label and network)
-      { guard: VALID_GUARD_1, label: "Current Guard 1", network: "testnet" },
-      // Conflict (existing guard with differing label)
-      { guard: VALID_GUARD_3, label: "Conflicting Label", network: "testnet" },
-      // Invalid (bad address checksum)
-      { guard: INVALID_GUARD, label: "Bad Guard" },
-    ];
+  await t.test(
+    "categorizes additions, duplicates, conflicts, and invalid entries without storage changes",
+    () => {
+      const importPayload = [
+        // Addition (new guard)
+        { guard: VALID_GUARD_2, label: "Imported Guard 2", network: "testnet" },
+        // Duplicate skip (identical label and network)
+        { guard: VALID_GUARD_1, label: "Current Guard 1", network: "testnet" },
+        // Conflict (existing guard with differing label)
+        { guard: VALID_GUARD_3, label: "Conflicting Label", network: "testnet" },
+        // Invalid (bad address checksum)
+        { guard: INVALID_GUARD, label: "Bad Guard" },
+      ];
 
-    const preview = previewRegistryMerge(current, importPayload, "testnet");
-    assert.equal(preview.ok, true);
-    assert.equal(preview.additions.length, 1);
-    assert.equal(preview.additions[0]?.guard, VALID_GUARD_2);
-    assert.equal(preview.conflicts.length, 1);
-    assert.equal(preview.conflicts[0]?.guard, VALID_GUARD_3);
-    assert.equal(preview.skips.length, 1);
-    assert.equal(preview.skips[0]?.guard, VALID_GUARD_1);
-    assert.equal(preview.invalid.length, 1);
-    assert.match(preview.invalid[0]?.reason ?? "", /Invalid/);
-  });
+      const preview = previewRegistryMerge(current, importPayload, "testnet");
+      assert.equal(preview.ok, true);
+      assert.equal(preview.additions.length, 1);
+      assert.equal(preview.additions[0]?.guard, VALID_GUARD_2);
+      assert.equal(preview.conflicts.length, 1);
+      assert.equal(preview.conflicts[0]?.guard, VALID_GUARD_3);
+      assert.equal(preview.skips.length, 1);
+      assert.equal(preview.skips[0]?.guard, VALID_GUARD_1);
+      assert.equal(preview.invalid.length, 1);
+      assert.match(preview.invalid[0]?.reason ?? "", /Invalid/);
+    },
+  );
 
   await t.test("detects conflicts when same address has differing label or network", () => {
-    const importPayload = [
-      { guard: VALID_GUARD_1, label: "Changed Label", network: "testnet" },
-    ];
+    const importPayload = [{ guard: VALID_GUARD_1, label: "Changed Label", network: "testnet" }];
     const preview = previewRegistryMerge(current, importPayload, "testnet");
     assert.equal(preview.ok, true);
     assert.equal(preview.conflicts.length, 1);

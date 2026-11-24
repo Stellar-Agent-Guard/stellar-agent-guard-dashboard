@@ -239,9 +239,7 @@ export function generateFleetPolicyReport(
     const readFailed = Boolean(row.error || !statusResult || !statusResult.ok);
     if (readFailed || !statusResult || !statusResult.ok) {
       const errorMsg =
-        row.error ||
-        (!statusResult?.ok ? statusResult?.error : undefined) ||
-        "Read failed";
+        row.error || (!statusResult?.ok ? statusResult?.error : undefined) || "Read failed";
       return {
         guard: row.contact.address,
         label: row.contact.label,
