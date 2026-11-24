@@ -80,6 +80,66 @@ header.configure-header h2 {
   white-space: nowrap;
 }
 
+.configure-network-context-interactive {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.network-roles-explanation {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 6px);
+  padding: 8px 12px;
+}
+
+.role-card {
+  line-height: 1.4;
+}
+
+.role-title {
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.role-desc {
+  color: var(--muted);
+}
+
+.endpoint-probe-section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.probe-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.write-network-confirm-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  background: var(--warn-surface, rgba(255, 170, 0, 0.08));
+  border: 1px solid var(--warn, #e6a700);
+  border-radius: var(--radius, 6px);
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .brand {
   display: flex;
   align-items: baseline;
