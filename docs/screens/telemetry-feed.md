@@ -68,3 +68,32 @@ Proof: `tests/unit/eventLink.test.ts` for the codec, the parameter whitelist and
 unavailable reason; `tests/unit/eventDetailPanel.test.ts` for focus-without-navigation
 and the panel's states.
 
+## Bookmarks and notes on a row
+
+A row can be bookmarked and annotated. Both are the operator's own record, not a fact
+about the guard, and the panel says that in words wherever either appears.
+
+- One record per row, keyed on the event identity the feed already uses (`event.id`):
+  `ledger:<txHash>:<topic>` for a committed row, `diag:<sha256>` for a refusal. Storage
+  is scoped to `(network, guard)`, so a bookmark made against one guard is never applied
+  to a same-looking id under another, and removing the instance deletes its marks.
+- The mark lives **beside** the event, never on it. Every export surface in this console
+  is a function of the `GuardEvent`s it is handed and reads no browser storage, which is
+  what makes "a note is never exported, signed or sent to a webhook" true by construction
+  instead of by review.
+- Provenance is on screen, not implied by position: the row carries a `browser-local`
+  marker and the panel states whose marks they are. A bookmark on a diagnostic row is
+  spoken as one that has no ledger to re-read it from.
+- A `Bookmarked only` view narrows the table to saved rows, and the count distinguishes
+  what is in view from what is stored — a mark filtered out by a verdict filter would
+  otherwise read as a lost mark.
+- Limits refuse rather than evict: 500 characters per note, 200 marks per guard. A note
+  containing a string shaped like a secret key is rejected inline with the draft kept,
+  and the rejection never repeats the text back.
+- Rows the feed cannot address render no controls and say why, rather than offering a
+  mark that would attach to the wrong event.
+
+Proof: `tests/unit/eventMarks.test.ts` for identity, scoping, the versioned envelope,
+each refusal and the no-export read log; `tests/unit/telemetryFeed.test.ts` for what the
+operator sees and hears, including that a mark adds no live region of its own.
+
