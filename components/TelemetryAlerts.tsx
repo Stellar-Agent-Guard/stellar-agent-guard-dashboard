@@ -75,6 +75,16 @@ import {
   validateQuietHoursTimeZone,
   type QuietHoursSchedule,
 } from "../lib/guard/quietHours.ts";
+import {
+  DEFAULT_WEBHOOK_SETTINGS,
+  getLastWebhookDispatch,
+  loadWebhookSettings,
+  subscribeLastWebhookDispatch,
+  subscribeWebhookSettings,
+  type DispatchResult,
+  type WebhookSettings,
+} from "../lib/guard/webhookDispatcher.ts";
+import { buildAlertChannelHealthView } from "../lib/guard/alertChannelHealth.ts";
 
 const REASON_LABEL: Record<NonNullable<ReturnType<typeof alertReasonFor>>, string> = {
   blocked: "a call was blocked",
@@ -122,6 +132,10 @@ export function TelemetryAlerts() {
   // did with the last notification, and whether the last chime actually played.
   const [lastDelivery, setLastDelivery] = useState<NotificationDelivery | null>(null);
   const [lastPlay, setLastPlay] = useState<AudioPlayReport | null>(null);
+  const [webhookSettings, setWebhookSettings] = useState<WebhookSettings>(
+    () => DEFAULT_WEBHOOK_SETTINGS,
+  );
+  const [lastWebhookDispatch, setLastWebhookDispatch] = useState<DispatchResult | null>(null);
 
   // One alerter and one seen-set per tab. The alerter owns the AudioContext, so
   // recreating it on a re-render would drop the unlocked state and go silent
@@ -155,9 +169,35 @@ export function TelemetryAlerts() {
     const restore = () => {
       setSettings(loadAlertSettings());
       setPermission(notificationPermissionState(notificationApi));
+      setWebhookSettings(loadWebhookSettings());
+      setLastWebhookDispatch(getLastWebhookDispatch());
     };
     restore();
-    return () => alerter.close();
+
+    const syncPermission = () => {
+      const live = notificationPermissionState(notificationApi);
+      setPermission((prev) => (prev === live ? prev : live));
+      if (live !== "granted") {
+        setLastDelivery((prev) => (prev?.delivered ? null : prev));
+      }
+    };
+
+    const unsubWebhook = subscribeWebhookSettings(() => {
+      setWebhookSettings(loadWebhookSettings());
+    });
+    const unsubDispatch = subscribeLastWebhookDispatch(() => {
+      setLastWebhookDispatch(getLastWebhookDispatch());
+    });
+    window.addEventListener("focus", syncPermission);
+    document.addEventListener("visibilitychange", syncPermission);
+
+    return () => {
+      unsubWebhook();
+      unsubDispatch();
+      window.removeEventListener("focus", syncPermission);
+      document.removeEventListener("visibilitychange", syncPermission);
+      alerter.close();
+    };
   }, [alerter, notificationApi]);
 
   useEffect(() => {
@@ -179,6 +219,14 @@ export function TelemetryAlerts() {
     const tracker = trackerRef.current;
 
     const announce = () => {
+      // Re-read live permission on every poll without prompting (#498), so
+      // external revocation in browser site settings is reflected immediately.
+      const livePermission = notificationPermissionState(notificationApi);
+      setPermission((prev) => (prev === livePermission ? prev : livePermission));
+      if (livePermission !== "granted") {
+        setLastDelivery((prev) => (prev?.delivered ? null : prev));
+      }
+
       if (!alertsArmed(settings)) return;
       const fresh = tracker.unseen(events).filter((event) => alertReasonFor(event) !== null);
       if (fresh.length === 0) return;
@@ -344,6 +392,16 @@ export function TelemetryAlerts() {
   const desktopState = desktopEffective(settings.desktop, permission, lastDelivery);
   const audioState = audioEffective(settings.audio, lastPlay);
   const armed = alertsArmed(settings);
+  const channelHealth = buildAlertChannelHealthView({
+    desktopEnabled: settings.desktop,
+    permission,
+    lastDelivery,
+    audioEnabled: settings.audio,
+    lastPlay,
+    webhookSettings,
+    network: NETWORK.name,
+    lastWebhookDispatch,
+  });
 
   return (
     <div
@@ -387,6 +445,43 @@ export function TelemetryAlerts() {
             Last alert: {lastAlert}
           </p>
         )}
+        <section
+          className="stack"
+          style={{ marginTop: 10, gap: 6 }}
+          data-testid="alert-channel-health"
+          aria-label="Alert channel health"
+        >
+          <span className="lbl" style={{ margin: 0 }}>
+            Channel health
+          </span>
+          {channelHealth.map((item) => (
+            <div key={item.channel} className="tiny" data-testid={`channel-health-${item.channel}`}>
+              <span
+                className={`pill ${
+                  item.status === "ready"
+                    ? "ok"
+                    : item.status === "failed" || item.status === "unavailable"
+                      ? "warn"
+                      : ""
+                }`}
+                style={{ marginRight: 6 }}
+                data-testid={`channel-health-${item.channel}-status`}
+              >
+                {item.label}: {item.statusLabel}
+              </span>
+              <span className="muted">{item.detail}</span>
+              {item.recovery && (
+                <div
+                  className="tiny"
+                  style={{ color: "var(--muted)", marginTop: 2 }}
+                  data-testid={`channel-health-${item.channel}-recovery`}
+                >
+                  Recovery: {item.recovery}
+                </div>
+              )}
+            </div>
+          ))}
+        </section>
       </div>
 
       <div style={{ display: "grid", gap: 6, justifyItems: "end" }}>
