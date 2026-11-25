@@ -23,11 +23,11 @@ import {
   dismissSecretKeyAlert,
   type SecretKeyAlert,
 } from "../lib/guard/inputSanitizer.ts";
+import { useModalFocus } from "../lib/guard/useModalFocus.ts";
 
 export function SecretKeyGuard() {
   const [alert, setAlert] = useState<SecretKeyAlert | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
-  const previousFocus = useRef<HTMLElement | null>(null);
 
   // One effect per concern: the screen itself is a side effect with no render
   // output; the alert subscription is a store binding. Both are stable, so
@@ -35,57 +35,18 @@ export function SecretKeyGuard() {
   useEffect(() => installSecretKeyGuard(), []);
   useEffect(() => subscribeSecretKeyAlerts(setAlert), []);
 
-  // Focus management for the alert dialog. While the alert is open, Tab cycles
-  // inside it; Escape and Acknowledge dismiss it; and whichever field the
-  // operator was typing into gets focus back, because a paste guard that eats
-  // the caret is itself a usability bug.
-  useEffect(() => {
-    if (alert === null) return;
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-
-    previousFocus.current = document.activeElement as HTMLElement | null;
-    dialog.focus();
-
-    const focusables = () =>
-      Array.from(
-        dialog.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ),
-      );
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        dismissSecretKeyAlert();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const items = focusables();
-      if (items.length === 0) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-      const first = items[0]!;
-      const last = items[items.length - 1]!;
-      const active = document.activeElement as HTMLElement | null;
-      const inside = active !== null && dialog.contains(active);
-      if (event.shiftKey && (active === first || !inside)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (active === last || !inside)) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown, true);
-      previousFocus.current?.focus();
-    };
-  }, [alert]);
+  // Focus management for the alert dialog, via the shared modal hook: focus
+  // moves in on open, Tab cycles inside it, Escape and Acknowledge dismiss it,
+  // and whichever field the operator was typing into gets focus back, because
+  // a paste guard that eats the caret is itself a usability bug. The hook's
+  // dialog stack also keeps a dialog *underneath* this alert (the freeze
+  // confirmation, a layout dialog) from reacting to the same Escape or
+  // dragging Tab focus back behind the warning (issue #540).
+  useModalFocus({
+    open: alert !== null,
+    containerRef: dialogRef,
+    onDismiss: dismissSecretKeyAlert,
+  });
 
   if (alert === null) return null;
 

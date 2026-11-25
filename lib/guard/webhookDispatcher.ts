@@ -39,6 +39,9 @@
 
 import { jsonWithBigints } from "./scval.ts";
 import type { DmsAlert } from "./dmsAlert.ts";
+import { looksLikeContractAddress, defaultGuardLabel } from "./instance.ts";
+import { findSecretKeyInText, findDisallowedLabelChar } from "./inputSanitizer.ts";
+import { DIAGNOSTIC_REDACTED, redactDiagnosticText } from "../rpc/timeouts.ts";
 
 // ── The alert vocabulary ───────────────────────────────────────────────────
 
@@ -128,6 +131,12 @@ export interface WebhookSettings {
   /** Refusals within `blockWindowSecs` that trigger `BLOCK_THRESHOLD_EXCEEDED`. */
   blockThreshold: number;
   blockWindowSecs: number;
+  /**
+   * Guards scoped for webhook delivery per network (issue #495).
+   * Keyed by normalized network name (e.g. "testnet", "mainnet").
+   * Defaults to empty mapping, meaning no guards are delivered until explicitly configured.
+   */
+  scopedGuards?: Record<string, string[]>;
 }
 
 /** Nothing configured: an operator has to opt in before anything leaves the tab. */
@@ -139,6 +148,7 @@ export const DEFAULT_WEBHOOK_SETTINGS: WebhookSettings = {
   minIntervalMs: DEFAULT_WEBHOOK_MIN_INTERVAL_MS,
   blockThreshold: DEFAULT_BLOCK_THRESHOLD,
   blockWindowSecs: DEFAULT_BLOCK_WINDOW_SECS,
+  scopedGuards: {},
 };
 
 /** The subset of `Storage` the store needs, so tests can inject a fake. */
@@ -172,6 +182,54 @@ function defaultStorage(): StorageLike | null {
  * operator meant. A host that will not parse is likewise refused; it would
  * otherwise resolve to an endpoint nobody chose.
  */
+const SECRET_QUERY_PARAM_RE =
+  /(?:^|[_-])(token|secret|key|apikey|api_key|auth|password|passwd|pwd|sig|signature|bearer|credential|private_key|jwt|session|hmac)(?:$|[_-])/i;
+
+/**
+ * Detect likely secret-bearing query parameters in a webhook URL (#497).
+ *
+ * Returns the deduplicated list of offending parameter names without echoing
+ * their values. Checks both secret-like parameter names (`token`, `secret`,
+ * `api_key`, `auth`, `sig`, etc.) and Stellar secret seed values (`S...`).
+ */
+export function detectWebhookUrlSecretParams(url: string): string[] {
+  const trimmed = url.trim();
+  if (trimmed === "") return [];
+  const offending = new Set<string>();
+  try {
+    const parsed = new URL(trimmed);
+    for (const [name, value] of parsed.searchParams.entries()) {
+      if (SECRET_QUERY_PARAM_RE.test(name) || findSecretKeyInText(value) !== null) {
+        offending.add(name);
+      }
+    }
+  } catch {
+    const qIdx = trimmed.indexOf("?");
+    if (qIdx !== -1) {
+      const queryPart = trimmed.slice(qIdx + 1).split("#")[0] ?? "";
+      for (const pair of queryPart.split("&")) {
+        if (!pair) continue;
+        const eqIdx = pair.indexOf("=");
+        const name = decodeURIComponent(eqIdx === -1 ? pair : pair.slice(0, eqIdx));
+        const value = eqIdx === -1 ? "" : pair.slice(eqIdx + 1);
+        if (SECRET_QUERY_PARAM_RE.test(name) || findSecretKeyInText(value) !== null) {
+          offending.add(name || "query");
+        }
+      }
+    }
+  }
+  return [...offending];
+}
+
+/**
+ * Redact embedded userinfo and query-string parameter values from a webhook URL
+ * for safe diagnostics and logs (#497). Never mutates the operator's input.
+ */
+export function redactWebhookUrl(url: string): string {
+  if (!url || typeof url !== "string") return "";
+  return redactDiagnosticText(url);
+}
+
 export function validateWebhookUrl(url: string): string | null {
   const trimmed = url.trim();
   if (trimmed === "") return "Enter a webhook URL.";
@@ -190,8 +248,20 @@ export function validateWebhookUrl(url: string): string | null {
   if (parsed.username !== "" || parsed.password !== "" || authorityHasCredentials(trimmed)) {
     return "Remove the username, password, or `@` from the host. A webhook URL must not carry credentials.";
   }
-  if (parsed.protocol === "https:") return null;
-  if (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname)) return null;
+  if (parsed.protocol === "https:") {
+    const secretParams = detectWebhookUrlSecretParams(trimmed);
+    if (secretParams.length > 0) {
+      return `Remove secret-bearing query parameter(s) (${secretParams.join(", ")}) from the webhook URL; secrets in query strings must not be stored.`;
+    }
+    return null;
+  }
+  if (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname)) {
+    const secretParams = detectWebhookUrlSecretParams(trimmed);
+    if (secretParams.length > 0) {
+      return `Remove secret-bearing query parameter(s) (${secretParams.join(", ")}) from the webhook URL; secrets in query strings must not be stored.`;
+    }
+    return null;
+  }
   if (parsed.protocol === "http:") {
     return "Use https:// for a webhook URL. Plain http is only allowed on localhost.";
   }
@@ -233,6 +303,93 @@ function clampWindow(value: unknown): number {
   return Math.min(86_400, Math.max(10, Math.round(parsed)));
 }
 
+/** Validate and normalize scoped guards per network map. */
+export function normalizeScopedGuards(value: unknown): Record<string, string[]> {
+  if (typeof value !== "object" || value === null) return {};
+  const result: Record<string, string[]> = {};
+  for (const [net, list] of Object.entries(value)) {
+    if (typeof net !== "string") continue;
+    const cleanNet = net.trim().toLowerCase();
+    if (!cleanNet) continue;
+    if (Array.isArray(list)) {
+      const validGuards = list
+        .filter((g): g is string => typeof g === "string" && looksLikeContractAddress(g.trim()))
+        .map((g) => g.trim());
+      result[cleanNet] = [...new Set(validGuards)];
+    }
+  }
+  return result;
+}
+
+/** Return the list of guard addresses configured for delivery on this network. */
+export function getScopedGuardsForNetwork(settings: WebhookSettings, network: string): string[] {
+  const cleanNet = network.trim().toLowerCase();
+  return settings.scopedGuards?.[cleanNet] ?? [];
+}
+
+/**
+ * Check whether a guard is scoped for delivery on a network.
+ * Defaults to false (no delivery) until the operator explicitly selects the guard.
+ */
+export function isGuardScopedForDelivery(
+  settings: WebhookSettings,
+  guard: string,
+  network: string,
+): boolean {
+  if (!settings.scopedGuards) return false;
+  const list = getScopedGuardsForNetwork(settings, network);
+  return list.includes(guard.trim());
+}
+
+/** Set the list of scoped guards for a specific network. */
+export function setScopedGuardsForNetwork(
+  settings: WebhookSettings,
+  network: string,
+  guards: string[],
+): WebhookSettings {
+  const cleanNet = network.trim().toLowerCase();
+  const validGuards = [
+    ...new Set(
+      guards
+        .filter((g): g is string => typeof g === "string" && looksLikeContractAddress(g.trim()))
+        .map((g) => g.trim()),
+    ),
+  ];
+  return {
+    ...settings,
+    scopedGuards: {
+      ...(settings.scopedGuards ?? {}),
+      [cleanNet]: validGuards,
+    },
+  };
+}
+
+/**
+ * Sanitize an operator-provided label for safe attribution in webhook payloads.
+ * Strips secret keys, removes disallowed control/invisible characters, trims,
+ * and clamps to a safe maximum length. Falls back to a deterministic safe label if empty.
+ */
+export function sanitizeGuardLabel(label: unknown, fallbackGuard = ""): string {
+  if (typeof label !== "string") {
+    return fallbackGuard ? defaultGuardLabel(fallbackGuard) : "Guard";
+  }
+  // If a secret key was pasted into the label, scrub it immediately
+  if (findSecretKeyInText(label) !== null) {
+    return fallbackGuard ? defaultGuardLabel(fallbackGuard) : "Guard";
+  }
+  let clean = "";
+  for (const char of label) {
+    if (!findDisallowedLabelChar(char)) {
+      clean += char;
+    }
+  }
+  clean = clean.trim();
+  if (clean === "") {
+    return fallbackGuard ? defaultGuardLabel(fallbackGuard) : "Guard";
+  }
+  return clean.slice(0, 100);
+}
+
 /**
  * Coerce anything into valid settings.
  *
@@ -254,6 +411,7 @@ export function normalizeWebhookSettings(value: unknown): WebhookSettings {
     minIntervalMs: clampMinIntervalMs(candidate.minIntervalMs),
     blockThreshold: clampThreshold(candidate.blockThreshold),
     blockWindowSecs: clampWindow(candidate.blockWindowSecs),
+    scopedGuards: normalizeScopedGuards(candidate.scopedGuards),
   };
 }
 
@@ -276,6 +434,11 @@ export function saveWebhookSettings(
   storage: StorageLike | null = defaultStorage(),
 ): WebhookSettings {
   const normalised = normalizeWebhookSettings(settings);
+  // Prevent secret-bearing query parameters from being persisted (#497) without
+  // silently rewriting the operator's destination URL.
+  if (detectWebhookUrlSecretParams(normalised.url).length > 0) {
+    return normalised;
+  }
   if (storage) {
     try {
       storage.setItem(WEBHOOK_SETTINGS_STORAGE_KEY, JSON.stringify(normalised));
@@ -321,6 +484,7 @@ export interface WebhookPayload {
   version: number;
   event: WebhookPayloadEvent;
   guard: string;
+  guardLabel?: string;
   network: string;
   /** ISO 8601, the moment the console built the payload. */
   timestamp: string;
@@ -333,9 +497,10 @@ export interface BuildPayloadInput {
   event: WebhookPayloadEvent;
   guard: string;
   network: string;
+  guardLabel?: string | null | undefined;
   /** Defaults to now; passed explicitly by the tests so a payload is reproducible. */
-  timestamp?: string;
-  details?: WebhookDetails;
+  timestamp?: string | undefined;
+  details?: WebhookDetails | undefined;
 }
 
 /**
@@ -346,10 +511,15 @@ export interface BuildPayloadInput {
  * the same values regardless of how the caller assembled the details.
  */
 export function buildWebhookPayload(input: BuildPayloadInput, secret = ""): WebhookPayload {
+  const safeLabel =
+    input.guardLabel !== undefined && input.guardLabel !== null
+      ? sanitizeGuardLabel(input.guardLabel, input.guard)
+      : undefined;
   return {
     version: WEBHOOK_PAYLOAD_VERSION,
     event: input.event,
     guard: input.guard,
+    ...(safeLabel !== undefined ? { guardLabel: safeLabel } : {}),
     network: input.network,
     timestamp: input.timestamp ?? new Date().toISOString(),
     signed: secret.trim() !== "",
@@ -488,9 +658,16 @@ export function isRateLimited(
 export function dueWebhookEvents(input: {
   settings: WebhookSettings;
   events: readonly WebhookEventType[];
+  guard?: string;
+  network?: string;
   lastSentAt?: Partial<Record<WebhookEventType, number>>;
   nowMs: number;
 }): WebhookEventType[] {
+  if (input.guard && input.network) {
+    if (!isGuardScopedForDelivery(input.settings, input.guard, input.network)) {
+      return [];
+    }
+  }
   const selected = new Set(input.settings.events);
   return input.events.filter(
     (event) =>
@@ -509,7 +686,13 @@ export type DispatchOutcome =
   | "skipped"
   /** The endpoint answered, and not with success. */
   | "rejected"
-  /** The request never completed: DNS, TLS, CORS, offline. */
+  /** The endpoint never answered inside the deadline. */
+  | "timeout"
+  /** The host answered, but the browser would not let this page send to it. */
+  | "cors"
+  /** The request never reached the host: offline, DNS or TLS. */
+  | "network"
+  /** The send could not be attempted or understood: no `fetch`, or a payload that could not be built. */
   | "failed";
 
 export interface DispatchResult {
@@ -521,10 +704,58 @@ export interface DispatchResult {
   payload: WebhookPayload;
 }
 
+/**
+ * How long to wait for an endpoint before the attempt is called a timeout.
+ *
+ * The bound is what makes "Test webhook" usable: without it, an endpoint that
+ * accepts the connection and never answers leaves the button on "Sending…" for
+ * as long as the browser's own socket timeout says — which is minutes, during an
+ * incident. Ten seconds is past any honest webhook's response time and short
+ * enough that an operator notices it.
+ */
+export const WEBHOOK_TIMEOUT_MS = 10_000;
+
 export interface DispatchDeps {
   /** Injected so tests never touch the network. */
   fetch?: typeof fetch;
   nowMs?: number;
+  /** Deadline override, so a test can watch an endpoint that never answers time out. */
+  timeoutMs?: number;
+  /** Test seam for "this browser says it has no network at all". */
+  isOffline?: () => boolean;
+}
+
+/** Raised when the deadline fires, so the failure reads as a timeout, not a `fetch` error. */
+class WebhookTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`The endpoint did not answer within ${Math.round(timeoutMs / 1000)}s.`);
+    this.name = "WebhookTimeoutError";
+  }
+}
+
+/**
+ * Whether the host answers at HTTP level at all.
+ *
+ * `fetch` cannot read a cross-origin failure: the rejection is deliberately
+ * opaque, and "CORS blocked" and "nothing is listening" arrive as the same
+ * `TypeError`. This asks the one question the browser will still answer — does a
+ * simple no-CORS request reach the host? An opaque response means a connection
+ * was made, which is what separates an endpoint that does not allow this origin
+ * from an address that does not exist. The probe is a bare GET with no body and
+ * no custom headers, so it cannot preflight and carries no payload.
+ */
+async function hostAnswers(url: string, doFetch: typeof fetch): Promise<boolean> {
+  try {
+    await doFetch(url, { method: "GET", mode: "no-cors", cache: "no-store" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The browser's own "am I online" flag, which is the cheapest network fact there is. */
+function browserReportsOffline(): boolean {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
 }
 
 /**
@@ -533,10 +764,39 @@ export interface DispatchDeps {
  * A webhook is an outbound call to somebody else's infrastructure, so every
  * failure mode has to survive as a value: a dispatcher that throws into a
  * render effect takes the console down with a misconfigured URL. The
- * distinctions that matter to an operator are preserved — `rejected` (the
- * endpoint answered 4xx/5xx, so the payload or the URL is wrong) is a different
-  problem from `failed` (the request never arrived).
+ * distinctions that matter to an operator are preserved, and they are four
+ * different fixes: `rejected` (the endpoint answered 4xx/5xx — wrong payload or
+ * wrong path), `timeout` (it did not answer — the endpoint is up and the alert
+ * may still have landed), `cors` (the host is fine but does not allow this page
+ * — the endpoint has to change) and `network` (nothing answered at that address).
  */
+let lastDispatchResult: DispatchResult | null = null;
+const dispatchListeners = new Set<() => void>();
+
+/** Latest webhook dispatch outcome observed in this tab (#499). */
+export function getLastWebhookDispatch(): DispatchResult | null {
+  return lastDispatchResult;
+}
+
+/** Subscribe to webhook dispatch outcome updates in this tab (#499). */
+export function subscribeLastWebhookDispatch(listener: () => void): () => void {
+  dispatchListeners.add(listener);
+  return () => {
+    dispatchListeners.delete(listener);
+  };
+}
+
+/** Reset recorded dispatch status (for test isolation). */
+export function clearLastWebhookDispatch(): void {
+  lastDispatchResult = null;
+}
+
+function recordDispatchResult(result: DispatchResult): DispatchResult {
+  lastDispatchResult = result;
+  for (const listener of [...dispatchListeners]) listener();
+  return result;
+}
+
 export async function dispatchWebhook(
   payload: WebhookPayload,
   settings: WebhookSettings,
@@ -546,7 +806,7 @@ export async function dispatchWebhook(
     ok: false,
     outcome,
     status: null,
-    error,
+    error: error === null ? null : redactDiagnosticText(error),
     payload,
   });
 
@@ -559,40 +819,84 @@ export async function dispatchWebhook(
   ) {
     return notSent("skipped", `${payload.event} is not one of the selected alert types.`);
   }
+  if (
+    payload.event !== WEBHOOK_PING_EVENT &&
+    !isGuardScopedForDelivery(settings, payload.guard, payload.network)
+  ) {
+    return notSent(
+      "skipped",
+      `Guard ${payload.guard} is not configured for webhook delivery on ${payload.network}.`,
+    );
+  }
 
   const doFetch = deps.fetch ?? globalThis.fetch;
   if (typeof doFetch !== "function") {
-    return notSent("failed", "This browser has no fetch, so nothing could be sent.");
+    return recordDispatchResult(
+      notSent("failed", "This browser has no fetch, so nothing could be sent."),
+    );
   }
+  const timeoutMs = deps.timeoutMs ?? WEBHOOK_TIMEOUT_MS;
+  const isOffline = deps.isOffline ?? browserReportsOffline;
 
   let request: WebhookRequest;
   try {
     request = await buildWebhookRequest(payload, settings);
   } catch (error) {
-    return notSent("failed", error instanceof Error ? error.message : String(error));
+    return recordDispatchResult(
+      notSent("failed", error instanceof Error ? error.message : String(error)),
+    );
   }
 
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), timeoutMs);
+  // The signal is the polite way to give up; this promise is the guarantee. A
+  // `fetch` that ignores `signal` — an older browser, a test stub — would
+  // otherwise leave the panel waiting for an answer that never comes.
+  const gaveUp = new Promise<never>((_resolve, reject) => {
+    const onAbort = () => reject(new WebhookTimeoutError(timeoutMs));
+    if (controller.signal.aborted) onAbort();
+    else controller.signal.addEventListener("abort", onAbort, { once: true });
+  });
+
   try {
-    const response = await doFetch(request.url, request.init);
+    const response = await Promise.race([
+      doFetch(request.url, { ...request.init, signal: controller.signal }),
+      gaveUp,
+    ]);
     const status = typeof response.status === "number" ? response.status : null;
     if (status !== null && (status < 200 || status >= 300)) {
-      return {
+      return recordDispatchResult({
         ok: false,
         outcome: "rejected",
         status,
         error: `The webhook endpoint answered ${status}.`,
         payload,
-      };
+      });
     }
-    return { ok: true, outcome: "sent", status, error: null, payload };
+    return recordDispatchResult({ ok: true, outcome: "sent", status, error: null, payload });
   } catch (error) {
-    return {
-      ok: false,
-      outcome: "failed",
-      status: null,
-      error: error instanceof Error ? error.message : String(error),
-      payload,
-    };
+    if (error instanceof WebhookTimeoutError || controller.signal.aborted) {
+      return recordDispatchResult({
+        ok: false,
+        outcome: "timeout",
+        status: null,
+        error: redactDiagnosticText(error instanceof Error ? error.message : String(error)),
+        payload,
+      });
+    }
+    const message = redactDiagnosticText(error instanceof Error ? error.message : String(error));
+    if (isOffline()) {
+      return recordDispatchResult(
+        notSent("network", `${message} This browser reports that it is offline.`),
+      );
+    }
+    // The browser collapsed two very different failures into one `TypeError`, so
+    // ask which of them it was instead of guessing from the message text.
+    return recordDispatchResult(
+      notSent((await hostAnswers(request.url, doFetch)) ? "cors" : "network", message),
+    );
+  } finally {
+    clearTimeout(deadline);
   }
 }
 
@@ -612,12 +916,14 @@ export async function dispatchWebhook(
 export function buildVerificationPing(input: {
   guard: string;
   network: string;
-  timestamp?: string;
+  guardLabel?: string | null | undefined;
+  timestamp?: string | undefined;
 }): WebhookPayload {
   return buildWebhookPayload({
     event: WEBHOOK_PING_EVENT,
     guard: input.guard,
     network: input.network,
+    ...(input.guardLabel !== undefined ? { guardLabel: input.guardLabel } : {}),
     ...(input.timestamp === undefined ? {} : { timestamp: input.timestamp }),
     details: {
       message: "Verification ping from the Stellar Agent Guard dashboard.",
@@ -773,8 +1079,16 @@ export function describeDispatch(result: DispatchResult): string {
       return result.error ?? "Nothing was sent.";
     case "rejected":
       return `The endpoint refused it${result.status === null ? "" : ` (${result.status})`}. Check the URL and the payload format.`;
+    case "timeout":
+      // The one outcome that must not be read as "not delivered": the request
+      // may well have arrived and only the response was lost.
+      return `The endpoint did not answer in time${result.error === null ? "" : `: ${result.error}`}. It may still have received the alert, so do not treat this as proof that nothing arrived.`;
+    case "cors":
+      return "The host answered, but the browser would not let this page send to it: the endpoint has to allow this console's origin (CORS). Until it does, no alert from this tab can reach that URL.";
+    case "network":
+      return `The request never reached the host${result.error === null ? "" : `: ${result.error}`}. Check the address, and that this machine has network access.`;
     case "failed":
-      return `The request never completed${result.error === null ? "" : `: ${result.error}`}. A browser will also refuse a cross-origin webhook the endpoint does not allow.`;
+      return `The request could not be sent${result.error === null ? "" : `: ${result.error}`}.`;
   }
 }
 

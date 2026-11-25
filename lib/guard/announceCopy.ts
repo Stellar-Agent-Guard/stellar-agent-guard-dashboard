@@ -108,6 +108,28 @@ function withGuard(spoken: Spoken, guard?: string): Spoken {
   return guard ? { ...spoken, message: `${spoken.message} for guard ${guard}` } : spoken;
 }
 
+/**
+ * Which half of an operator's mark they just touched (#482, #483).
+ *
+ * One record, two controls: a bookmark says "come back to this row" and a note says
+ * "here is what I think about it". They are announced separately because the two
+ * operators' intents differ, and a single "mark saved" would leave a note's author
+ * unable to tell whether the text or the flag took.
+ */
+export type MarkKind = "bookmark" | "note";
+
+/** A mark that was written, phrased as what was written. */
+const MARK_SAVED: Record<MarkKind, string> = {
+  bookmark: "Bookmarked in this browser",
+  note: "Note saved in this browser",
+};
+
+/** The mark as a sentence start, so a failure reads as a sentence. */
+const MARK_HEAD: Record<MarkKind, string> = {
+  bookmark: "Bookmark",
+  note: "Note",
+};
+
 /** The feed's table was frozen while polling carried on behind it. */
 export function streamPaused(): Spoken {
   return {
@@ -127,13 +149,118 @@ export function streamResumed(added: number): Spoken {
   };
 }
 
+/** The operator asked for the current window again, right now (#488). */
+export function feedRefreshed(params: {
+  events: number;
+  failedGuards: number;
+  coalesced: boolean;
+}): Spoken {
+  if (params.coalesced) {
+    return {
+      message:
+        "Refresh requested while a poll round was already running; it will be served as soon as that round returns",
+      priority: "polite",
+    };
+  }
+  if (params.failedGuards > 0) {
+    return {
+      message: `Refresh failed for ${params.failedGuards} guard${
+        params.failedGuards === 1 ? "" : "s"
+      }; the reasons are listed in the feed panel`,
+      priority: "assertive",
+    };
+  }
+  return {
+    // "returned", not "new": a round's page is counted before the feed's dedupe
+    // set has had a say, and a refresh that redelivers nothing already on screen
+    // must not be announced as events the operator has not seen.
+    message:
+      params.events === 0
+        ? "Feed refreshed; no events returned"
+        : `Feed refreshed; ${params.events} event${params.events === 1 ? "" : "s"} returned`,
+    priority: "polite",
+  };
+}
+
+/**
+ * A row was added to, or taken off, the investigation timeline (#489).
+ *
+ * The number is the timeline's total rather than a bare "bookmarked": the point
+ * of pressing the row is to build a sequence, and the count is what tells the
+ * operator the item landed without moving their eyes to the panel below. It is
+ * the total across every saved guard, which is what the list they will read
+ * contains.
+ */
+export function bookmarkToggled(params: { bookmarked: boolean; total: number }): Spoken {
+  const held = `the investigation timeline holds ${params.total} item${
+    params.total === 1 ? "" : "s"
+  }`;
+  return {
+    message: params.bookmarked ? `Bookmarked; ${held}` : `Bookmark removed; ${held}`,
+    priority: "polite",
+  };
+}
+
+/**
+ * A mark was written to this browser.
+ *
+ * Polite — the operator asked for it, and it changes nothing on chain. The wording
+ * carries "in this browser" deliberately: #483's risk is a note being remembered as
+ * something the guard recorded, so the sentence that confirms the save is the one
+ * that says where it lives.
+ *
+ * `anchored: false` is the #482 distinction. A diagnostic row has no transaction and
+ * no ledger, so unlike a committed row it cannot be re-read later — the bookmark is
+ * a memory, not a pointer, and the operator is told that at the moment they make it
+ * rather than when they come back and find nothing to open.
+ */
+export function markSaved(kind: MarkKind, anchored = true): Spoken {
+  const message = MARK_SAVED[kind];
+  return {
+    message: anchored ? message : `${message}; this row has no ledger to re-read it from`,
+    priority: "polite",
+  };
+}
+
+/** The mark, or the last half of it, was deleted. */
+export function markRemoved(kind: MarkKind): Spoken {
+  return { message: `${MARK_HEAD[kind]} removed`, priority: "polite" };
+}
+
+/**
+ * Nothing was written, and why. `reason` is the store's own diagnostic — the note
+ * held a secret key, the row had no stable identity, or the guard's list is full.
+ *
+ * Assertive per rule 1 above: "not saved" on its own is strictly less than what the
+ * sighted operator reads, and the reason is the part that says what to do next.
+ */
+export function markRejected(kind: MarkKind, reason: string): Spoken {
+  return { message: `${MARK_HEAD[kind]} was not saved: ${reason}`, priority: "assertive" };
+}
+
+/**
+ * The mark is live this session but was not written to storage, because the browser
+ * refused the write. Distinct from a rejection: the operator's bookmark *is* on the
+ * row and the "bookmarked only" filter will find it — it simply will not survive a
+ * reload, which is a promise the panel must not quietly drop.
+ */
+export function markNotStored(kind: MarkKind, reason: string): Spoken {
+  return {
+    message: `${MARK_HEAD[kind]} not stored in this browser: ${reason}`,
+    priority: "assertive",
+  };
+}
+
 /**
  * The operator-facing reason a write did not take effect.
  *
  * Ordered by how much each one explains: what the enforced simulation refused
- * and why, then what the network rejected, then a transaction that was only
- * exported — nothing on chain changed, which is the whole point of saying so —
- * and finally the caller's own fallback, which is used for the cases the result
+ * and why, then what the network rejected, then a broadcast that never answered
+ * — which is reported as the unknown it is rather than as a rejection, because
+ * saying "rejected" could send an operator away to make a second, identical
+ * write (issue #344) — then a transaction that was only exported, nothing on
+ * chain changed, which is the whole point of saying so, and finally the caller's
+ * own fallback, which is used for the cases the result
  * type cannot speak for: a write that was included but whose effect a `status()`
  * re-read contradicted.
  *
@@ -144,6 +271,9 @@ export function streamResumed(added: number): Spoken {
 export function writeFailureReason(result: InvokeResult, fallback: string): string {
   if (result.kind === "refused") return `refused during ${result.stage}: ${result.detail}`;
   if (result.kind === "failed") return `the network rejected the transaction: ${result.detail}`;
+  if (result.kind === "ambiguous") {
+    return "the network did not answer the broadcast, so it is not known whether it landed";
+  }
   if (result.kind === "exported") {
     return "the transaction was only exported for offline signing, so nothing on chain changed";
   }

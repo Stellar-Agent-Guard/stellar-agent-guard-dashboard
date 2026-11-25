@@ -16,6 +16,13 @@ The `PanicPanel` component handles crisis response:
    reduces it. Below the threshold the original two-step (acknowledge → sign)
    is unchanged.
 3. Freighter requests signature for `freeze()` transaction.
+
+The confirm dialog first shows the [pre-signature authorization summary](authorization-summary.md) for
+the freeze — the `freeze()` operation, the guard address, the network and the admin account that signs,
+all read back out of the transaction the write builds. The acknowledgement checkbox is bound to that
+summary rather than to a boolean, so switching guard, wallet or network while the dialog is open
+disables **Sign freeze** again, and a freeze this console cannot describe is refused before the wallet
+is ever prompted.
 4. Transaction submits to Soroban RPC.
 5. The dashboard re-reads `status()` from the contract to verify `admin_frozen = true`.
 6. Once verified, the UI updates to the frozen state and exposes the **Unfreeze** action.

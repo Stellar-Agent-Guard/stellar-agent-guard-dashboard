@@ -8,12 +8,17 @@
  * is looking goes unnoticed. This module turns a security-critical event into
  * a chime and a desktop notification — and nothing else.
  *
- * Three decisions shape it:
+ * Four decisions shape it:
  *
  *   - **Opt-in, both ways.** Sound that fires unprompted is a false-alarm
  *     machine, and the Notification permission prompt appears before the user
  *     has any reason to grant it. Both channels default to off, and the desktop
  *     channel is inert until the browser has actually granted permission.
+ *   - **The class choice is separate from the channel choice.** Which event
+ *     classes interrupt is a per-event-class opt-in (#492), not something the
+ *     operator discovers by being woken up. Channels default off and every
+ *     class defaults on, because the opt-in that matters is the one that makes
+ *     noise at all.
  *   - **Synthesised tones, no audio files.** A <200 ms two-beep chime built
  *     from oscillators costs nothing to load, cannot 404, and keeps the byte
  *     budget where it belongs. There is no asset pipeline to trust.
@@ -30,8 +35,47 @@
  * noise.
  */
 import type { GuardEvent } from "stellar-agent-guard-sdk";
+import { DEFAULT_QUIET_HOURS, normalizeQuietHours, type QuietHoursSchedule } from "./quietHours.ts";
 
 export const ALERT_SETTINGS_STORAGE_KEY = "stellar-agent-guard-dashboard.alerts.v1";
+
+// ── The event classes an operator can choose to be interrupted for ─────────
+
+export type SecurityAlertReason = "blocked" | "frozen" | "policy_revoked";
+
+/**
+ * The alertable event classes, in the order the panel lists them and the order
+ * a selection is written to storage.
+ *
+ * A declared order rather than an insertion order: the checkbox list never
+ * reshuffles because of the sequence someone clicked it in, and two tabs with
+ * the same selection store the same bytes. It sits above `AlertSettings`
+ * because the defaults are built from it.
+ */
+export const ALERT_REASON_ORDER: readonly SecurityAlertReason[] = [
+  "blocked",
+  "frozen",
+  "policy_revoked",
+];
+
+/** How each class reads as a checkbox in the panel. */
+export const ALERT_CLASS_LABELS: Record<SecurityAlertReason, string> = {
+  blocked: "Blocked calls",
+  frozen: "Account frozen",
+  policy_revoked: "Policy revoked",
+};
+
+/** One line per class saying what the operator will be woken for. */
+export const ALERT_CLASS_HINTS: Record<SecurityAlertReason, string> = {
+  blocked: "The guard refused a call — an unauthorized transfer or an unexpected contract call.",
+  frozen: "An admin froze the account, so every agent call after it is refused.",
+  policy_revoked: "A policy was revoked, changing the guardrails under live traffic.",
+};
+
+/** Is this value one of *our* classes? Storage and JSON know nothing about the union. */
+export function isSecurityAlertReason(value: unknown): value is SecurityAlertReason {
+  return typeof value === "string" && (ALERT_REASON_ORDER as readonly string[]).includes(value);
+}
 
 export interface AlertSettings {
   /** The Web Audio chime channel. */
@@ -40,13 +84,38 @@ export interface AlertSettings {
   desktop: boolean;
   /** Master gain for the chime, 0..1. */
   volume: number;
+  /**
+   * Which event classes may interrupt, in `ALERT_REASON_ORDER` order.
+   *
+   * The channels decide *how* an operator is interrupted; this decides *what
+   * for*. An empty list is a real configuration — "interrupt me for nothing" —
+   * and the panel has to report it as one rather than as armed.
+   */
+  classes: SecurityAlertReason[];
+  /**
+   * When this tab is allowed to make noise at all (#494).
+   *
+   * A schedule rather than a switch, and a separate module: it is wall-clock
+   * arithmetic in a named zone, and it only ever suppresses the local channels.
+   */
+  quiet: QuietHoursSchedule;
 }
 
-/** Both channels off: an operator has to ask to be interrupted. */
+/**
+ * Both channels off — an operator has to ask to be interrupted — and every
+ * class on.
+ *
+ * The opt-in that keeps someone out of trouble is the channel, not the event:
+ * an operator who turns notifications on has asked to hear about the guard's
+ * refusals, and making them tick three boxes as well is how an alert system
+ * ends up configured to stay quiet.
+ */
 export const DEFAULT_ALERT_SETTINGS: AlertSettings = {
   audio: false,
   desktop: false,
   volume: 0.4,
+  classes: [...ALERT_REASON_ORDER],
+  quiet: DEFAULT_QUIET_HOURS,
 };
 
 export const VOLUME_MIN = 0;
@@ -106,8 +175,6 @@ export function clampVolume(volume: number): number {
 
 // ── Alert condition matching ───────────────────────────────────────────────
 
-export type SecurityAlertReason = "blocked" | "frozen" | "policy_revoked";
-
 /**
  * Which events deserve to interrupt an operator.
  *
@@ -118,6 +185,10 @@ export type SecurityAlertReason = "blocked" | "frozen" | "policy_revoked";
  * not be reading. Everything else — heartbeats, allowed decisions, routine
  * policy installs from this very console — is noise, and alerting on it is how
  * an alert system gets muted.
+ *
+ * That this returns a class at all is what makes the choice per-class: which of
+ * these three an operator wants to hear about is `AlertSettings.classes`, and
+ * `alertClassEnabled` is the only honest reading of it.
  */
 export function alertReasonFor(event: GuardEvent | null | undefined): SecurityAlertReason | null {
   if (!event) return null;
@@ -131,34 +202,101 @@ export function isSecurityCritical(event: GuardEvent | null | undefined): boolea
   return alertReasonFor(event) !== null;
 }
 
-/** Is any alert channel armed? */
-export function alertsArmed(settings: AlertSettings): boolean {
-  return settings.audio || settings.desktop;
+/**
+ * Would an event of this class reach any channel right now?
+ *
+ * The settings go through `normalizeAlertSettings` rather than being read
+ * field-by-field so that a record from before this feature — one with no
+ * `classes` key at all — means every class, not none.
+ */
+export function alertClassEnabled(settings: AlertSettings, reason: SecurityAlertReason): boolean {
+  return normalizeAlertSettings(settings).classes.includes(reason);
 }
+
+/**
+ * Can this configuration interrupt anyone at all?
+ *
+ * A channel on *and* at least one class selected: with every class deselected
+ * the switches are on but nothing can ever fire, and reporting that as "armed"
+ * is the lie #314 exists to prevent. Same tolerance as `alertClassEnabled` —
+ * an object with no `classes` key is a full selection.
+ */
+export function alertsArmed(settings: AlertSettings): boolean {
+  const armed = normalizeAlertSettings(settings);
+  return (armed.audio || armed.desktop) && armed.classes.length > 0;
+}
+
+/**
+ * The longest data summary that goes into a deduplication key.
+ *
+ * The key is kept in a bounded set and, after a reload, in `sessionStorage`; an
+ * unbounded `data` blob (a policy payload is a few kilobytes) would turn both
+ * into a memory problem for a fact the identity fields already settle. A summary
+ * is enough to keep two different events apart.
+ */
+const ALERT_KEY_DATA_LIMIT = 120;
 
 /**
  * A stable identity for the alerting path.
  *
- * `GuardProvider` already de-duplicates the feed, but the alerting effect runs
- * against the whole list on every poll and must not re-chime for an event it
- * announced two minutes ago, so it needs its own key. It deliberately excludes
- * `ledgerClosedAt` — two polls can report the same event with different
- * ingestion timestamps.
+ * The SDK's own `id` is the right answer when it is there: it is derived from
+ * the transaction hash and topic on the committed stream and from a content hash
+ * on the diagnostic one, so the same event re-polled, re-queued, or re-delivered
+ * by another tab keys identically. Two polls can also report the same event with
+ * different ingestion timestamps, which is why `ledgerClosedAt` is deliberately
+ * not part of any key here.
+ *
+ * `id` alone is not sufficient. The committed-stream format is
+ * `ledger:<txHash>:<topic>`, and one transaction can carry several guard
+ * decisions with the same topic — so the decision and a summary of the body ride
+ * alongside it. Without that, a second distinct refusal inside one transaction
+ * would be silently swallowed, which is the failure mode #313 warns about.
+ *
+ * When `id` is absent (an event built by an older SDK path, or a hand-made one
+ * in a test), the composed field fallback keys the same way, and `createAlertTracker`
+ * keeps it bounded either way.
  */
 export function alertEventKey(event: GuardEvent): string {
-  return [
-    event.kind,
-    event.topic,
-    event.source,
-    event.transactionHash ?? "-",
-    event.ledger ?? "-",
-    event.decision?.result ?? "-",
-    event.decision?.reason ?? "-",
-    typeof event.data === "object" && event.data !== null
-      ? JSON.stringify(event.data)
-      : String(event.data ?? "-"),
-  ].join("|");
+  const identity =
+    typeof event.id === "string" && event.id !== ""
+      ? `id:${event.id}`
+      : `fields:${[
+          event.kind,
+          event.topic,
+          event.source,
+          event.transactionHash ?? "-",
+          event.ledger ?? "-",
+        ].join("|")}`;
+  const decision = event.decision
+    ? `${event.decision.result}/${event.decision.reason ?? "-"}`
+    : "-";
+  return `${identity}|${decision}|${summarizeAlertData(event.data)}`;
 }
+
+/**
+ * The event body, reduced to something safe to key on.
+ *
+ * `bigint` is the reason this is not a bare `JSON.stringify`: the guard's
+ * amounts are stroops and arrive as `bigint`, which `JSON.stringify` *throws*
+ * on. A throw inside the alerting effect would take the chime down for every
+ * subsequent event — the one moment an operator most needs it.
+ */
+function summarizeAlertData(data: unknown): string {
+  if (data === null || data === undefined) return "-";
+  let text: string;
+  try {
+    text = JSON.stringify(data, (_key, value: unknown) =>
+      typeof value === "bigint" ? value.toString() : value,
+    );
+  } catch {
+    text = String(data);
+  }
+  if (text === undefined) text = String(data);
+  return text.length > ALERT_KEY_DATA_LIMIT ? `${text.slice(0, ALERT_KEY_DATA_LIMIT)}…` : text;
+}
+
+/** The identities a tracker has already alerted on, oldest first. */
+export type AlertIdentity = string;
 
 /**
  * The events this tab has not alerted on yet.
@@ -166,13 +304,23 @@ export function alertEventKey(event: GuardEvent): string {
  * Bounded so a console left open for a week cannot grow the set without limit;
  * the feed itself is capped at 250 events, so a few hundred keys is more
  * history than any single poll can revisit.
+ *
+ * `initialKeys` is what survives a page reload: the same feed re-primes from the
+ * ledger history, and without a carried-over record every old refusal chimes
+ * again the moment the tab is refreshed. The caller loads them for the *current*
+ * scope (see `loadAlertDedupe`), so switching network or watched-guard set
+ * hands the tracker an empty record instead of another scope's history.
  */
-export function createAlertTracker(limit = 500): {
+export function createAlertTracker(
+  limit = 500,
+  initialKeys: readonly AlertIdentity[] = [],
+): {
   unseen(events: readonly GuardEvent[]): GuardEvent[];
   reset(): void;
+  keys(): AlertIdentity[];
   readonly size: number;
 } {
-  const seen = new Set<string>();
+  const seen = new Set<string>(initialKeys.slice(-Math.max(0, limit)));
   return {
     unseen(events) {
       const fresh: GuardEvent[] = [];
@@ -191,10 +339,115 @@ export function createAlertTracker(limit = 500): {
     reset() {
       seen.clear();
     },
+    keys() {
+      return [...seen];
+    },
     get size() {
       return seen.size;
     },
   };
+}
+
+// ── Deduplication scope and its reload record ──────────────────────────────
+
+/**
+ * What "the same alerts" means, so a change of scope can invalidate the record.
+ *
+ * Event identities are only comparable within one network and one watched guard
+ * set: a testnet refusal and a pubnet refusal can carry the same transaction
+ * hash shape, and an operator who has just switched which guards they tail is
+ * looking at a different stream. #313 asks for exactly this reset, and the
+ * dashboard already scopes per-guard state the same way (`guardScoped.ts`).
+ */
+export interface AlertDedupeScope {
+  network: string;
+  /** The guard addresses whose events this tab is alerting on, in any order. */
+  guards: readonly string[];
+}
+
+export const ALERT_DEDUPE_STORAGE_KEY = "stellar-agent-guard-dashboard.alertDedupe.v1";
+
+/** How many identities are carried across a reload — the tracker's own bound. */
+export const ALERT_DEDUPE_PERSIST_LIMIT = 500;
+
+/** Order-insensitive and de-duplicated, so re-selecting the same set keeps the record. */
+export function alertDedupeScopeKey(scope: AlertDedupeScope): string {
+  const guards = [...new Set(scope.guards)].sort().join(",");
+  return `${scope.network}|${guards}`;
+}
+
+const storedDedupe = (value: unknown): { scope?: unknown; keys?: unknown } | null => {
+  if (typeof value !== "object" || value === null) return null;
+  return value as { scope?: unknown; keys?: unknown };
+};
+
+/** The persisted identities for `scope`, or none when the record is not for it. */
+export function loadAlertDedupe(
+  scope: AlertDedupeScope,
+  storage?: StorageLike | null,
+): AlertIdentity[] {
+  const store = storage === undefined ? defaultDedupeStorage() : storage;
+  if (!store) return [];
+  let raw: string | null = null;
+  try {
+    raw = store.getItem(ALERT_DEDUPE_STORAGE_KEY);
+  } catch {
+    return [];
+  }
+  if (!raw) return [];
+  try {
+    const parsed = storedDedupe(JSON.parse(raw) as unknown);
+    if (!parsed || parsed.scope !== alertDedupeScopeKey(scope)) return [];
+    if (!Array.isArray(parsed.keys)) return [];
+    return parsed.keys
+      .filter((key): key is string => typeof key === "string")
+      .slice(-ALERT_DEDUPE_PERSIST_LIMIT);
+  } catch {
+    // A corrupt record is a missed dedupe, never a broken panel.
+    return [];
+  }
+}
+
+/** Remember the identities for `scope`, best-effort, for the next reload of this tab. */
+export function saveAlertDedupe(
+  scope: AlertDedupeScope,
+  keys: readonly AlertIdentity[],
+  storage?: StorageLike | null,
+): void {
+  const store = storage === undefined ? defaultDedupeStorage() : storage;
+  if (!store) return;
+  try {
+    store.setItem(
+      ALERT_DEDUPE_STORAGE_KEY,
+      JSON.stringify({
+        scope: alertDedupeScopeKey(scope),
+        keys: keys.slice(-ALERT_DEDUPE_PERSIST_LIMIT),
+      }),
+    );
+  } catch {
+    // Private mode or quota: the dedupe stays in memory for this session.
+  }
+}
+
+/**
+ * `sessionStorage`, not `localStorage`.
+ *
+ * The record answers "has *this tab* already chimed for this event?" — a reload
+ * of the same tab should not re-alert its own history, while a second tab on the
+ * wall monitor is a separate operator watching it and starts clean.
+ */
+function defaultDedupeStorage(): StorageLike | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const scope = window.sessionStorage;
+    if (!scope) return null;
+    return {
+      getItem: (key) => scope.getItem(key),
+      setItem: (key, value) => scope.setItem(key, value),
+    };
+  } catch {
+    return null;
+  }
 }
 
 // ── Notification payload ───────────────────────────────────────────────────
@@ -284,7 +537,13 @@ export function readBrowserNotificationApi(win?: unknown): NotificationApi | nul
     new (title: string, options: Record<string, unknown>): unknown;
   };
   return {
-    permission: typeof notification.permission === "string" ? notification.permission : "default",
+    // A getter, not a captured string: `Notification.permission` is a live
+    // static, and an operator who clicks Allow in this session changes it. A
+    // snapshot taken at mount would keep reporting "not granted" — and keep
+    // refusing deliveries the browser would now show — until the page reloads.
+    get permission() {
+      return typeof notification.permission === "string" ? notification.permission : "default";
+    },
     requestPermission: async () => {
       const result = notification.requestPermission?.();
       if (result && typeof (result as Promise<string>).then === "function") {
@@ -354,6 +613,128 @@ export function deliverNotification(
     return { delivered: true, reason: "delivered" };
   } catch {
     return { delivered: false, reason: "failed" };
+  }
+}
+
+// ── Effective channel state (#314) ─────────────────────────────────────────
+
+/**
+ * Whether the desktop channel would actually deliver, as the operator reads it.
+ *
+ * Three different things get conflated when an alert panel only has a toggle:
+ * what the operator asked for, what the browser permits, and what the last
+ * delivery did. An enabled switch beside a denied permission is a lie of
+ * omission — it implies protection the tab cannot provide — so the panel renders
+ * this value rather than the preference alone.
+ */
+export type DesktopEffective =
+  /** The operator has not turned the channel on. */
+  | "off"
+  /** This browser offers no notifications at all (Safari, some webviews, SSR). */
+  | "unsupported"
+  /** The browser has denied permission; only site settings can change that. */
+  | "blocked-by-browser"
+  /** Turned on, permission not yet given — the prompt is waiting on the operator. */
+  | "awaiting-permission"
+  /** Granted, and this tab has not had to show one yet. */
+  | "ready"
+  /** Granted, but the last delivery did not go through. */
+  | "failing"
+  /** Granted, and the last delivery went through. */
+  | "delivering";
+
+export type AudioEffective = "off" | "unsupported" | "needs-unlock" | "ready";
+
+/**
+ * The desktop channel's effective state.
+ *
+ * Permission outranks the delivery record, because a delivery failure recorded
+ * before permission changed describes the old permission, not the new one.
+ * "Granted and nothing has gone wrong" is *not* enough to claim delivery: the
+ * honest reading of granted-with-no-attempt is `ready`, or a reload would report
+ * an alert that never happened.
+ */
+export function desktopEffective(
+  preference: boolean,
+  permission: NotificationPermissionState,
+  lastDelivery: NotificationDelivery | null,
+): DesktopEffective {
+  if (!preference) return "off";
+  if (permission === "unsupported") return "unsupported";
+  if (permission === "denied") return "blocked-by-browser";
+  if (permission !== "granted") return "awaiting-permission";
+  if (!lastDelivery) return "ready";
+  return lastDelivery.delivered ? "delivering" : "failing";
+}
+
+/**
+ * The audio channel's effective state, from the last play report the tab saw.
+ *
+ * No report at all means the chime has not been asked to sound in this tab —
+ * which is exactly the state right after a reload, when the stored preference
+ * says "on" but the browser still needs a gesture before it will play anything.
+ */
+export function audioEffective(
+  preference: boolean,
+  lastPlay: AudioPlayReport | null,
+): AudioEffective {
+  if (!preference) return "off";
+  if (lastPlay?.reason === "unsupported") return "unsupported";
+  if (!lastPlay || !lastPlay.played) return "needs-unlock";
+  return "ready";
+}
+
+/** One honest sentence per state, including what to do about it. */
+export function describeDesktopEffective(state: DesktopEffective): string {
+  switch (state) {
+    case "off":
+      return "Desktop notifications are off.";
+    case "unsupported":
+      return "Desktop notifications are unavailable: this browser offers no Notification API.";
+    case "blocked-by-browser":
+      return "Desktop notifications are blocked by the browser for this site. Re-allow them in site settings — the switch here cannot undo that.";
+    case "awaiting-permission":
+      return "Desktop notifications are on but not yet permitted; the browser has not granted permission.";
+    case "ready":
+      return "Desktop notifications are permitted; nothing has needed to alert since this tab opened.";
+    case "failing":
+      return "Desktop notifications are permitted but the last alert could not be shown.";
+    case "delivering":
+      return "Desktop notifications are permitted and delivering.";
+  }
+}
+
+export function describeAudioEffective(state: AudioEffective): string {
+  switch (state) {
+    case "off":
+      return "The chime is off.";
+    case "unsupported":
+      return "The chime is unavailable: this browser has no Web Audio.";
+    case "needs-unlock":
+      return "The chime is on but has not sounded — the browser needs a click on this page before audio can start.";
+    case "ready":
+      return "The chime is ready.";
+  }
+}
+
+/**
+ * Why a delivery did not happen, in the operator's terms.
+ *
+ * The three refusals are different fixes: `not-allowed` is one click on the
+ * prompt, `unavailable` is a browser without the API, `failed` is the
+ * constructor throwing (enterprise policy, a crashed service worker). Collapsing
+ * them into "failed" is what #314 exists to stop.
+ */
+export function describeNotificationDelivery(delivery: NotificationDelivery): string {
+  switch (delivery.reason) {
+    case "delivered":
+      return "Notification shown.";
+    case "not-allowed":
+      return "Notification not shown: permission was not granted.";
+    case "unavailable":
+      return "Notification not shown: this browser cannot display one.";
+    case "failed":
+      return "Notification not shown: the browser refused to create it.";
   }
 }
 
@@ -523,6 +904,53 @@ function defaultStorage(): StorageLike | null {
   }
 }
 
+/**
+ * Coerce anything into valid settings.
+ *
+ * A stored payload from an older build, a hand-edited `localStorage` entry or a
+ * partially-written object all land here, and every field is validated
+ * independently: one unknown class in the saved list drops that entry, not the
+ * operator's other two, and a garbage volume cannot silence the chime by
+ * becoming `NaN`. Same discipline as `normalizeWebhookSettings`, which is where
+ * this shape comes from.
+ */
+export function normalizeAlertSettings(value: unknown): AlertSettings {
+  if (typeof value !== "object" || value === null) return { ...DEFAULT_ALERT_SETTINGS };
+  const candidate = value as Partial<AlertSettings>;
+  return {
+    audio: candidate.audio === true,
+    desktop: candidate.desktop === true,
+    volume: clampVolume(
+      typeof candidate.volume === "number" ? candidate.volume : DEFAULT_ALERT_SETTINGS.volume,
+    ),
+    classes: normalizeAlertClasses(candidate.classes),
+    quiet: normalizeQuietHours(candidate.quiet),
+  };
+}
+
+/**
+ * The stored class selection, or every class.
+ *
+ * An absent key — or one that is not an array — means *all* classes, not none.
+ * A record written by a build that had no idea classes existed has no `classes`
+ * key, and an operator who had alerts on would come back after an upgrade to a
+ * console that had stopped interrupting them at all. Silently dropping an
+ * operator's alerts on upgrade is the worst failure a security alert system can
+ * have, so the old shape is read as the old behaviour: every security-critical
+ * event. Note that this is the absence of the key, not an empty selection;
+ * `classes: []` is what "interrupt me for nothing" looks like, and it stays
+ * empty.
+ */
+function normalizeAlertClasses(value: unknown): SecurityAlertReason[] {
+  if (!Array.isArray(value)) return [...ALERT_REASON_ORDER];
+  // Validation first, entry by entry, so an unknown class costs itself and
+  // nothing else; then the declared order, so the same selection always reads
+  // and writes identically whatever sequence it arrived in — and repeats
+  // collapse into the one selection they mean.
+  const kept = value.filter(isSecurityAlertReason);
+  return ALERT_REASON_ORDER.filter((reason) => kept.includes(reason));
+}
+
 /** The operator's saved alert settings, or the safe defaults. */
 export function loadAlertSettings(storage?: StorageLike | null): AlertSettings {
   const store = storage === undefined ? defaultStorage() : storage;
@@ -535,15 +963,7 @@ export function loadAlertSettings(storage?: StorageLike | null): AlertSettings {
   }
   if (!raw) return { ...DEFAULT_ALERT_SETTINGS };
   try {
-    const parsed = JSON.parse(raw) as Partial<AlertSettings> | null;
-    if (!parsed || typeof parsed !== "object") return { ...DEFAULT_ALERT_SETTINGS };
-    return {
-      audio: parsed.audio === true,
-      desktop: parsed.desktop === true,
-      volume: clampVolume(
-        typeof parsed.volume === "number" ? parsed.volume : DEFAULT_ALERT_SETTINGS.volume,
-      ),
-    };
+    return normalizeAlertSettings(JSON.parse(raw) as unknown);
   } catch {
     // Corrupt storage is a lost preference, not a reason to break the panel.
     return { ...DEFAULT_ALERT_SETTINGS };
@@ -554,10 +974,10 @@ export function saveAlertSettings(settings: AlertSettings, storage?: StorageLike
   const store = storage === undefined ? defaultStorage() : storage;
   if (!store) return;
   try {
-    store.setItem(
-      ALERT_SETTINGS_STORAGE_KEY,
-      JSON.stringify({ ...settings, volume: clampVolume(settings.volume) }),
-    );
+    // Normalised on the way in, so what lands in storage is what a later read
+    // would return anyway: a clamped volume, a class list the UI can index, and
+    // nothing that came from a form field as a string.
+    store.setItem(ALERT_SETTINGS_STORAGE_KEY, JSON.stringify(normalizeAlertSettings(settings)));
   } catch {
     // A private-mode write only loses the preference for this session.
   }

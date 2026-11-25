@@ -42,6 +42,7 @@ import {
   type PolicyConfig,
   decodePolicy,
 } from "stellar-agent-guard-sdk";
+import { decodeValidationOutcome, type ValidationOutcome } from "./policyPreflight.ts";
 import { withTimeout, DashboardReadError } from "./timeout.ts";
 import { buildReadDiagnostic, redactDiagnosticText } from "../rpc/timeouts.ts";
 
@@ -145,13 +146,50 @@ export async function readContract<T = unknown>(
   }
 }
 
+export function isValidGuardStatus(val: unknown): val is GuardStatus {
+  if (!val || typeof val !== "object" || Array.isArray(val)) return false;
+  const s = val as Record<string, unknown>;
+  const hasAdminFrozen = typeof s.admin_frozen === "boolean";
+  const hasHeartbeatExpired = typeof s.heartbeat_expired === "boolean";
+  const hasLastHeartbeat =
+    typeof s.last_heartbeat === "bigint" || typeof s.last_heartbeat === "number";
+  const hasNow = typeof s.now === "bigint" || typeof s.now === "number";
+  return hasAdminFrozen && hasHeartbeatExpired && hasLastHeartbeat && hasNow;
+}
+
+export function isValidPolicyConfig(val: unknown): val is PolicyConfig {
+  if (!val || typeof val !== "object" || Array.isArray(val)) return false;
+  const p = val as Record<string, unknown>;
+  return (
+    typeof p.per_tx_cap === "bigint" &&
+    typeof p.window_secs === "bigint" &&
+    typeof p.window_cap === "bigint" &&
+    Array.isArray(p.assets) &&
+    Array.isArray(p.protocols) &&
+    Array.isArray(p.recipients) &&
+    typeof p.allow_any_recipient === "boolean" &&
+    typeof p.active_from === "bigint" &&
+    typeof p.active_until === "bigint" &&
+    typeof p.paused === "boolean" &&
+    typeof p.dms_grace_secs === "bigint"
+  );
+}
+
 export async function readStatus(
   server: rpc.Server,
   guard: string,
   source?: string,
 ): Promise<ReadResult<GuardStatus>> {
   return await withTimeout(async () => {
-    return readContract<GuardStatus>(server, guard, "status", [], source);
+    return readContract<GuardStatus>(server, guard, "status", [], source, (retval) => {
+      const native = scValToNative(retval);
+      if (!isValidGuardStatus(native)) {
+        throw new Error(
+          "malformed GuardStatus payload from RPC: missing required status fields (not in guard's shape)",
+        );
+      }
+      return native;
+    });
   });
 }
 
@@ -168,8 +206,41 @@ export function readPolicy(
   guard: string,
   source?: string,
 ): Promise<ReadResult<PolicyConfig | null>> {
-  return readContract<PolicyConfig | null>(server, guard, "policy", [], source, (retval) =>
-    retval.type === "scvVoid" ? null : decodePolicy(retval),
+  return readContract<PolicyConfig | null>(server, guard, "policy", [], source, (retval) => {
+    if (retval.type === "scvVoid") return null;
+    const policy = decodePolicy(retval);
+    if (!isValidPolicyConfig(policy)) {
+      throw new Error("malformed PolicyConfig payload from RPC: missing required policy fields");
+    }
+    return policy;
+  });
+}
+
+/**
+ * The `validate_policy` dry run (SPEC §8.1, contracts issue #35): would this
+ * *candidate* config pass `set_policy`, and if not, which §8 rule fails first?
+ *
+ * A read like any other — no auth, no events, no state writes — so it is safe to
+ * call before a wallet is ever prompted. `config` is the very same encoded
+ * `ScVal` the write would send, which is what makes the answer meaningful: the
+ * contract validates the bytes it is handed, not a re-encoding of them.
+ *
+ * Failures stay failures (`{ ok: false }`), never a verdict: see
+ * `preflightDecision` for why a missing read never blocks the write.
+ */
+export function validatePolicy(
+  server: rpc.Server,
+  guard: string,
+  config: Xdr.ScVal,
+  source?: string,
+): Promise<ReadResult<ValidationOutcome>> {
+  return readContract<ValidationOutcome>(
+    server,
+    guard,
+    "validate_policy",
+    [config],
+    source,
+    decodeValidationOutcome,
   );
 }
 
@@ -354,9 +425,31 @@ export async function readNativeXlmBalance(
 ): Promise<ReadResult<bigint>> {
   try {
     const response = await server.getAssetBalance(guard, Asset.native(), passphrase);
+    if (!response || typeof response !== "object") {
+      return readFailure(
+        server,
+        "getAssetBalance(native XLM)",
+        "malformed RPC response: expected asset balance object",
+      );
+    }
     const entry = response.balanceEntry;
     if (!entry) return { ok: true, value: 0n };
-    return { ok: true, value: BigInt(entry.amount) };
+    if (typeof entry !== "object" || entry.amount === undefined || entry.amount === null) {
+      return readFailure(
+        server,
+        "getAssetBalance(native XLM)",
+        "malformed balanceEntry: missing amount",
+      );
+    }
+    const amountStr = String(entry.amount).trim();
+    if (!/^\d+$/.test(amountStr)) {
+      return readFailure(
+        server,
+        "getAssetBalance(native XLM)",
+        `malformed balanceEntry: invalid amount "${entry.amount}"`,
+      );
+    }
+    return { ok: true, value: BigInt(amountStr) };
   } catch (error) {
     return readFailure(server, "getAssetBalance(native XLM)", error);
   }

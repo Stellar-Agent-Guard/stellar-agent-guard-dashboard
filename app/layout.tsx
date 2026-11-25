@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { DemoBadge } from "../components/DemoBadge.tsx";
+import { HeaderRefreshStatus } from "../components/HeaderRefreshStatus.tsx";
 import { SecretKeyGuard } from "../components/SecretKeyGuard.tsx";
 import { Tabs } from "../components/bits.tsx";
 import { AriaAnnouncer } from "../components/AriaAnnouncer.tsx";
@@ -10,6 +11,7 @@ import { ToastContainer } from "../components/ToastContainer.tsx";
 import { UnsavedChangesProvider } from "../components/UnsavedChangesProvider.tsx";
 import { PWA_MANIFEST_PATH, PWA_THEME_COLOR } from "../lib/guard/pwa.ts";
 import { NETWORK } from "../lib/guard/network.ts";
+import { helpHref } from "../lib/guard/helpLinks.ts";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -82,7 +84,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     contracts
                   </a>
                   <a href="https://github.com/aigbagbobila/stellar-agent-guard-sdk">sdk</a>
+                  <a
+                    href={helpHref("keyboard")}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-testid="keyboard-help-link"
+                  >
+                    keyboard help
+                  </a>
                 </div>
+                <HeaderRefreshStatus />
               </header>
               <div
                 className="row"

@@ -145,6 +145,8 @@ function contextFor() {
       cappedLabels: [],
       health: POLL_OFF,
       gaps: [],
+      failures: [],
+      refresh: async () => null,
     },
     stream: { paused: false, pendingCount: 0, dropped: 0 },
     startWatching: () => {},

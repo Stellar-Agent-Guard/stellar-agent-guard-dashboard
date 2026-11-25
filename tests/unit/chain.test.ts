@@ -27,6 +27,7 @@ import {
   readPolicy,
   readStatus,
   readWindow,
+  validatePolicy,
   verifyWasmIdentity,
 } from "../../lib/guard/chain.ts";
 import { GuardFeed, refusedEventsFromDiagnostics } from "../../lib/guard/telemetry.ts";
@@ -116,8 +117,28 @@ describe("readContract / readStatus / readPolicy", () => {
     assert.match(!limited.ok ? limited.error : "", /429/);
 
     // …and the next poll, once the limiter lets go, succeeds.
-    mock.onSimulate({ fn: "status" }, simSuccess(xdr.ScVal.scvBool(true)));
-    assert.deepEqual(await readStatus(server, MOCK_GUARD), { ok: true, value: true });
+    mock.onSimulate(
+      { fn: "status" },
+      simSuccess(
+        guardStatusScVal({
+          admin_frozen: false,
+          has_policy: true,
+          heartbeat_expired: false,
+          last_heartbeat: 1_789_481_712,
+          now: 1_789_481_732,
+        }),
+      ),
+    );
+    assert.deepEqual(await readStatus(server, MOCK_GUARD), {
+      ok: true,
+      value: {
+        admin_frozen: false,
+        has_policy: true,
+        heartbeat_expired: false,
+        last_heartbeat: 1_789_481_712n,
+        now: 1_789_481_732n,
+      },
+    });
   });
 
   test("reads are simulated from the fallback source and carry pre-encoded args", async () => {
@@ -133,6 +154,72 @@ describe("readContract / readStatus / readPolicy", () => {
     assert.equal(seen.args.length, 1);
     assert.equal(seen.args[0]!.toXDR("base64"), arg.toXDR("base64"));
     assert.match(seen.source, /^G[A-Z2-7]{55}$/);
+  });
+});
+
+describe("validatePolicy", () => {
+  test("sends the candidate config verbatim and decodes the failing rule", async () => {
+    let call: Invocation | null = null;
+    mock.onSimulate({ contractId: MOCK_GUARD, fn: "validate_policy" }, (invocation) => {
+      call = invocation;
+      return simSuccess(
+        xdr.ScVal.scvVec([
+          xdr.ScVal.scvSymbol("Invalid"),
+          xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("WindowRequiresWidth")]),
+        ]),
+      );
+    });
+    const config = xdr.ScVal.scvMap([
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("window_cap"),
+        // The value is irrelevant here: the test pins byte-for-byte passthrough
+        // of whatever encoded config the form built.
+        val: xdr.ScVal.scvU32(1),
+      }),
+    ]);
+
+    const result = await validatePolicy(server, MOCK_GUARD, config);
+
+    assert.deepEqual(result, {
+      ok: true,
+      value: { kind: "invalid", rule: "WindowRequiresWidth" },
+    });
+    assert.ok(call, "the preflight reached the RPC");
+    const seen = call as Invocation;
+    assert.equal(seen.args.length, 1, "the preflight carries exactly the candidate config");
+    assert.equal(
+      seen.args[0]!.toXDR("base64"),
+      config.toXDR("base64"),
+      "the bytes sent to validate_policy are the bytes set_policy would send",
+    );
+  });
+
+  test("Valid reads back as a passing verdict", async () => {
+    mock.onSimulate(
+      { fn: "validate_policy" },
+      simSuccess(xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Valid")])),
+    );
+    assert.deepEqual(await validatePolicy(server, MOCK_GUARD, xdr.ScVal.scvVoid()), {
+      ok: true,
+      value: { kind: "valid" },
+    });
+  });
+
+  test("a contract trap on an older guard is a failed read, not a verdict", async () => {
+    // The entry point is additive: a guard deployed before issue #35's
+    // `validate_policy` exists traps here, and that must not read as either
+    // verdict — the caller treats no-verdict as "proceed" (issue #259).
+    mock.onSimulate({ fn: "validate_policy" }, contractTrap(4));
+    const result = await validatePolicy(server, MOCK_GUARD, xdr.ScVal.scvVoid());
+    assert.equal(result.ok, false);
+    assert.match(!result.ok ? result.error : "", /Error\(Contract, #4\)/);
+  });
+
+  test("an undecodable payload fails the read instead of reading as Valid", async () => {
+    mock.onSimulate({ fn: "validate_policy" }, simSuccess(xdr.ScVal.scvBool(true)));
+    const result = await validatePolicy(server, MOCK_GUARD, xdr.ScVal.scvVoid());
+    assert.equal(result.ok, false);
+    assert.match(!result.ok ? result.error : "", /unexpected validate_policy payload/);
   });
 });
 

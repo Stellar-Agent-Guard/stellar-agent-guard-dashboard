@@ -29,6 +29,7 @@ import {
   captureRegistryBackup,
   planBulkCleanup,
   restoreRegistryBackup,
+  type RegistryBackup,
 } from "../../lib/guard/registry.ts";
 
 const PHASE1 = KNOWN_INSTANCES[0]!.guard;
@@ -465,5 +466,270 @@ describe("bulk cleanup of stale registry entries", () => {
       false,
       "a Testnet bucket never receives a Mainnet address",
     );
+  });
+});
+
+// ── Issue #481: what `docs/guides/registry-backups.md` claims about a backup ─
+//
+// The guide's whole value is the boundary: a backup is this browser's address
+// list, and everything else about a guard is chain state re-read on each
+// refresh. Each test below pins one sentence of that guide, including the two
+// places the code is weaker than an operator would assume — the label a restore
+// overwrites, and the network refusal the fleet undo never triggers.
+
+describe("registry backup contents and restore conflicts (issue #481)", () => {
+  it("captures the envelope's four fields and each entry's five, and nothing else", () => {
+    const storage = memoryStorage();
+    rememberForTest(ADDED, "Treasury", "testnet", storage);
+    rememberForTest(OTHER, "Hot wallet", "testnet", storage);
+
+    const backup = captureRegistryBackup({ storage, activeGuard: ADDED });
+
+    assert.deepEqual(Object.keys(backup).sort(), [
+      "activeGuard",
+      "capturedAt",
+      "entries",
+      "network",
+    ]);
+    assert.equal(backup.network, "testnet");
+    assert.equal(backup.activeGuard, ADDED);
+    assert.equal(backup.entries.length, 2);
+
+    // The complete `GuardInstance`: five keys, no more. This is the assertion
+    // that falsifies the guide's "what each entry holds" table.
+    for (const entry of backup.entries) {
+      assert.deepEqual(Object.keys(entry).sort(), [
+        "addedAt",
+        "guard",
+        "label",
+        "network",
+        "provenance",
+      ]);
+    }
+    const treasury = backup.entries.find((entry) => entry.guard === ADDED)!;
+    assert.deepEqual(treasury, {
+      guard: ADDED,
+      label: "Treasury",
+      network: "testnet",
+      addedAt: treasury.addedAt,
+      provenance: "Added from this browser.",
+    });
+    assert.match(treasury.addedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+
+    // A backup carries no policy, no status, no spend and no key material,
+    // because none of it reaches this store on any path.
+    const serialized = JSON.stringify(backup);
+    for (const absent of [
+      "per_tx_cap",
+      "window_cap",
+      "window_secs",
+      "dms_grace_secs",
+      "allow_any_recipient",
+      "recipients",
+      "protocols",
+      "admin_frozen",
+      "heartbeat_expired",
+      "last_heartbeat",
+      "paused",
+      "secret",
+      "private_key",
+      "signature",
+    ]) {
+      assert.ok(!serialized.includes(absent), `a backup must not carry ${absent}`);
+    }
+  });
+
+  it("excludes build-seeded guards, but captures the saved shadow a rename creates", () => {
+    const storage = memoryStorage();
+    rememberForTest(ADDED, "Treasury", "testnet", storage);
+
+    const seeded = captureRegistryBackup({ storage });
+    assert.deepEqual(
+      seeded.entries.map((entry) => entry.guard),
+      [ADDED],
+      "the selector offers the known guards, but a capture never contains them",
+    );
+    for (const known of KNOWN_INSTANCES) {
+      assert.equal(
+        seeded.entries.some((entry) => entry.guard === known.guard),
+        false,
+        "a build-seeded instance is a constant, not stored state",
+      );
+    }
+
+    // Renaming a seeded guard writes a saved entry, so the operator's name
+    // survives a cleanup even though the address was never at risk.
+    renameInstance(PHASE1, "Our Phase 1", { storage });
+    const renamed = captureRegistryBackup({ storage });
+    const shadow = renamed.entries.find((entry) => entry.guard === PHASE1);
+    assert.ok(shadow, "the rename is stored, so the capture holds it");
+    assert.equal(shadow!.label, "Our Phase 1");
+    assert.match(shadow!.provenance, /^Renamed from this browser\./);
+  });
+
+  it("restores the captured label over a rename made after the capture", () => {
+    const storage = memoryStorage();
+    rememberForTest(ADDED, "Treasury", "testnet", storage);
+    const backup = captureRegistryBackup({ storage });
+
+    renameInstance(ADDED, "Cold - do not touch", { storage });
+    assert.equal(findInstance(ADDED, { storage })!.label, "Cold - do not touch");
+
+    const result = restoreRegistryBackup(backup, { storage });
+
+    // Merge is `[...entries, ...saved]` with first-seen winning, so the older
+    // capture wins the address and the operator's rename is silently lost.
+    assert.equal(result.ok, true);
+    assert.equal(result.error, null, "no conflict is reported for the overwritten label");
+    assert.equal(findInstance(ADDED, { storage })!.label, "Treasury");
+  });
+
+  it("drops another network's entry when restoring a backup, and says nothing", () => {
+    const storage = memoryStorage();
+    const local: GuardInstance = {
+      guard: ADDED,
+      label: "Testnet guard",
+      network: "testnet",
+      addedAt: KNOWN_INSTANCE_ADDED_AT,
+      provenance: "test",
+    };
+    const foreign: GuardInstance = { ...local, guard: OTHER, network: "mainnet" };
+    const backup: RegistryBackup = {
+      network: "testnet",
+      capturedAt: "2026-11-01T00:00:00.000Z",
+      activeGuard: "",
+      entries: [local, foreign],
+    };
+
+    const result = restoreRegistryBackup(backup, { storage });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.error, null, "a dropped entry is not reported");
+    const saved = loadInstances({ storage }).filter((instance) => !isKnownInstance(instance.guard));
+    assert.deepEqual(
+      saved.map((instance) => instance.guard),
+      [ADDED],
+    );
+    assert.equal(
+      storage.dump()[instanceStorageKey("mainnet")],
+      undefined,
+      "the other network's bucket is not written either",
+    );
+  });
+
+  it("drops a malformed address in a captured backup instead of throwing", () => {
+    const storage = memoryStorage();
+    rememberForTest(ADDED, "Treasury", "testnet", storage);
+    const backup = captureRegistryBackup({ storage });
+    const malformed: GuardInstance = {
+      guard: "GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO",
+      label: "Not a contract address",
+      network: "testnet",
+      addedAt: KNOWN_INSTANCE_ADDED_AT,
+      provenance: "test",
+    };
+    backup.entries.push(malformed);
+
+    const result = restoreRegistryBackup(backup, { storage });
+
+    assert.equal(result.ok, true, "the restore completes; the bad entry is skipped");
+    assert.equal(result.error, null);
+    assert.equal(
+      loadInstances({ storage }).some((instance) => instance.guard === malformed.guard),
+      false,
+    );
+    assert.equal(findInstance(ADDED, { storage }) !== null, true, "the valid entry survived");
+  });
+
+  it("reports no network refusal when the caller names no target network", () => {
+    const storage = memoryStorage();
+    rememberForTest(ADDED, "Treasury", "testnet", storage);
+    const backup = captureRegistryBackup({ storage });
+
+    // The guard reads `options.network ?? backup.network`, so with no target
+    // passed `backup.network !== network` can never be true and the refusal in
+    // "refuses a restore that names another network" above is unreachable from
+    // this call shape. Only the per-entry filter in `restoreInstances` protects
+    // the bucket here (see the guide's network-scoping section).
+    const defaulted = restoreRegistryBackup(backup, { storage });
+    assert.equal(defaulted.ok, true);
+    assert.equal(defaulted.error, null);
+    assert.equal(findInstance(ADDED, { storage }) !== null, true);
+  });
+
+  it("with no options at all writes the backup's own bucket, as the fleet undo does", () => {
+    const storage = memoryStorage();
+    rememberForTest(ADDED, "Treasury", "testnet", storage);
+    rememberForTest(OTHER, "Hot wallet", "testnet", storage);
+    const backup = captureRegistryBackup({ storage, activeGuard: ADDED });
+    assert.equal(removeInstances([ADDED, OTHER], { storage }).ok, true);
+
+    // `restoreRegistry` in `components/GuardProvider.tsx` calls
+    // `restoreRegistryBackup(backup)` with no second argument, so storage comes
+    // from `window.localStorage` and the target network from the backup itself.
+    type BrowserWindow = { localStorage: StorageLike };
+    const globalScope = globalThis as unknown as { window?: BrowserWindow };
+    const previousWindow = globalScope.window;
+    globalScope.window = { localStorage: storage };
+    try {
+      const result = restoreRegistryBackup(backup);
+      assert.equal(result.ok, true);
+      assert.equal(result.error, null);
+      const saved = loadInstances({ storage }).filter(
+        (instance) => !isKnownInstance(instance.guard),
+      );
+      assert.deepEqual(saved.map((instance) => instance.guard).sort(), [ADDED, OTHER].sort());
+      assert.ok(
+        storage.dump()[instanceStorageKey(backup.network)],
+        "written to the bucket the backup names",
+      );
+      assert.equal(
+        storage.dump()[instanceStorageKey("mainnet")],
+        undefined,
+        "and to no other bucket",
+      );
+    } finally {
+      if (previousWindow === undefined) delete globalScope.window;
+      else globalScope.window = previousWindow;
+    }
+  });
+
+  it("caps a restore at INSTANCE_LIMIT, so what falls off is what was added later", () => {
+    const storage = memoryStorage();
+    const captured = Array.from({ length: 30 }, (_, index) => syntheticAddress(index));
+    for (const guard of captured)
+      rememberForTest(guard, `Captured ${guard.slice(-4)}`, "testnet", storage);
+    const backup = captureRegistryBackup({ storage });
+    assert.equal(backup.entries.length, 30);
+
+    // The cleanup takes the captured entries away, then 50 different guards are
+    // added. A restore now has 80 candidates for a 50-entry store.
+    assert.equal(removeInstances(captured, { storage }).ok, true);
+    const addedLater = Array.from({ length: 50 }, (_, index) => syntheticAddress(index + 30));
+    for (const guard of addedLater)
+      rememberForTest(guard, `Later ${guard.slice(-4)}`, "testnet", storage);
+
+    const result = restoreRegistryBackup(backup, { storage });
+    assert.equal(result.ok, true);
+    assert.equal(result.error, null, "the truncated entries are not reported");
+
+    const saved = loadInstances({ storage }).filter((instance) => !isKnownInstance(instance.guard));
+    assert.equal(saved.length, INSTANCE_LIMIT);
+    for (const guard of captured) {
+      assert.ok(
+        saved.some((instance) => instance.guard === guard),
+        "the backup is restored first",
+      );
+    }
+    for (const guard of addedLater.slice(0, 20)) {
+      assert.ok(saved.some((instance) => instance.guard === guard));
+    }
+    for (const guard of addedLater.slice(20)) {
+      assert.equal(
+        saved.some((instance) => instance.guard === guard),
+        false,
+        "the merge is cut after the captured entries, so the newest saves are the ones lost",
+      );
+    }
   });
 });
