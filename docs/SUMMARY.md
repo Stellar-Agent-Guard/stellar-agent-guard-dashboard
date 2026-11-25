@@ -24,6 +24,7 @@
   - [Agent Integration](guides/agent-integration.md)
   - [Air-Gapped Multisig Signing](guides/air-gapped-multisig-signing.md)
   - [Keyboard & Screen-Reader Guide](guides/keyboard-and-screen-reader.md)
+  - [Registry Backups vs. On-Chain State](guides/registry-backups.md)
 - [Architecture](architecture.md)
 - [Glossary](glossary.md)
 - [Testnet Verification](verification.md)

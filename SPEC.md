@@ -282,7 +282,7 @@ which is a different and much weaker statement. If step 6 fails, the console say
 
 ## 7. Telemetry semantics
 
-Three facts shape the feed, and each is stated in the UI rather than hidden:
+Four facts shape the feed, and each is stated in the UI rather than hidden:
 
 1. **Soroban has no push stream.** "Real time" here means cursor-based `getEvents` polling. The cursor
    is carried forward rather than re-derived from a ledger number, because re-scanning from a ledger
@@ -294,6 +294,22 @@ Three facts shape the feed, and each is stated in the UI rather than hidden:
    enforced simulation's diagnostics and labelled `diagnostic`.
 
 3. **Tailing N guards costs N poll loops.** The SDK's telemetry listener is single-guard (`getEvents` is filtered per contract), so a simultaneous tail is a fan-out of listener instances. The feed therefore supervises at most `FEED_GUARD_CAP` (5) guards at a time; registry entries beyond the cap are named as **not tailed** rather than dropped silently, and the poll load is documented as scaling with the number watched. Listener instances are reconciled (added/removed/stopped) on every registry change, so churn leaves exactly one listener per watched guard and no leak.
+
+4. **A decoded label is not a value the event carried.** A row mixes three kinds of field, and the
+   distinction is an authority question, not a formatting one: `ledger`, `ledgerClosedAt`,
+   `transactionHash` and the retained event XDR were said by the chain, while `kind`, `decision`,
+   `decision.reason` and `contractId` were _concluded_ by `stellar-agent-guard-sdk` from the topic
+   symbols (`interpret()`, `decodeAuthDecision()`), and `observedAt` was stamped by this tab's clock.
+   Every row therefore reports its origin per field — `decoded by stellar-agent-guard-sdk 0.1.1 · 4 raw
+· 5 decoded · 0 unknown` — counted in [`lib/guard/decodeProvenance.ts`](./lib/guard/decodeProvenance.ts).
+   The rule that makes the count worth having is that a **placeholder is never `decoded`**: the SDK's
+   `?`, `unknown contract`, `Unrecognised guard reason: …` and `unknown_reason_<code>` strings read like
+   answers, so a refusal whose reason symbol is missing is reported as an unknown and rendered as
+   `reason unknown` rather than as `blocked`. A field is only counted when the row displays it, which is
+   what keeps an _allowed_ decision (whose reason the contract normalises to `null`) from claiming a gap
+   it does not have. The decoder's version is a literal pinned in test against the installed package's
+   manifest, because the SDK publishes no runtime version and its `exports` map hides its own
+   `package.json` from a browser bundle.
 
 An empty feed is therefore **not** evidence that nothing was refused on chain, and the panel says so. Nor is it evidence that _every_ registered guard was watched — when the cap is in force, the panel says which guards are outside it.
 
@@ -320,7 +336,7 @@ with its source, its refresh trigger, and whether it is allowed to be wrong.
 | Address book                                         | **`localStorage`** (`…addressBook.v1`)                                                          | user action                                                  | yes — convenience data, carries no fund authority                                                            |
 | Operator marks on feed rows                          | **`localStorage`** (`…scoped.v1.eventMarks.<network>.<guard>`)                                  | user action (bookmark, note)                                 | yes — the mark is this browser's annotation of a row, never a fact about the guard; it is never exported     |
 | Transaction history                                  | **`localStorage`** (`…txHistory.v1`)                                                            | after each submission                                        | yes — it records what this browser submitted; the chain is authoritative                                     |
-| Layout / theme / alert / idle preferences            | **`localStorage`** (`…layout.v1`, `…namedLayouts.v1`, `theme`, `…idleTimeout.v1`, `…alerts.v1`) | user action                                                  | yes — presentation only                                                                                      |
+| Layout / theme / alert / idle preferences            | **`localStorage`** (`…layout.v1`, `…namedLayouts.v1`, `theme`, `…idleTimeout.v1`, `…alerts.v1`) | user action                                                  | yes — presentation and _this tab's_ alert gating; it cannot change what the chain says                       |
 | Wallet-provider preference                           | **`localStorage`** (`…walletProvider.v1`)                                                       | user action (connector pick)                                 | yes — convenience, carries no authority                                                                      |
 | Multisig approval evaluation                         | pasted envelope is component-local; signer weights/thresholds are read live from Horizon        | on paste / on demand                                         | n/a for the pasted envelope; the account's signers are re-read, not cached                                   |
 | Tab-sync envelope                                    | **`localStorage`** (`…tab-sync.v1`) when `BroadcastChannel` is unavailable                      | transient                                                    | n/a — a transport, not state; receiving tabs re-read the chain (§7)                                          |
@@ -338,6 +354,46 @@ They live in a side map keyed by the event's identity, never on the event object
 webhook surface — each a function of the `GuardEvent`s it is handed — is structurally incapable of
 carrying one. `tests/unit/eventMarks.test.ts` pins that by logging storage reads during export rather
 than by searching the output for a word.
+
+### Alert delivery is a local preference, in four parts
+
+Opt-in alerts sit on top of the feed and are governed by one stored record,
+`stellar-agent-guard-dashboard.alerts.v1`, which holds four independent things — and is the clearest
+case of a stored value being an _input to a decision about noise_, never a substitute for a chain read.
+
+| Part                        | What it decides                                                       | Default                                                 |
+| --------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------- |
+| Channel (`audio`/`desktop`) | whether this tab may chime, and whether it may raise a notification   | both **off** — an alert system must never ambush anyone |
+| Event classes               | which of `blocked` / `frozen` / `policy_revoked` may interrupt at all | all three on; a record with no class list keeps them on |
+| Quiet-hours schedule        | whether the local wall-clock window currently holds noise back        | off, `22:00`–`07:00` in a named IANA zone               |
+| Break-through list          | which classes still alert inside that window                          | `frozen`, `policy_revoked`                              |
+
+Three boundaries hold across all four:
+
+1. **Nothing here can suppress a decision.** Quiet hours and class selection act on this tab's chime and
+   its notifications only. The guard's enforcement, the ledger, and every row in the feed are
+   unaffected, and the panel says so in the same sentence that states the window.
+2. **A held-back alert is not a queued alert.** An event suppressed by class, by quiet hours, or by a
+   denied permission is still recorded as _seen_, so re-enabling the choice never replays the history
+   that accumulated while it was off — the same rule a reload follows, and the reason an absent class
+   list reads as _every class_ rather than as none: a record written before the choice existed belongs to
+   an operator who had alerts on, and an upgrade must not go silent on them.
+3. **A switch is not a claim.** The panel prints the channel's _effective_ state apart from the
+   operator's preference: the browser's permission and the last actual delivery or chime play are
+   reported as what the browser did, and a channel that is on while nothing can fire reads
+   `nothing will alert` with the pill at `off`, never `armed`.
+
+Quiet hours are evaluated on the **local wall clock** rather than a UTC minute count, because "at night"
+is a statement about a zone. The instant is converted with `Intl` in the schedule's own named zone, so
+the daylight-saving cases fall out of the arithmetic instead of needing special handling: on a
+spring-forward day a window covering the skipped hour matches nothing, and on a fall-back day the
+repeated wall time is quiet on both occurrences — the safe reading of a schedule. The panel discloses
+what that choice costs rather than hiding it: the offset actually in force, and, on a transitioning day,
+that the local day is 23 or 25 hours long so the window runs an hour shorter or longer in real time. The
+window is only ever rendered from a ticked clock held in state, never from a clock read during render.
+An unusable stored zone falls back to UTC **and says it has**, and a schedule that cannot be read leaves
+the alert loud; the failure mode this module refuses is a console that goes quiet for a reason it never
+told anyone about (`lib/guard/quietHours.ts`, `tests/unit/quietHours.test.ts`).
 
 ### Browser persistence inventory
 

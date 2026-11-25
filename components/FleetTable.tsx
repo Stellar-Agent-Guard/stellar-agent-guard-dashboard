@@ -107,6 +107,18 @@ function skippedCopy(count: number): string {
   return `${count} selected ${noun} kept: a build-seeded guard is a constant of this build and cannot be deleted.`;
 }
 
+/**
+ * Where the documentation lives for this build's operator (issue #481).
+ *
+ * The app serves no `/docs` route, so a `DocsLink`-style helper cannot render a
+ * relative path. This is the same absolute blob URL
+ * `lib/guard/recoveryGuidance.ts` uses for its guidance links: it resolves on
+ * GitHub, where `docs/SUMMARY.md` lists the page, and the ↗ suffix says out loud
+ * that it leaves the console.
+ */
+const REGISTRY_BACKUPS_DOC_HREF =
+  "https://github.com/Stellar-Agent-Guard/stellar-agent-guard-dashboard/blob/main/docs/guides/registry-backups.md";
+
 export function FleetTable() {
   const { wallet, server, instances, guard, removeInstances, restoreRegistry } = useGuard();
   const router = useRouter();
@@ -535,6 +547,16 @@ export function FleetTable() {
           <span className="tiny">
             Nothing on chain was touched — this only cleared this browser&apos;s list.
           </span>
+          <a
+            className="tiny"
+            href={REGISTRY_BACKUPS_DOC_HREF}
+            target="_blank"
+            rel="noreferrer"
+            title={REGISTRY_BACKUPS_DOC_HREF}
+            data-testid="registry-backup-docs-link"
+          >
+            Registry backups — what is saved and what is not ↗
+          </a>
           <div className="row" style={{ marginTop: 6 }}>
             <button
               type="button"

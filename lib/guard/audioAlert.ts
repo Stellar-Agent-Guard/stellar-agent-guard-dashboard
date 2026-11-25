@@ -8,12 +8,17 @@
  * is looking goes unnoticed. This module turns a security-critical event into
  * a chime and a desktop notification — and nothing else.
  *
- * Three decisions shape it:
+ * Four decisions shape it:
  *
  *   - **Opt-in, both ways.** Sound that fires unprompted is a false-alarm
  *     machine, and the Notification permission prompt appears before the user
  *     has any reason to grant it. Both channels default to off, and the desktop
  *     channel is inert until the browser has actually granted permission.
+ *   - **The class choice is separate from the channel choice.** Which event
+ *     classes interrupt is a per-event-class opt-in (#492), not something the
+ *     operator discovers by being woken up. Channels default off and every
+ *     class defaults on, because the opt-in that matters is the one that makes
+ *     noise at all.
  *   - **Synthesised tones, no audio files.** A <200 ms two-beep chime built
  *     from oscillators costs nothing to load, cannot 404, and keeps the byte
  *     budget where it belongs. There is no asset pipeline to trust.
@@ -30,8 +35,47 @@
  * noise.
  */
 import type { GuardEvent } from "stellar-agent-guard-sdk";
+import { DEFAULT_QUIET_HOURS, normalizeQuietHours, type QuietHoursSchedule } from "./quietHours.ts";
 
 export const ALERT_SETTINGS_STORAGE_KEY = "stellar-agent-guard-dashboard.alerts.v1";
+
+// ── The event classes an operator can choose to be interrupted for ─────────
+
+export type SecurityAlertReason = "blocked" | "frozen" | "policy_revoked";
+
+/**
+ * The alertable event classes, in the order the panel lists them and the order
+ * a selection is written to storage.
+ *
+ * A declared order rather than an insertion order: the checkbox list never
+ * reshuffles because of the sequence someone clicked it in, and two tabs with
+ * the same selection store the same bytes. It sits above `AlertSettings`
+ * because the defaults are built from it.
+ */
+export const ALERT_REASON_ORDER: readonly SecurityAlertReason[] = [
+  "blocked",
+  "frozen",
+  "policy_revoked",
+];
+
+/** How each class reads as a checkbox in the panel. */
+export const ALERT_CLASS_LABELS: Record<SecurityAlertReason, string> = {
+  blocked: "Blocked calls",
+  frozen: "Account frozen",
+  policy_revoked: "Policy revoked",
+};
+
+/** One line per class saying what the operator will be woken for. */
+export const ALERT_CLASS_HINTS: Record<SecurityAlertReason, string> = {
+  blocked: "The guard refused a call — an unauthorized transfer or an unexpected contract call.",
+  frozen: "An admin froze the account, so every agent call after it is refused.",
+  policy_revoked: "A policy was revoked, changing the guardrails under live traffic.",
+};
+
+/** Is this value one of *our* classes? Storage and JSON know nothing about the union. */
+export function isSecurityAlertReason(value: unknown): value is SecurityAlertReason {
+  return typeof value === "string" && (ALERT_REASON_ORDER as readonly string[]).includes(value);
+}
 
 export interface AlertSettings {
   /** The Web Audio chime channel. */
@@ -40,13 +84,38 @@ export interface AlertSettings {
   desktop: boolean;
   /** Master gain for the chime, 0..1. */
   volume: number;
+  /**
+   * Which event classes may interrupt, in `ALERT_REASON_ORDER` order.
+   *
+   * The channels decide *how* an operator is interrupted; this decides *what
+   * for*. An empty list is a real configuration — "interrupt me for nothing" —
+   * and the panel has to report it as one rather than as armed.
+   */
+  classes: SecurityAlertReason[];
+  /**
+   * When this tab is allowed to make noise at all (#494).
+   *
+   * A schedule rather than a switch, and a separate module: it is wall-clock
+   * arithmetic in a named zone, and it only ever suppresses the local channels.
+   */
+  quiet: QuietHoursSchedule;
 }
 
-/** Both channels off: an operator has to ask to be interrupted. */
+/**
+ * Both channels off — an operator has to ask to be interrupted — and every
+ * class on.
+ *
+ * The opt-in that keeps someone out of trouble is the channel, not the event:
+ * an operator who turns notifications on has asked to hear about the guard's
+ * refusals, and making them tick three boxes as well is how an alert system
+ * ends up configured to stay quiet.
+ */
 export const DEFAULT_ALERT_SETTINGS: AlertSettings = {
   audio: false,
   desktop: false,
   volume: 0.4,
+  classes: [...ALERT_REASON_ORDER],
+  quiet: DEFAULT_QUIET_HOURS,
 };
 
 export const VOLUME_MIN = 0;
@@ -106,8 +175,6 @@ export function clampVolume(volume: number): number {
 
 // ── Alert condition matching ───────────────────────────────────────────────
 
-export type SecurityAlertReason = "blocked" | "frozen" | "policy_revoked";
-
 /**
  * Which events deserve to interrupt an operator.
  *
@@ -118,6 +185,10 @@ export type SecurityAlertReason = "blocked" | "frozen" | "policy_revoked";
  * not be reading. Everything else — heartbeats, allowed decisions, routine
  * policy installs from this very console — is noise, and alerting on it is how
  * an alert system gets muted.
+ *
+ * That this returns a class at all is what makes the choice per-class: which of
+ * these three an operator wants to hear about is `AlertSettings.classes`, and
+ * `alertClassEnabled` is the only honest reading of it.
  */
 export function alertReasonFor(event: GuardEvent | null | undefined): SecurityAlertReason | null {
   if (!event) return null;
@@ -131,9 +202,28 @@ export function isSecurityCritical(event: GuardEvent | null | undefined): boolea
   return alertReasonFor(event) !== null;
 }
 
-/** Is any alert channel armed? */
+/**
+ * Would an event of this class reach any channel right now?
+ *
+ * The settings go through `normalizeAlertSettings` rather than being read
+ * field-by-field so that a record from before this feature — one with no
+ * `classes` key at all — means every class, not none.
+ */
+export function alertClassEnabled(settings: AlertSettings, reason: SecurityAlertReason): boolean {
+  return normalizeAlertSettings(settings).classes.includes(reason);
+}
+
+/**
+ * Can this configuration interrupt anyone at all?
+ *
+ * A channel on *and* at least one class selected: with every class deselected
+ * the switches are on but nothing can ever fire, and reporting that as "armed"
+ * is the lie #314 exists to prevent. Same tolerance as `alertClassEnabled` —
+ * an object with no `classes` key is a full selection.
+ */
 export function alertsArmed(settings: AlertSettings): boolean {
-  return settings.audio || settings.desktop;
+  const armed = normalizeAlertSettings(settings);
+  return (armed.audio || armed.desktop) && armed.classes.length > 0;
 }
 
 /**
@@ -814,6 +904,53 @@ function defaultStorage(): StorageLike | null {
   }
 }
 
+/**
+ * Coerce anything into valid settings.
+ *
+ * A stored payload from an older build, a hand-edited `localStorage` entry or a
+ * partially-written object all land here, and every field is validated
+ * independently: one unknown class in the saved list drops that entry, not the
+ * operator's other two, and a garbage volume cannot silence the chime by
+ * becoming `NaN`. Same discipline as `normalizeWebhookSettings`, which is where
+ * this shape comes from.
+ */
+export function normalizeAlertSettings(value: unknown): AlertSettings {
+  if (typeof value !== "object" || value === null) return { ...DEFAULT_ALERT_SETTINGS };
+  const candidate = value as Partial<AlertSettings>;
+  return {
+    audio: candidate.audio === true,
+    desktop: candidate.desktop === true,
+    volume: clampVolume(
+      typeof candidate.volume === "number" ? candidate.volume : DEFAULT_ALERT_SETTINGS.volume,
+    ),
+    classes: normalizeAlertClasses(candidate.classes),
+    quiet: normalizeQuietHours(candidate.quiet),
+  };
+}
+
+/**
+ * The stored class selection, or every class.
+ *
+ * An absent key — or one that is not an array — means *all* classes, not none.
+ * A record written by a build that had no idea classes existed has no `classes`
+ * key, and an operator who had alerts on would come back after an upgrade to a
+ * console that had stopped interrupting them at all. Silently dropping an
+ * operator's alerts on upgrade is the worst failure a security alert system can
+ * have, so the old shape is read as the old behaviour: every security-critical
+ * event. Note that this is the absence of the key, not an empty selection;
+ * `classes: []` is what "interrupt me for nothing" looks like, and it stays
+ * empty.
+ */
+function normalizeAlertClasses(value: unknown): SecurityAlertReason[] {
+  if (!Array.isArray(value)) return [...ALERT_REASON_ORDER];
+  // Validation first, entry by entry, so an unknown class costs itself and
+  // nothing else; then the declared order, so the same selection always reads
+  // and writes identically whatever sequence it arrived in — and repeats
+  // collapse into the one selection they mean.
+  const kept = value.filter(isSecurityAlertReason);
+  return ALERT_REASON_ORDER.filter((reason) => kept.includes(reason));
+}
+
 /** The operator's saved alert settings, or the safe defaults. */
 export function loadAlertSettings(storage?: StorageLike | null): AlertSettings {
   const store = storage === undefined ? defaultStorage() : storage;
@@ -826,15 +963,7 @@ export function loadAlertSettings(storage?: StorageLike | null): AlertSettings {
   }
   if (!raw) return { ...DEFAULT_ALERT_SETTINGS };
   try {
-    const parsed = JSON.parse(raw) as Partial<AlertSettings> | null;
-    if (!parsed || typeof parsed !== "object") return { ...DEFAULT_ALERT_SETTINGS };
-    return {
-      audio: parsed.audio === true,
-      desktop: parsed.desktop === true,
-      volume: clampVolume(
-        typeof parsed.volume === "number" ? parsed.volume : DEFAULT_ALERT_SETTINGS.volume,
-      ),
-    };
+    return normalizeAlertSettings(JSON.parse(raw) as unknown);
   } catch {
     // Corrupt storage is a lost preference, not a reason to break the panel.
     return { ...DEFAULT_ALERT_SETTINGS };
@@ -845,10 +974,10 @@ export function saveAlertSettings(settings: AlertSettings, storage?: StorageLike
   const store = storage === undefined ? defaultStorage() : storage;
   if (!store) return;
   try {
-    store.setItem(
-      ALERT_SETTINGS_STORAGE_KEY,
-      JSON.stringify({ ...settings, volume: clampVolume(settings.volume) }),
-    );
+    // Normalised on the way in, so what lands in storage is what a later read
+    // would return anyway: a clamped volume, a class list the UI can index, and
+    // nothing that came from a form field as a string.
+    store.setItem(ALERT_SETTINGS_STORAGE_KEY, JSON.stringify(normalizeAlertSettings(settings)));
   } catch {
     // A private-mode write only loses the preference for this session.
   }
