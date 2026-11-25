@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useGuard } from "./GuardProvider.tsx";
-import { AddressText, ErrorBlock, short, useAddressLabel } from "./bits.tsx";
+import { AddressText, ErrorBlock, Stat, short, useAddressLabel } from "./bits.tsx";
 import { AddressBookModal } from "./AddressBookModal.tsx";
 import {
   isKnownInstance,
@@ -13,9 +13,17 @@ import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 import { IDLE_TIMEOUT_OPTIONS } from "../lib/guard/useIdleTimer.ts";
 import {
   WALLET_PROVIDERS,
+  detectInstalledProviders,
+  readWalletScope,
   walletProviderDescriptor,
   type WalletProviderId,
 } from "../lib/guard/walletConnector.ts";
+import {
+  collectWalletDiagnostics,
+  describeCapabilities,
+  type CapabilityRow,
+  type WalletDiagnostics,
+} from "../lib/guard/walletDiagnostics.ts";
 import {
   describeMismatch,
   describeSwitchOutcome,
@@ -28,9 +36,13 @@ import { OBSERVER_BADGE_LABEL, WRITE_DISABLED_HINT } from "../lib/guard/observer
 import { usePrivacy } from "../lib/guard/privacyStore.ts";
 import {
   clearWriteInterruption,
+  getPendingDisconnectGuidance,
+  getPendingWrite,
   getWriteInterruption,
   recoveryGuidance,
+  subscribePendingWrite,
   subscribeWriteInterruption,
+  type WritePhase,
 } from "../lib/guard/writeReview.ts";
 import { NETWORK, RPC_HEALTH_CAVEAT, describeRpcHealth } from "../lib/guard/network.ts";
 import {
@@ -66,9 +78,11 @@ export function WalletBar() {
   const [adding, setAdding] = useState(false);
   const [bookOpen, setBookOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [switchOutcome, setSwitchOutcome] = useState<NetworkSwitchOutcome | null>(null);
   const [renameTarget, setRenameTarget] = useState<GuardInstance | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<GuardInstance | null>(null);
+  const [disconnectPromptOpen, setDisconnectPromptOpen] = useState(false);
   // The last write the wallet interrupted, published by the write path. The
   // store holds no envelope and exposes no retry: reconnecting only clears the
   // way for a *fresh* review (issues #340, #341).
@@ -79,6 +93,9 @@ export function WalletBar() {
   );
   const interruptionGuidance =
     interruptionState === null ? null : recoveryGuidance(interruptionState.interruption);
+
+  // Active pending write state for disconnect safety guidance (issue #516)
+  const pendingWrite = useSyncExternalStore(subscribePendingWrite, getPendingWrite, () => null);
 
   // ── Endpoint health (issue #346) ────────────────────────────────────────
   // One read-only probe when the bar mounts, then only when the operator asks
@@ -234,7 +251,16 @@ export function WalletBar() {
                 >
                   Change wallet
                 </button>
-                <button className="secondary" onClick={disconnect}>
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    if (pendingWrite) {
+                      setDisconnectPromptOpen(true);
+                    } else {
+                      disconnect();
+                    }
+                  }}
+                >
                   Disconnect
                 </button>
               </>
@@ -246,6 +272,18 @@ export function WalletBar() {
                 {!connecting && <span className="tiny muted">Reading stays available.</span>}
               </>
             )}
+          </div>
+
+          <div className="row" style={{ marginTop: 8 }}>
+            {/* Available whether or not a wallet is connected: the operator who
+                cannot connect is exactly the one who needs to see what this
+                browser reported. */}
+            <button className="secondary" onClick={() => setDiagnosticsOpen(true)}>
+              Wallet diagnostics
+            </button>
+            <span className="tiny muted">
+              Provider, account and capabilities — read without asking your wallet to sign.
+            </span>
           </div>
 
           {interruptionGuidance && (
@@ -390,6 +428,27 @@ export function WalletBar() {
           onChoose={(id) => {
             setPickerOpen(false);
             void connect(id);
+          }}
+        />
+      )}
+      {disconnectPromptOpen && pendingWrite && (
+        <PendingDisconnectModal
+          pendingWrite={pendingWrite}
+          onClose={() => setDisconnectPromptOpen(false)}
+          onConfirm={() => {
+            setDisconnectPromptOpen(false);
+            disconnect();
+          }}
+        />
+      )}
+      {diagnosticsOpen && (
+        <WalletDiagnosticsModal
+          providerId={providerId}
+          sessionAddress={wallet ? wallet.address : null}
+          onClose={() => setDiagnosticsOpen(false)}
+          onReconnect={() => {
+            setDiagnosticsOpen(false);
+            void connect(providerId ?? undefined);
           }}
         />
       )}
@@ -558,6 +617,27 @@ export function WalletPickerModal({
         <p className="tiny muted">
           Any of these can sign for a guard. The console remembers which one you use.
         </p>
+
+        {/* Read-only connection preview (issue #514) */}
+        <div
+          className="notice info"
+          role="region"
+          aria-label="Connection preview"
+          data-testid="connection-preview"
+          style={{ marginTop: 10, marginBottom: 12 }}
+        >
+          <strong>Read-only connection preview</strong>
+          <span className="tiny" style={{ display: "block", marginTop: 4 }}>
+            Connecting requests read-only access to your public Stellar address and active network (
+            {NETWORK.name}).
+          </span>
+          <span className="tiny muted" style={{ display: "block", marginTop: 4 }}>
+            No secret keys or signing authority are ever requested. Every contract write is
+            individually user-initiated. Observer mode remains active on cancel — all live
+            telemetry, status reads, and contract inspections remain available without a wallet.
+          </span>
+        </div>
+
         <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
           {WALLET_PROVIDERS.map((descriptor) => {
             const detected = availableProviders.includes(descriptor.id);
@@ -595,14 +675,335 @@ export function WalletPickerModal({
           })}
         </div>
         <div className="row" style={{ marginTop: 12 }}>
-          <button className="secondary" onClick={onClose}>
-            Cancel
+          <button className="secondary" data-testid="cancel-wallet-picker" onClick={onClose}>
+            Cancel (Keep observing)
           </button>
-          <span className="tiny muted">
+          <span className="tiny muted" data-testid="observer-mode-note">
             Or keep observing — every read on this page works without a wallet.
           </span>
         </div>
       </div>
     </div>
   );
+}
+
+/**
+ * Explains consequences and safety guidance when disconnecting while a write is in flight (issue #516).
+ */
+export function PendingDisconnectModal({
+  pendingWrite,
+  onClose,
+  onConfirm,
+}: {
+  pendingWrite: { phase: WritePhase; txHash?: string | undefined };
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const guidance = getPendingDisconnectGuidance(pendingWrite.phase, pendingWrite.txHash);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    dialogRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [onClose]);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="disconnect-pending-title"
+        ref={dialogRef}
+        tabIndex={-1}
+        data-testid="disconnect-pending-warning"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <strong id="disconnect-pending-title">Disconnect while write is pending?</strong>
+        <p className="tiny warn" style={{ marginTop: 8 }}>
+          {guidance.headline}
+        </p>
+        <p className="tiny" style={{ marginTop: 4 }}>
+          {guidance.detail}
+        </p>
+        <p className="tiny muted" style={{ marginTop: 4 }}>
+          {guidance.outcomeExplanation}
+        </p>
+        <div className="notice info" style={{ marginTop: 8 }}>
+          <span className="tiny">
+            <strong>Guidance:</strong> {guidance.lookupGuidance}
+          </span>
+        </div>
+        <div className="row" style={{ marginTop: 12 }}>
+          <button className="danger" onClick={onConfirm}>
+            Disconnect anyway
+          </button>
+          <button className="secondary" onClick={onClose}>
+            Keep waiting
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+/**
+ * The wallet diagnostic (issue #342).
+ *
+ * Support requests for this console arrive as "my wallet is not working", and the
+ * three providers disagree about enough details that the answer is usually a fact
+ * about the wallet in front of the operator rather than a bug in the dashboard.
+ * The modal therefore shows public metadata only — which providers this browser
+ * reports, the connected address, the network on both sides, and what the chosen
+ * provider can actually do — and reads every one of them through calls that
+ * cannot raise a signature prompt, so opening a diagnostic can never sign anything.
+ *
+ * "Refresh" is the non-prompting path and is labelled as such. "Reconnect" is a
+ * deliberately separate action because establishing an account is the one thing
+ * that does need the wallet's cooperation; even then it asks for access, never
+ * for a signature.
+ */
+export function WalletDiagnosticsModal({
+  providerId,
+  sessionAddress,
+  onClose,
+  onReconnect,
+}: {
+  providerId: WalletProviderId | null;
+  sessionAddress: string | null;
+  onClose: () => void;
+  onReconnect: () => void;
+}) {
+  const [diagnostics, setDiagnostics] = useState<WalletDiagnostics | null>(null);
+  const [reading, setReading] = useState(true);
+  const [readError, setReadError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Detection, the network read and the address read are the silent half of the
+   * connector API: nothing here reaches `connect()`, and nothing here can reach a
+   * signing prompt at all. That is the property the Refresh button's label claims,
+   * so it is kept in one function both the mount read and the button call.
+   */
+  const read = useCallback(async (): Promise<WalletDiagnostics> => {
+    const scope = readWalletScope();
+    const installed = await detectInstalledProviders(scope);
+    return collectWalletDiagnostics({
+      scope,
+      providerId,
+      ...(sessionAddress === null ? {} : { sessionAddress }),
+      installedProviders: installed,
+    });
+  }, [providerId, sessionAddress]);
+
+  // The reading is re-taken whenever the session or the selected provider moves,
+  // which is the "capability changes" case: a wallet that gained a method, or an
+  // operator who switched providers, gets a new table without a reload.
+  useEffect(() => {
+    let settled = false;
+    void read().then(
+      (result) => {
+        if (settled) return;
+        setDiagnostics(result);
+        setReading(false);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        setReadError(error instanceof Error ? error.message : String(error));
+        setReading(false);
+      },
+    );
+    return () => {
+      settled = true;
+    };
+  }, [read]);
+
+  async function refresh(): Promise<void> {
+    setReading(true);
+    setReadError(null);
+    try {
+      setDiagnostics(await read());
+    } catch (error) {
+      setReadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setReading(false);
+    }
+  }
+
+  useEffect(() => {
+    dialogRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [onClose]);
+
+  const selectedName = providerId ? walletProviderDescriptor(providerId).name : null;
+  const limited = diagnostics
+    ? diagnostics.capabilities.filter((row) => row.state !== "supported")
+    : [];
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="wallet-diagnostics-title"
+        ref={dialogRef}
+        tabIndex={-1}
+        onClick={(event) => event.stopPropagation()}
+        data-testid="wallet-diagnostics"
+      >
+        <strong id="wallet-diagnostics-title">Wallet diagnostics</strong>
+        <p className="tiny" data-testid="wallet-diagnostics-state">
+          {diagnostics
+            ? diagnostics.headline
+            : reading
+              ? "Checking this browser…"
+              : "No reading yet."}
+        </p>
+        {readError && <ErrorBlock title="The diagnostic could not run" detail={readError} />}
+
+        <div className="row" style={{ marginTop: 8 }}>
+          <button
+            className="secondary"
+            onClick={() => void refresh()}
+            disabled={reading}
+            data-testid="wallet-diagnostics-refresh"
+          >
+            {reading ? "Refreshing…" : "Refresh (asks the wallet nothing)"}
+          </button>
+          <button className="secondary" onClick={onReconnect}>
+            {selectedName ? `Reconnect with ${selectedName}` : "Connect a wallet"}
+          </button>
+        </div>
+
+        {diagnostics && (
+          <>
+            <div className="grid" style={{ marginTop: 12 }}>
+              <Stat label="Selected provider" value={selectedName ?? "none"} />
+              <Stat
+                label="Admin address"
+                value={
+                  diagnostics.account.address ? (
+                    <AddressText address={diagnostics.account.address} />
+                  ) : (
+                    <span className="tiny muted">not read</span>
+                  )
+                }
+                note={
+                  diagnostics.account.notice ? (
+                    <span className="tiny">{diagnostics.account.notice}</span>
+                  ) : undefined
+                }
+              />
+              <Stat
+                label="Wallet network"
+                value={
+                  diagnostics.account.network
+                    ? `${diagnostics.account.network.name} · ${
+                        diagnostics.account.network.passphrase || "no passphrase reported"
+                      }`
+                    : "not read"
+                }
+              />
+              <Stat
+                label="This console writes to"
+                value={`${diagnostics.targetNetwork.name} · ${diagnostics.targetNetwork.passphrase}`}
+              />
+            </div>
+
+            {diagnostics.networkMismatch && (
+              <div className="notice warn" role="alert" style={{ marginTop: 10 }}>
+                <strong>{describeMismatch(diagnostics.networkMismatch)}</strong>
+                <span className="tiny">{mismatchExplanation(diagnostics.networkMismatch)}</span>
+              </div>
+            )}
+
+            <div className="stack" style={{ marginTop: 12 }}>
+              <span className="lbl">Providers this browser reports</span>
+              <ul className="tiny" style={{ paddingLeft: 18, margin: 0 }}>
+                {diagnostics.providers.map((status) => (
+                  <li key={status.id} data-testid={`diagnostic-provider-${status.id}`}>
+                    <span className="pill" aria-hidden="true">
+                      {status.monogram}
+                    </span>{" "}
+                    <strong>{status.name}</strong>{" "}
+                    <span className={status.installed === true ? "pill ok" : "pill warn"}>
+                      {status.installed === true
+                        ? "detected"
+                        : status.installed === false
+                          ? "not detected"
+                          : "not checked"}
+                    </span>
+                    <div className="tiny muted">
+                      {status.detail}
+                      {status.installed !== true && (
+                        <>
+                          {" — "}
+                          <a href={status.installUrl} target="_blank" rel="noreferrer">
+                            get {status.name}
+                          </a>
+                        </>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="stack" style={{ marginTop: 12 }}>
+              <span className="lbl">What {selectedName ?? "the selected wallet"} can do here</span>
+              {diagnostics.capabilities.length === 0 ? (
+                <span className="tiny muted">
+                  No provider is selected, so there is nothing to report yet.
+                </span>
+              ) : (
+                <ul className="tiny" style={{ paddingLeft: 18, margin: 0 }}>
+                  {diagnostics.capabilities.map((row) => (
+                    <li
+                      key={row.capability}
+                      data-testid={`diagnostic-capability-${row.capability}`}
+                    >
+                      <span className={capabilityPill(row)}>{row.state}</span>{" "}
+                      <strong>{row.label}</strong>
+                      <div className="tiny muted">{row.detail}</div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {limited.length > 0 && (
+                <p className="tiny muted" data-testid="diagnostic-limited">
+                  {describeCapabilities(limited).join(" ")}
+                </p>
+              )}
+            </div>
+
+            <p className="tiny muted" style={{ marginTop: 12 }}>
+              Only public facts appear here: the providers this browser reports, the connected
+              address and the network on both sides. Reading them asks your wallet for nothing,
+              signs nothing, and stores nothing.
+            </p>
+          </>
+        )}
+
+        <div className="row" style={{ marginTop: 12 }}>
+          <button className="secondary" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The pill for one capability row, with `unknown` kept distinct from `unsupported`. */
+function capabilityPill(row: CapabilityRow): string {
+  if (row.state === "supported") return "pill ok";
+  return row.state === "unsupported" ? "pill warn" : "pill";
 }

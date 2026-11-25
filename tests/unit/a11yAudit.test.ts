@@ -47,7 +47,11 @@ const noNetworkServer = new Proxy(
 const TEST_GUARD = {
   server: noNetworkServer,
   wallet: {
-    address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWH",
+    // A real strkey, not a placeholder: the freeze dialog reads its pre-signature
+    // authorization summary (#343) out of this account, and an address the SDK cannot
+    // parse makes that summary impossible, which disables the acknowledgement the
+    // keyboard walk below depends on being able to tick.
+    address: "GAOBCRXTCO4ZCBNHALJUMJJ5JDXNOUZ7U6VZJX4UBTXAHQEO66IPU6PH",
     networkPassphrase: "Test SDF Network ; September 2015",
     network: "Testnet",
   },
@@ -59,7 +63,7 @@ const TEST_GUARD = {
     throw new Error("no signing in a11y tests");
   },
   instances: [],
-  guard: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  guard: "CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU7",
   selectGuard: () => {},
   addInstance: () => {},
   snapshot: null,
@@ -76,6 +80,8 @@ const TEST_GUARD = {
     cappedLabels: [],
     health: POLL_OFF,
     gaps: [],
+    failures: [],
+    refresh: async () => null,
   },
   startWatching: () => {},
   stopWatching: () => {},
@@ -245,6 +251,69 @@ test("StatusPanel passes axe-core with the default-deny banner showing", async (
     );
     const violations = await axeViolations(rendered.container);
     assert.deepEqual(violations, [], "the default-deny banner must pass axe-core");
+  } finally {
+    await rendered.unmount();
+  }
+});
+
+test("StatusPanel passes axe-core in the error state and still links its help (#531)", async () => {
+  // A failed snapshot is when an operator most needs to know what the panel
+  // means and what to do next, so the help links must survive the error state.
+  const context = { ...TEST_GUARD, snapshot: null, snapshotError: "RPC unreachable" };
+  const rendered = await renderPanel(
+    react.createElement(
+      GuardContext.Provider,
+      { value: context },
+      react.createElement(StatusPanel),
+    ),
+  );
+  try {
+    const help = rendered.container.querySelector('nav[aria-label="Status panel help"]');
+    assert.ok(help, "the status panel help links render in the error state");
+    const names = Array.from(help.querySelectorAll("a")).map((a) => a.textContent);
+    assert.deepEqual(names, [
+      "How to read this panel",
+      "What the guard enforces",
+      "Incident runbook",
+    ]);
+    const violations = await axeViolations(rendered.container);
+    assert.deepEqual(violations, [], "the error state with help links must pass axe-core");
+  } finally {
+    await rendered.unmount();
+  }
+});
+
+test("the policy review dialog passes axe-core while open (#537, #540)", async () => {
+  const { PolicyDiffModal } = await import("../../components/PolicyDiffModal.tsx");
+  const { computePolicyDiff } = await import("../../lib/guard/policyDiff.ts");
+  const base = {
+    per_tx_cap: 100n,
+    window_secs: 86400n,
+    window_cap: 1000n,
+    assets: [],
+    protocols: [],
+    recipients: [],
+    allow_any_recipient: false,
+    active_from: 0n,
+    active_until: 0n,
+    paused: false,
+    dms_grace_secs: 0n,
+  };
+  const diff = computePolicyDiff(base, { ...base, per_tx_cap: 5n, window_cap: 50n });
+  const rendered = await renderPanel(
+    react.createElement(PolicyDiffModal, {
+      diff,
+      authorization: null,
+      onConfirm: () => {},
+      onCancel: () => {},
+    }),
+  );
+  try {
+    const dialog = rendered.container.querySelector<HTMLElement>('[role="dialog"]');
+    assert.ok(dialog);
+    assert.equal(document.activeElement, dialog, "focus moved into the review dialog");
+    const violations = await axeViolations(rendered.container);
+    assert.deepEqual(violations, [], "the open policy review must pass axe-core");
   } finally {
     await rendered.unmount();
   }

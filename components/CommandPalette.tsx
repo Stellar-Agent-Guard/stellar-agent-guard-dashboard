@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useGuard } from "./GuardProvider.tsx";
 import { fuzzyMatch, type CommandAction } from "../lib/guard/commands.ts";
 import { useAnnounce } from "../lib/guard/useAnnounce.ts";
+import { helpHref } from "../lib/guard/helpLinks.ts";
 
 export function CommandPaletteInner({
   router,
@@ -22,6 +23,10 @@ export function CommandPaletteInner({
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  // The control that held focus when the palette opened. Closing the palette
+  // (Escape, Ctrl/Cmd+K again, a backdrop click, or running a command) returns
+  // focus there, so a keyboard user is not dropped at the top of the page.
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const announce = useAnnounce();
 
   useEffect(() => {
@@ -36,12 +41,20 @@ export function CommandPaletteInner({
   }, []);
 
   useEffect(() => {
-    if (open) {
-      inputRef.current?.focus();
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setQuery("");
-      setActiveIndex(0);
-    }
+    if (!open) return;
+    const active = document.activeElement as HTMLElement | null;
+    returnFocusRef.current = active && active !== document.body ? active : null;
+    inputRef.current?.focus();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setQuery("");
+    setActiveIndex(0);
+    return () => {
+      const target = returnFocusRef.current;
+      returnFocusRef.current = null;
+      // A command may have navigated or re-rendered the page; only a control
+      // still in the document can take focus back.
+      if (target?.isConnected) target.focus();
+    };
   }, [open]);
 
   const commands = useMemo(() => {
@@ -64,6 +77,12 @@ export function CommandPaletteInner({
         category: "Docs",
         action: () =>
           window.open("https://github.com/aigbagbobila/stellar-agent-guard-sdk", "_blank"),
+      },
+      {
+        id: "doc-keyboard",
+        name: "Keyboard & Screen-Reader Guide",
+        category: "Docs",
+        action: () => window.open(helpHref("keyboard"), "_blank", "noopener,noreferrer"),
       },
     ];
 
@@ -145,6 +164,9 @@ export function CommandPaletteInner({
     <div className="modal-backdrop" onClick={() => setOpen(false)}>
       <div
         className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
         style={{ padding: 0, marginTop: "10vh", alignSelf: "flex-start", maxWidth: "600px" }}
         onClick={(e) => e.stopPropagation()}
       >

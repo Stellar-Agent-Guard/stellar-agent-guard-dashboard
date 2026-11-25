@@ -9,9 +9,12 @@ import {
   diagnosticEventsOf,
   describeRejectedResult,
   invokeWithWallet,
+  previewAuthorizationSummary,
+  isWalletCancellation,
+  isWalletRefusal,
   type WalletSigner,
 } from "../../lib/guard/submit.ts";
-import { WalletUserRejectedError } from "../../lib/guard/walletConnector.ts";
+import { WalletRefusedError, WalletUserRejectedError } from "../../lib/guard/walletConnector.ts";
 import {
   loadTxHistory,
   clearTxHistory,
@@ -258,6 +261,15 @@ describe("invokeWithWallet source sequence freshness (issue #392)", () => {
       },
     };
 
+    // Built before the patch below: a preview is not one of the write path's
+    // passes, and this test counts the accounts the pipeline asks for.
+    const authorization = previewAuthorizationSummary({
+      contract: GUARD_CONTRACT,
+      fn: "check",
+      admin: SIGNER_ADDRESS,
+      passphrase: PASSPHRASE,
+    });
+
     const originalSequenceNumber = Account.prototype.sequenceNumber;
     const sourceAccounts: Account[] = [];
     Account.prototype.sequenceNumber = function () {
@@ -272,6 +284,7 @@ describe("invokeWithWallet source sequence freshness (issue #392)", () => {
         args: [],
         signer,
         passphrase: PASSPHRASE,
+        authorization,
         exportOnly: true,
       });
       assert.equal(result.kind, "exported");
@@ -322,6 +335,12 @@ describe("invokeWithWallet source sequence freshness (issue #392)", () => {
       args: [],
       signer,
       passphrase: PASSPHRASE,
+      authorization: previewAuthorizationSummary({
+        contract: GUARD_CONTRACT,
+        fn: "check",
+        admin: SIGNER_ADDRESS,
+        passphrase: PASSPHRASE,
+      }),
       exportOnly: true,
     });
     assert.equal(result.kind, "refused");
@@ -575,6 +594,20 @@ const WRITE_REQUEST = {
   pollAttempts: 1,
   pollIntervalMs: 1,
 };
+/**
+ * The confirmed authorization these boundary requests carry.
+ *
+ * The write path now refuses a call whose authorization was never shown to the
+ * operator (issue #343), and every test below signs as the account it connects,
+ * so the summary is built from that address rather than invented.
+ */
+const boundaryAuthorization = (admin: string) =>
+  previewAuthorizationSummary({
+    contract: GUARD_CONTRACT,
+    fn: "freeze",
+    admin,
+    passphrase: PASSPHRASE,
+  });
 
 describe("wallet-bound write boundaries", () => {
   it("refuses to sign the envelope after the wallet account changed", async () => {
@@ -584,6 +617,7 @@ describe("wallet-bound write boundaries", () => {
     const result = await invokeWithWallet({
       ...WRITE_REQUEST,
       server: makeWalletBoundaryServer(sendCalls),
+      authorization: boundaryAuthorization(keypair.publicKey()),
       signer: makeKeypairSigner({
         keypair,
         liveAddress: () => "GD5S5O2MZ6FSMFH6QILG37KSQNRVR3RPSWBTTV4JOUJ7J6TWLLL5LAVS",
@@ -605,10 +639,12 @@ describe("wallet-bound write boundaries", () => {
 
   it("reports a disconnect during signing as recoverable and phase-specific", async () => {
     const sendCalls: string[] = [];
+    const signer = makeKeypairSigner({ liveAddress: () => null });
     const result = await invokeWithWallet({
       ...WRITE_REQUEST,
       server: makeWalletBoundaryServer(sendCalls),
-      signer: makeKeypairSigner({ liveAddress: () => null }),
+      authorization: boundaryAuthorization(signer.address),
+      signer,
     });
 
     assert.equal(result.kind, "refused");
@@ -627,6 +663,7 @@ describe("wallet-bound write boundaries", () => {
     const result = await invokeWithWallet({
       ...WRITE_REQUEST,
       server: makeWalletBoundaryServer(sendCalls),
+      authorization: boundaryAuthorization(keypair.publicKey()),
       signer: makeKeypairSigner({
         keypair,
         liveAddress: () => {
@@ -652,6 +689,7 @@ describe("wallet-bound write boundaries", () => {
     const result = await invokeWithWallet({
       ...WRITE_REQUEST,
       server: makeWalletBoundaryServer(sendCalls),
+      authorization: boundaryAuthorization(keypair.publicKey()),
       signer: makeKeypairSigner({ keypair, liveAddress: () => keypair.publicKey() }),
     });
 
@@ -711,11 +749,13 @@ describe("a declined signature is its own outcome (#291)", () => {
   it("ends the write as cancelled at the envelope, with nothing broadcast", async () => {
     const sendCalls: string[] = [];
     const prompts: string[] = [];
+    const signer = decliningSigner(prompts);
     const result = await invokeWithWallet({
       ...WRITE_REQUEST,
+      authorization: boundaryAuthorization(signer.address),
       cancelOnDecline: true,
       server: makeWalletBoundaryServer(sendCalls),
-      signer: decliningSigner(prompts),
+      signer,
     });
 
     assert.equal(result.kind, "cancelled");
@@ -732,6 +772,7 @@ describe("a declined signature is its own outcome (#291)", () => {
 
     const result = await invokeWithWallet({
       ...WRITE_REQUEST,
+      authorization: boundaryAuthorization(signer.address),
       cancelOnDecline: true,
       server,
       signer,
@@ -751,7 +792,12 @@ describe("a declined signature is its own outcome (#291)", () => {
     const server = makeWalletBoundaryServer([], [makeAddressAuthEntry(signer.address)]);
 
     await assert.rejects(
-      invokeWithWallet({ ...WRITE_REQUEST, server, signer }),
+      invokeWithWallet({
+        ...WRITE_REQUEST,
+        authorization: boundaryAuthorization(signer.address),
+        server,
+        signer,
+      }),
       /declined/i,
       "without cancelOnDecline the decline keeps its original thrown form",
     );
@@ -760,6 +806,7 @@ describe("a declined signature is its own outcome (#291)", () => {
 
   it("keeps a simulation failure distinguishable: that is a refusal, not a decline", async () => {
     const prompts: string[] = [];
+    const signer = decliningSigner(prompts);
     const server = {
       getAccount: async (address: string) => new Account(address, "1"),
       simulateTransaction: async () => ({
@@ -776,8 +823,9 @@ describe("a declined signature is its own outcome (#291)", () => {
 
     const result = await invokeWithWallet({
       ...WRITE_REQUEST,
+      authorization: boundaryAuthorization(signer.address),
       server,
-      signer: decliningSigner(prompts),
+      signer,
     });
 
     assert.equal(result.kind, "refused");
@@ -843,6 +891,7 @@ describe("a declined signature is its own outcome (#291)", () => {
 
     const declined = await invokeWithWallet({
       ...WRITE_REQUEST,
+      authorization: boundaryAuthorization(signer.address),
       cancelOnDecline: true,
       server,
       signer,
@@ -856,6 +905,7 @@ describe("a declined signature is its own outcome (#291)", () => {
     // button press, and nothing in the write path re-ran on its own.
     const retried = await invokeWithWallet({
       ...WRITE_REQUEST,
+      authorization: boundaryAuthorization(signer.address),
       cancelOnDecline: true,
       server,
       signer,
@@ -874,5 +924,49 @@ describe("a declined signature is its own outcome (#291)", () => {
       "the retried transaction is bound to a fresh sequence, not the declined one's",
     );
     assert.deepEqual(prompts, ["envelope", "envelope"]);
+  });
+
+  it("handles wallet refusal distinctly from cancellation and never auto-retries (#513)", async () => {
+    assert.equal(isWalletCancellation(new WalletUserRejectedError("freighter", "sign")), true);
+    assert.equal(isWalletCancellation(new Error("User cancelled")), true);
+    assert.equal(isWalletCancellation(new Error("Permission denied by wallet policy")), false);
+
+    assert.equal(
+      isWalletRefusal(new WalletRefusedError("freighter", "sign", "policy violation")),
+      true,
+    );
+    assert.equal(isWalletRefusal(new Error("Transaction refused: unauthorized")), true);
+    assert.equal(isWalletRefusal(new Error("User cancelled")), false);
+
+    const keypair = Keypair.random();
+    const server = makeWalletBoundaryServer([]);
+    let signAttempts = 0;
+
+    const refusingSigner: WalletSigner = {
+      address: keypair.publicKey(),
+      currentAddress: async () => keypair.publicKey(),
+      async signTransaction(): Promise<string> {
+        signAttempts++;
+        throw new WalletRefusedError("freighter", "sign transaction", "Hardware policy violation");
+      },
+      async signAuthEntry(): Promise<string> {
+        throw new Error("no auth entries needed");
+      },
+    };
+
+    const refused = await invokeWithWallet({
+      ...WRITE_REQUEST,
+      server,
+      authorization: boundaryAuthorization(refusingSigner.address),
+      signer: refusingSigner,
+    });
+
+    assert.equal(refused.kind, "refused");
+    if (refused.kind === "refused") {
+      assert.equal(refused.stage, "wallet");
+      assert.match(refused.detail, /refused/i);
+      assert.match(refused.detail, /Hardware policy violation/i);
+    }
+    assert.equal(signAttempts, 1, "never automatically retries a refused write");
   });
 });

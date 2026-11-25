@@ -44,6 +44,39 @@ import { resolveReferenceTime, type LedgerClockReading } from "../lib/guard/ledg
 import { calculateVelocity } from "../lib/guard/velocity.ts";
 import { useStatusTransitionAnnouncer } from "../lib/guard/statusTransitions.ts";
 import { usePrivacy } from "../lib/guard/privacyStore.ts";
+import { helpHref } from "../lib/guard/helpLinks.ts";
+
+/**
+ * Where an operator goes when a signal on this panel is unclear (issue #531).
+ *
+ * The overview guide explains every source and state the panel can show —
+ * including what "stale", "read failed" and "error state" mean and the safe
+ * next step for each. The enforcement boundary and incident runbook are
+ * linked alongside it because the two most dangerous misreadings of this
+ * panel are "clear means everything is enforced" and "an error means I
+ * should wait", and those two documents are the correction for each.
+ */
+export function StatusHelpLinks() {
+  return (
+    <nav className="tiny muted no-print status-help" aria-label="Status panel help">
+      <a
+        href={helpHref("overview", "reading-the-on-chain-state-panel")}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        How to read this panel
+      </a>
+      {" · "}
+      <a href={helpHref("enforcementScope")} target="_blank" rel="noopener noreferrer">
+        What the guard enforces
+      </a>
+      {" · "}
+      <a href={helpHref("incidentRunbook")} target="_blank" rel="noopener noreferrer">
+        Incident runbook
+      </a>
+    </nav>
+  );
+}
 
 /**
  * The banner's own clock tick.
@@ -351,6 +384,8 @@ export function StatusPanel() {
           </span>{" "}
           <CopyButton value={guard} label="guard address" />
         </p>
+
+        <StatusHelpLinks />
 
         <RehearsalModeToggle />
 
