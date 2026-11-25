@@ -63,3 +63,11 @@ Under no circumstances does the dashboard transmit the following:
    - Policy configurations in the form editor remain strictly in browser state until the operator initiates a wallet signing review.
 3. **Local Storage & Address Book Data**:
    - Custom nicknames, address book contacts, theme preferences, and audit history logs are stored purely in browser `localStorage` and `sessionStorage`. They are never sent to RPC providers.
+
+---
+
+## 3. Endpoint Health History, Minimum Evidence & Failover Rehearsal
+
+- **Endpoint Identity & Network Scoping**: Health history records only the sanitized endpoint origin (`scheme://host[:port]`) and active network name (`testnet`, `mainnet`, etc.). Embedded credentials (`user:pass@`) and query-string API tokens are stripped before recording.
+- **Minimum Evidence Thresholds**: Endpoint quality is only reported as `Healthy` after collecting at least **5 samples** spanning at least **60 seconds** of observation. Fewer samples or shorter observation windows are explicitly flagged as `Unknown` (0 samples) or `Insufficient evidence` so short bursts are never mistaken for proven reliability.
+- **Read-Only Failover Rehearsal**: Before switching to an alternate RPC endpoint, operators can run a read-only rehearsal (`getNetwork`, `getHealth`, and `getLatestLedger`) to inspect per-check latency and network identity. Rehearsal never promotes the candidate endpoint automatically and never signs or broadcasts transactions.
