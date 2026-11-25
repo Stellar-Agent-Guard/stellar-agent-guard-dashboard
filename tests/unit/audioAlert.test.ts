@@ -8,7 +8,9 @@ import {
   BEEP_COUNT,
   DEFAULT_ALERT_SETTINGS,
   MAX_ALERT_AUDIO_MS,
+  ALERT_REASON_ORDER,
   ALERT_SETTINGS_STORAGE_KEY,
+  alertClassEnabled,
   alertDedupeScopeKey,
   alertEventKey,
   alertPlanDurationMs,
@@ -33,6 +35,7 @@ import {
   requestNotificationPermission,
   saveAlertDedupe,
   saveAlertSettings,
+  type AlertSettings,
   type AudioContextLike,
   type AudioEffective,
   type DesktopEffective,
@@ -200,11 +203,51 @@ describe("alert condition matching", () => {
     );
   });
 
-  it("is armed only when a channel is on, and both default to off", () => {
-    assert.deepEqual(DEFAULT_ALERT_SETTINGS, { audio: false, desktop: false, volume: 0.4 });
+  it("is armed only when a channel is on and a class is selectable", () => {
+    assert.equal(DEFAULT_ALERT_SETTINGS.audio, false);
+    assert.equal(DEFAULT_ALERT_SETTINGS.desktop, false);
+    assert.deepEqual(DEFAULT_ALERT_SETTINGS.classes, [...ALERT_REASON_ORDER]);
     assert.equal(alertsArmed(DEFAULT_ALERT_SETTINGS), false);
     assert.equal(alertsArmed({ ...DEFAULT_ALERT_SETTINGS, audio: true }), true);
     assert.equal(alertsArmed({ ...DEFAULT_ALERT_SETTINGS, desktop: true }), true);
+
+    // Both channels on with nothing selected cannot interrupt anyone, and the
+    // pill calling that "armed" is the lie #314 exists to prevent.
+    assert.equal(alertsArmed({ ...DEFAULT_ALERT_SETTINGS, audio: true, classes: [] }), false);
+    assert.equal(
+      alertsArmed({ ...DEFAULT_ALERT_SETTINGS, audio: true, desktop: true, classes: [] }),
+      false,
+      "the second channel does not rescue an empty selection",
+    );
+    assert.equal(
+      alertsArmed({ ...DEFAULT_ALERT_SETTINGS, desktop: true, classes: ["frozen"] }),
+      true,
+      "one class is enough to be armed",
+    );
+  });
+
+  it("reads an object that predates the class selection as every class enabled", () => {
+    // A record from the build before #492 has no `classes` key at all, and the
+    // settings the panel hands these functions are exactly such an object until
+    // the stored record has been read. Treating the absence as an empty
+    // selection would disarm an operator who had alerts on.
+    const legacy = { audio: true, desktop: true, volume: 0.5 };
+    assert.equal(alertsArmed(legacy as unknown as AlertSettings), true);
+    for (const reason of ALERT_REASON_ORDER) {
+      assert.equal(alertClassEnabled(legacy as unknown as AlertSettings, reason), true);
+    }
+  });
+
+  it("enables a class only the operator kept", () => {
+    const kept: AlertSettings = { ...DEFAULT_ALERT_SETTINGS, classes: ["frozen"] };
+    assert.equal(alertClassEnabled(kept, "frozen"), true);
+    assert.equal(alertClassEnabled(kept, "blocked"), false);
+    assert.equal(alertClassEnabled(kept, "policy_revoked"), false);
+    assert.equal(
+      alertClassEnabled({ ...DEFAULT_ALERT_SETTINGS, classes: [] }, "blocked"),
+      false,
+      "nothing selected means nothing enabled",
+    );
   });
 });
 
@@ -826,14 +869,23 @@ describe("alert settings persistence", () => {
 
   it("round-trips what the operator chose", () => {
     const storage = createMockStorage();
-    saveAlertSettings({ audio: true, desktop: false, volume: 0.8 }, storage);
-    assert.deepEqual(loadAlertSettings(storage), { audio: true, desktop: false, volume: 0.8 });
+    const chosen: AlertSettings = {
+      ...DEFAULT_ALERT_SETTINGS,
+      audio: true,
+      volume: 0.8,
+      classes: ["frozen", "policy_revoked"],
+    };
+    saveAlertSettings(chosen, storage);
+    assert.deepEqual(loadAlertSettings(storage), chosen);
     assert.equal(JSON.parse(storage.raw()!).audio, true);
   });
 
   it("clamps a stored volume out of range instead of trusting it", () => {
     const storage = createMockStorage();
-    saveAlertSettings({ audio: true, desktop: true, volume: 5 }, storage);
+    saveAlertSettings(
+      { ...DEFAULT_ALERT_SETTINGS, audio: true, desktop: true, volume: 5 },
+      storage,
+    );
     assert.equal(loadAlertSettings(storage).volume, 1);
   });
 
@@ -846,6 +898,11 @@ describe("alert settings persistence", () => {
 
   it("is inert with no storage at all, which is the server-render path", () => {
     assert.deepEqual(loadAlertSettings(null), DEFAULT_ALERT_SETTINGS);
-    assert.doesNotThrow(() => saveAlertSettings({ audio: true, desktop: true, volume: 0.2 }, null));
+    assert.doesNotThrow(() =>
+      saveAlertSettings(
+        { ...DEFAULT_ALERT_SETTINGS, audio: true, desktop: true, volume: 0.2 },
+        null,
+      ),
+    );
   });
 });

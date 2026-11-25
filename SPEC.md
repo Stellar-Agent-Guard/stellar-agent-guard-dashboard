@@ -126,6 +126,38 @@ The rolling window is read straight from the ledger because no read function exp
 account's internal spend accounting, and it is the only way to see how much of the rolling cap is
 currently consumed.
 
+### Where the console says when it last read
+
+Because every one of those values is polled, "what is on screen" is only answerable per panel, and an
+operator who has to open a panel to learn that its poll died has already read the stale number. The
+header therefore carries one row per polling panel — _On-chain state_, _Telemetry_, _Fleet Overview_ —
+naming its cadence, when it last landed, and its liveness phase (`lib/guard/refreshStatus.ts`, rendered
+by `components/HeaderRefreshStatus.tsx`).
+
+Four rules keep that strip honest, and they are the reason it exists as its own module:
+
+- **Polling is not activity.** The strip borrows its phase from `pollHealth()` (§7), the same evaluator
+  the feed header uses, so the two surfaces cannot disagree about whether a poller is alive. A round
+  that returned nothing is _healthy_; a poller that stopped is _stopped_, however new its last stamp;
+  and a display the operator froze is reported as _polling_ **and** _display paused_, never as one
+  instead of the other.
+- **It reads nothing.** Panels push the liveness they already computed for themselves; the strip only
+  renders what was pushed, and a panel that unmounts retires its line. A strip that ran its own probe
+  would be a second, differently-timed opinion about data the panel is showing.
+- **A fixture is not a chain read.** In demo mode (`?demo=true`) the provider's timers drive synthetic
+  data, so both of its sources are withheld rather than published, and the strip says nothing about
+  data the chain never sent.
+- **Its line is taken before it is filled.** A row can only exist once a panel has mounted and
+  published, which is after the served HTML has already painted the page under the header. So the
+  strip reserves one line in that markup and never more: rows go into the space the header already
+  gave up, the header is the same height before a poll as after one, and a screen with more panels
+  than width scrolls the strip sideways instead of pushing the console down.
+
+Each row links to the panel's own diagnostics through the `?tab=` deep link the console already
+answers with, which both scrolls the panel into view and moves focus to its heading. The strip is
+deliberately not an ARIA live region: it moves on a five-second clock, and announcing that on every
+tick would talk over the operator rather than inform them.
+
 ---
 
 ## 5. Write path
@@ -164,6 +196,21 @@ Details that are load-bearing rather than incidental:
   (`describeRejectedResult`) so the host's own reason is shown instead of a bare "trapped".
 - **Refusals have no hash by construction.** A refused call was never broadcast, so the console says
   so explicitly rather than showing a blank where a transaction hash would go.
+- **The operator confirms the transaction, not the panel's copy of it.** Before the first simulation
+  the pipeline re-reads operation, guard contract, network and signing admin out of the built envelope
+  (`contextFromTransaction`) and refuses the write if the summary the operator was shown is missing or
+  no longer matches (`checkPresignAuthorization`, `lib/guard/authorizationSummary.ts`). A summary that
+  is merely what the caller _said_ it is signing would reassure without constraining, so the panel
+  prints the derived reading of the same probe transaction the pipeline goes on to simulate, and a
+  stale or blank one stops at stage `discovery` — no simulation, no prompt, no broadcast (issue #343).
+- **Only reads are retried, and an unanswered broadcast is its own outcome.** The enforced simulation
+  and the inclusion poll are questions to the network, so a throttled or timed-out one is repeated on
+  bounded backoff (`withBackoff`, `safety: "idempotent-read"`). A broadcast is not a question: it is
+  attempted exactly once, and a timeout there becomes `ambiguous` — sent, fate unknown, hash named —
+  because re-sending would not retry the first freeze, it would risk a second one. A declined wallet
+  prompt is a third thing again (`WalletCancellationError`: nothing was signed, nothing was sent, and
+  only the operator can choose to ask again). `failed` is reserved for what the ledger actually said:
+  included, and rejected. (issue #344)
 
 ### What the console can and cannot do as admin
 
@@ -178,6 +225,39 @@ Details that are load-bearing rather than incidental:
 `heartbeat` being unavailable here is not an omission to fix: the admin key deliberately has no
 fund-moving or liveness-forging power. The admin can replace the key the account authenticates
 (`rotate_agent_key`) but can never authenticate as the agent.
+
+### The incident action list on the overview
+
+The table above is what the console is able to do. An operator mid-incident needs the narrower answer:
+what is worth doing to _this_ account, in the state the chain reports right now. That is the incident
+panel's only job (`lib/guard/incidentActions.ts`, rendered by `components/IncidentPanel.tsx`), and it is
+built on three rules.
+
+- **Every action is spoken about.** The panel returns a partition, not a shortlist: freeze, unfreeze and
+  revoke each appear either as an offer or as a refusal carrying its reason. "Not needed", "not
+  performed from this console" and "could not be worked out" are three different sentences, and an
+  omitted row cannot tell them apart. `ACTIONS_HELD_ELSEWHERE` therefore names policy installation, key
+  rotation and the heartbeat with the screen that owns each — or, for the heartbeat, with the fact that
+  no screen owns it.
+- **An offer is a hand-off, never a write.** Each row moves focus to the control that already performs
+  the action and prints the confirmation _that control_ requires. The panel opens no second dialog, and
+  it focuses rather than clicks, so the operator still starts the write themselves. Two confirmations
+  that disagree about what they cover is worse than one, which is also why the copy states plainly that
+  only `freeze` has a dialog — `unfreeze` and `revoke_policy` submit on the click, and the wallet prompt
+  is the confirmation.
+- **The live read gates every write, including freeze.** A failed status read is passed in as the same
+  sentence the Emergency panel's disabled button already carries (§4, issue #348), so this panel cannot
+  offer what that one has inert. The asymmetry that invites — freeze is the safe action, so surely it
+  survives an unknown state — is deliberately not taken. The single unbacked window is before the first
+  read has landed at all, which is how Emergency already behaves; the row is labelled as not
+  chain-derived instead of being withheld or presented as a recommendation.
+
+The panel's third block, **Verify on chain**, is one `status()` re-read the operator starts. It never
+runs on a timer, because a re-read taken while a write is still in flight agrees with the _old_ state and
+an automatic agreement reads as a confirmation. A flag counts as changed only when both reads answered
+it — the same discipline as the transition log (§8) — so a read that started or stopped answering is
+reported as _partly unread_, never as a change. _No change_ is styled as a fact rather than as success:
+the panel does not know which write the operator performed, and agreement equally means it did not land.
 
 ---
 
@@ -202,7 +282,7 @@ which is a different and much weaker statement. If step 6 fails, the console say
 
 ## 7. Telemetry semantics
 
-Three facts shape the feed, and each is stated in the UI rather than hidden:
+Four facts shape the feed, and each is stated in the UI rather than hidden:
 
 1. **Soroban has no push stream.** "Real time" here means cursor-based `getEvents` polling. The cursor
    is carried forward rather than re-derived from a ledger number, because re-scanning from a ledger
@@ -214,6 +294,22 @@ Three facts shape the feed, and each is stated in the UI rather than hidden:
    enforced simulation's diagnostics and labelled `diagnostic`.
 
 3. **Tailing N guards costs N poll loops.** The SDK's telemetry listener is single-guard (`getEvents` is filtered per contract), so a simultaneous tail is a fan-out of listener instances. The feed therefore supervises at most `FEED_GUARD_CAP` (5) guards at a time; registry entries beyond the cap are named as **not tailed** rather than dropped silently, and the poll load is documented as scaling with the number watched. Listener instances are reconciled (added/removed/stopped) on every registry change, so churn leaves exactly one listener per watched guard and no leak.
+
+4. **A decoded label is not a value the event carried.** A row mixes three kinds of field, and the
+   distinction is an authority question, not a formatting one: `ledger`, `ledgerClosedAt`,
+   `transactionHash` and the retained event XDR were said by the chain, while `kind`, `decision`,
+   `decision.reason` and `contractId` were _concluded_ by `stellar-agent-guard-sdk` from the topic
+   symbols (`interpret()`, `decodeAuthDecision()`), and `observedAt` was stamped by this tab's clock.
+   Every row therefore reports its origin per field — `decoded by stellar-agent-guard-sdk 0.1.1 · 4 raw
+· 5 decoded · 0 unknown` — counted in [`lib/guard/decodeProvenance.ts`](./lib/guard/decodeProvenance.ts).
+   The rule that makes the count worth having is that a **placeholder is never `decoded`**: the SDK's
+   `?`, `unknown contract`, `Unrecognised guard reason: …` and `unknown_reason_<code>` strings read like
+   answers, so a refusal whose reason symbol is missing is reported as an unknown and rendered as
+   `reason unknown` rather than as `blocked`. A field is only counted when the row displays it, which is
+   what keeps an _allowed_ decision (whose reason the contract normalises to `null`) from claiming a gap
+   it does not have. The decoder's version is a literal pinned in test against the installed package's
+   manifest, because the SDK publishes no runtime version and its `exports` map hides its own
+   `package.json` from a browser bundle.
 
 An empty feed is therefore **not** evidence that nothing was refused on chain, and the panel says so. Nor is it evidence that _every_ registered guard was watched — when the cap is in force, the panel says which guards are outside it.
 
@@ -238,8 +334,9 @@ with its source, its refresh trigger, and whether it is allowed to be wrong.
 | Registered guard instances (the fleet)               | **`localStorage`** (`stellar-agent-guard-dashboard.instances.v2.<network>`)                     | user action (add/remove/select)                              | yes, by design — it is an address list, not chain state; every row's live numbers are re-read from the chain |
 | Policy form draft                                    | component-local until submit                                                                    | user input                                                   | yes, while editing — never treated as installed until the chain re-read confirms it                          |
 | Address book                                         | **`localStorage`** (`…addressBook.v1`)                                                          | user action                                                  | yes — convenience data, carries no fund authority                                                            |
+| Operator marks on feed rows                          | **`localStorage`** (`…scoped.v1.eventMarks.<network>.<guard>`)                                  | user action (bookmark, note)                                 | yes — the mark is this browser's annotation of a row, never a fact about the guard; it is never exported     |
 | Transaction history                                  | **`localStorage`** (`…txHistory.v1`)                                                            | after each submission                                        | yes — it records what this browser submitted; the chain is authoritative                                     |
-| Layout / theme / alert / idle preferences            | **`localStorage`** (`…layout.v1`, `…namedLayouts.v1`, `theme`, `…idleTimeout.v1`, `…alerts.v1`) | user action                                                  | yes — presentation only                                                                                      |
+| Layout / theme / alert / idle preferences            | **`localStorage`** (`…layout.v1`, `…namedLayouts.v1`, `theme`, `…idleTimeout.v1`, `…alerts.v1`) | user action                                                  | yes — presentation and _this tab's_ alert gating; it cannot change what the chain says                       |
 | Wallet-provider preference                           | **`localStorage`** (`…walletProvider.v1`)                                                       | user action (connector pick)                                 | yes — convenience, carries no authority                                                                      |
 | Multisig approval evaluation                         | pasted envelope is component-local; signer weights/thresholds are read live from Horizon        | on paste / on demand                                         | n/a for the pasted envelope; the account's signers are re-read, not cached                                   |
 | Tab-sync envelope                                    | **`localStorage`** (`…tab-sync.v1`) when `BroadcastChannel` is unavailable                      | transient                                                    | n/a — a transport, not state; receiving tabs re-read the chain (§7)                                          |
@@ -249,7 +346,54 @@ The rule that makes the table enforceable: **a `localStorage` value may only be 
 read, never a substitute for one.** The instance registry and the address book supply addresses; the
 status, policy and balance displayed for those addresses are always re-read. Test coverage for the
 persisted helpers lives beside them (`tests/unit/tabSync.test.ts`, `tests/unit/txHistory.test.ts`,
-`tests/unit/addressBook.test.ts`, `tests/unit/dashboardGrid.test.ts`, `tests/unit/useIdleTimer.test.ts`).
+`tests/unit/addressBook.test.ts`, `tests/unit/dashboardGrid.test.ts`, `tests/unit/useIdleTimer.test.ts`,
+`tests/unit/eventMarks.test.ts`).
+
+Operator marks are the one stored value that describes the console's own rows rather than the guard.
+They live in a side map keyed by the event's identity, never on the event object, so every export and
+webhook surface — each a function of the `GuardEvent`s it is handed — is structurally incapable of
+carrying one. `tests/unit/eventMarks.test.ts` pins that by logging storage reads during export rather
+than by searching the output for a word.
+
+### Alert delivery is a local preference, in four parts
+
+Opt-in alerts sit on top of the feed and are governed by one stored record,
+`stellar-agent-guard-dashboard.alerts.v1`, which holds four independent things — and is the clearest
+case of a stored value being an _input to a decision about noise_, never a substitute for a chain read.
+
+| Part                        | What it decides                                                       | Default                                                 |
+| --------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------- |
+| Channel (`audio`/`desktop`) | whether this tab may chime, and whether it may raise a notification   | both **off** — an alert system must never ambush anyone |
+| Event classes               | which of `blocked` / `frozen` / `policy_revoked` may interrupt at all | all three on; a record with no class list keeps them on |
+| Quiet-hours schedule        | whether the local wall-clock window currently holds noise back        | off, `22:00`–`07:00` in a named IANA zone               |
+| Break-through list          | which classes still alert inside that window                          | `frozen`, `policy_revoked`                              |
+
+Three boundaries hold across all four:
+
+1. **Nothing here can suppress a decision.** Quiet hours and class selection act on this tab's chime and
+   its notifications only. The guard's enforcement, the ledger, and every row in the feed are
+   unaffected, and the panel says so in the same sentence that states the window.
+2. **A held-back alert is not a queued alert.** An event suppressed by class, by quiet hours, or by a
+   denied permission is still recorded as _seen_, so re-enabling the choice never replays the history
+   that accumulated while it was off — the same rule a reload follows, and the reason an absent class
+   list reads as _every class_ rather than as none: a record written before the choice existed belongs to
+   an operator who had alerts on, and an upgrade must not go silent on them.
+3. **A switch is not a claim.** The panel prints the channel's _effective_ state apart from the
+   operator's preference: the browser's permission and the last actual delivery or chime play are
+   reported as what the browser did, and a channel that is on while nothing can fire reads
+   `nothing will alert` with the pill at `off`, never `armed`.
+
+Quiet hours are evaluated on the **local wall clock** rather than a UTC minute count, because "at night"
+is a statement about a zone. The instant is converted with `Intl` in the schedule's own named zone, so
+the daylight-saving cases fall out of the arithmetic instead of needing special handling: on a
+spring-forward day a window covering the skipped hour matches nothing, and on a fall-back day the
+repeated wall time is quiet on both occurrences — the safe reading of a schedule. The panel discloses
+what that choice costs rather than hiding it: the offset actually in force, and, on a transitioning day,
+that the local day is 23 or 25 hours long so the window runs an hour shorter or longer in real time. The
+window is only ever rendered from a ticked clock held in state, never from a clock read during render.
+An unusable stored zone falls back to UTC **and says it has**, and a schedule that cannot be read leaves
+the alert loud; the failure mode this module refuses is a console that goes quiet for a reason it never
+told anyone about (`lib/guard/quietHours.ts`, `tests/unit/quietHours.test.ts`).
 
 ### Browser persistence inventory
 
@@ -260,7 +404,9 @@ is backed by the helpers' exported key constants and checked by
 `tests/unit/storageInventory.test.ts`; the short-lived bytecode cache and cross-tab transport are
 included as well. Registry, address-book, and layout records use explicit schema versions. A
 malformed, partial, unknown-future, or unsuccessfully migrated record is left in place for recovery;
-it is never used as a substitute for live chain state. Browser storage contains no secret keys.
+it is never used as a substitute for live chain state. Operator marks share that envelope and the
+per-guard scoped prefix, so the keys are namespaced by network and guard and a removed instance takes
+its filters, drafts and marks with it. Browser storage contains no secret keys.
 
 ### Complete write surface
 
