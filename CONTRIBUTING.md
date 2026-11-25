@@ -341,6 +341,25 @@ plus a chain-unreachable case that asserts a failed read is surfaced rather than
 zeros. Rewording the boundary fails CI, which is the
 point — see [Enforcement scope](README.md#enforcement-scope--read-this-before-relying-on-the-caps).
 
+## Adding a read panel
+
+A new panel that shows chain state follows the read-panel contract in
+[`docs/guides/adding-a-read-panel.md`](./docs/guides/adding-a-read-panel.md). In short:
+
+- **Typed outcomes** — every read returns `ReadResult<T>`; pending, failed and resolved (including a
+  genuine empty or zero) render differently, and no branch defaults a failure to `0`.
+- **Freshness** — a resolved value carries when it was read and the panel shows it; a failed refresh
+  is labelled, never left looking live.
+- **Cancellation** — a response for a guard, network or RPC server the operator has left is dropped
+  and not announced (the `GuardProvider` read epoch, guard-keyed state, or `lib/guard/guardScoped.ts`).
+- **Accessible errors** — failures go through `Read` / `ReadWithRetry` / `ErrorBlock` in
+  `components/bits.tsx`, name the read, and retry only that read.
+- **Tests** — the pending, failed, empty, stale-after-switch and retry cases each have a unit test.
+
+The page quotes `GuardProvider.refresh()` and `SetupWizard` as the reference implementation, and
+`tests/unit/readPanelContract.test.ts` fails if those quotes, or any file or symbol the page cites,
+drift from the code. Copy the checklist at the end of the page into the PR description.
+
 ## Keeping docs true to the code
 
 Two documentation rules are part of the review, not optional polish:

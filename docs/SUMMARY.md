@@ -24,6 +24,7 @@
   - [Recovering from a Lost Browser Profile](runbooks/lost-browser-profile.md)
   - [Migrating to a Different Soroban RPC Endpoint](runbooks/custom-rpc-migration.md)
 - [Guides](guides/)
+  - [Adding a Dashboard Read Panel](guides/adding-a-read-panel.md)
   - [Agent Integration](guides/agent-integration.md)
   - [Air-Gapped Multisig Signing](guides/air-gapped-multisig-signing.md)
   - [Evaluating Third-Party Endpoints](guides/evaluating-rpc-endpoints.md)
