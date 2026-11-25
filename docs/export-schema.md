@@ -143,6 +143,10 @@ property of the RPC and the poll cadence rather than of this file format, so it
 is documented in
 [Historical Event Availability](./concepts/historical-event-availability.md).
 
+## Telling a refused transaction from a settled one
+
+A refused simulation is transient and client-local; it never committed to the ledger, so it has no transaction hash, no ledger sequence, and no `ledger_closed_at`. In all export formats (CSV, JSON, NDJSON, and the audit log), these rows are explicitly distinguished by `source: "diagnostic"` (whereas settled on-chain events carry `source: "ledger"`).
+
 ## Cell conventions
 
 - **Every cell is a string.** Ledger sequences and the schema version are
