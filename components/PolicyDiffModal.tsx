@@ -2,6 +2,9 @@
 
 import { useRef, useState } from "react";
 import type { PolicyDiff, DiffEntry } from "../lib/guard/policyDiff.ts";
+import { PendingActionSummary } from "./PendingActionSummary.tsx";
+import { createPendingActionSnapshot } from "../lib/guard/walletConnector.ts";
+import { NETWORK } from "../lib/guard/network.ts";
 import type { AuthorizationContext } from "../lib/guard/authorizationSummary.ts";
 import { AuthorizationSummaryBlock } from "./AuthorizationSummary.tsx";
 import { useGuard } from "./GuardProvider.tsx";
@@ -100,13 +103,17 @@ export function PolicyDiffModal({
   currentAccount,
   onConfirm,
   onCancel,
+  signerAccount,
+  network,
 }: {
   diff: PolicyDiff;
   authorization: AuthorizationContext | null;
   expectedAccount?: string | undefined;
   currentAccount?: string | undefined;
   onConfirm: () => void;
-  onCancel: () => void;
+  onCancel: (reason?: string) => void;
+  signerAccount?: string | null | undefined;
+  network?: string;
 }) {
   let liveAddress: string | undefined = currentAccount;
   try {
@@ -128,7 +135,7 @@ export function PolicyDiffModal({
   useModalFocus({ open: true, containerRef: dialogRef, onDismiss: onCancel });
 
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onCancel}>
+    <div className="modal-backdrop" role="presentation" onClick={() => onCancel()}>
       <div
         ref={dialogRef}
         className="modal policy-diff"
@@ -139,6 +146,18 @@ export function PolicyDiffModal({
         onClick={(event) => event.stopPropagation()}
       >
         <h2 style={{ marginTop: 0 }}>Policy changes</h2>
+        {signerAccount && (
+          <PendingActionSummary
+            snapshot={createPendingActionSnapshot({
+              account: signerAccount,
+              network: network ?? NETWORK.name,
+              actionName: "Set Policy",
+            })}
+            currentAccount={signerAccount}
+            currentNetwork={network ?? NETWORK.name}
+            onCancel={(reason) => onCancel(reason)}
+          />
+        )}
         <p className="tiny muted">
           Review what will change before the wallet is prompted to sign. Signing installs the new
           policy and resets the rolling window.
@@ -239,7 +258,7 @@ export function PolicyDiffModal({
           >
             Confirm and sign
           </button>
-          <button className="secondary" onClick={onCancel}>
+          <button className="secondary" onClick={() => onCancel()}>
             Cancel
           </button>
         </div>

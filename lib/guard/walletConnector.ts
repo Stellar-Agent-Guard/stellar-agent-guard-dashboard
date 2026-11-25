@@ -869,3 +869,75 @@ export function describeConnection(wallet: ConnectedWallet | null): string {
   if (!wallet) return "No wallet connected";
   return `${wallet.network} · ${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}`;
 }
+
+// ── Pending Action Snapshots & Account Binding (issue #512) ──────────────────
+
+export interface PendingActionSnapshot {
+  /** The specific account address the action approval was reviewed for. */
+  account: string;
+  /** The network the review is scoped to. */
+  network: string;
+  /** The human-readable name of the action being approved. */
+  actionName: string;
+  /** Timestamp when the snapshot was created. */
+  timestamp: number;
+}
+
+/**
+ * Creates an immutable snapshot of the active account and network for a pending action review.
+ */
+export function createPendingActionSnapshot(params: {
+  account: string;
+  network?: string;
+  actionName: string;
+}): PendingActionSnapshot {
+  return {
+    account: params.account,
+    network: params.network ?? NETWORK.name,
+    actionName: params.actionName,
+    timestamp: Date.now(),
+  };
+}
+
+export interface PendingActionBindingValidation {
+  valid: boolean;
+  reason?: string;
+}
+
+/**
+ * Validates that the active wallet still matches the account snapshot bound to the pending action.
+ * Returns valid: false and a descriptive reason if the wallet disconnected, switched accounts, or changed network.
+ */
+export function validatePendingActionBinding(
+  snapshot: PendingActionSnapshot,
+  currentAccount: string | null | undefined,
+  currentNetwork?: string,
+): PendingActionBindingValidation {
+  if (!currentAccount) {
+    return {
+      valid: false,
+      reason: `Wallet disconnected during ${snapshot.actionName}. Pending action cancelled.`,
+    };
+  }
+  if (currentAccount !== snapshot.account) {
+    const fromShort =
+      snapshot.account.length > 8
+        ? `${snapshot.account.slice(0, 4)}…${snapshot.account.slice(-4)}`
+        : snapshot.account;
+    const toShort =
+      currentAccount.length > 8
+        ? `${currentAccount.slice(0, 4)}…${currentAccount.slice(-4)}`
+        : currentAccount;
+    return {
+      valid: false,
+      reason: `Account changed from ${fromShort} to ${toShort} during ${snapshot.actionName}. Pending action cancelled.`,
+    };
+  }
+  if (currentNetwork && currentNetwork !== snapshot.network) {
+    return {
+      valid: false,
+      reason: `Network changed from ${snapshot.network} to ${currentNetwork} during ${snapshot.actionName}. Pending action cancelled.`,
+    };
+  }
+  return { valid: true };
+}

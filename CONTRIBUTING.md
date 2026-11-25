@@ -4,6 +4,16 @@
 that holds no keys and runs no server code, so most changes are UI, client-side Soroban
 RPC, or tests.
 
+## Artifact Pin Changes
+
+> **Changing the pinned WASM identity affects deployment trust and requires coordinated,
+> evidence-backed review.** Before opening a PR that modifies the pinned artifact, complete
+> the **Artifact Pin Change Checklist** in `docs/operations/artifact-pin-checklist.md` and
+> reference it in your PR description.
+
+All PRs that change the pinned artifact must satisfy every item in the checklist. Pull
+requests that do not will be returned for completion.
+
 ## First run (local development walkthrough)
 
 This is a pure client-side Next.js app: there is no backend, database or API route to

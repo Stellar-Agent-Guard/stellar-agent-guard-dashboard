@@ -262,6 +262,9 @@ export class GuardFeed {
     const recording = Object.create(server) as rpc.Server;
     recording.getEvents = async (request) => {
       const response = await server.getEvents(request);
+      if (!response || !Array.isArray(response.events)) {
+        throw new Error("malformed getEvents response: events must be an array");
+      }
       this.lastRawEvents = response.events;
       return response;
     };
@@ -601,6 +604,7 @@ export function attachLedgerXdr(
 // the name topic of an RPC event, and the SDK's `topicSymbols` reads a
 // `DiagnosticEvent`/base64 shape, not `rpc.Api.EventResponse`.
 function firstTopic(event: rpc.Api.EventResponse): string | null {
+  if (!event || !Array.isArray(event.topic)) return null;
   const [first] = event.topic;
   if (!first) return null;
   try {

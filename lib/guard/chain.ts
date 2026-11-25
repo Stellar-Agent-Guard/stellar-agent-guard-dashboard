@@ -146,13 +146,50 @@ export async function readContract<T = unknown>(
   }
 }
 
+export function isValidGuardStatus(val: unknown): val is GuardStatus {
+  if (!val || typeof val !== "object" || Array.isArray(val)) return false;
+  const s = val as Record<string, unknown>;
+  const hasAdminFrozen = typeof s.admin_frozen === "boolean";
+  const hasHeartbeatExpired = typeof s.heartbeat_expired === "boolean";
+  const hasLastHeartbeat =
+    typeof s.last_heartbeat === "bigint" || typeof s.last_heartbeat === "number";
+  const hasNow = typeof s.now === "bigint" || typeof s.now === "number";
+  return hasAdminFrozen && hasHeartbeatExpired && hasLastHeartbeat && hasNow;
+}
+
+export function isValidPolicyConfig(val: unknown): val is PolicyConfig {
+  if (!val || typeof val !== "object" || Array.isArray(val)) return false;
+  const p = val as Record<string, unknown>;
+  return (
+    typeof p.per_tx_cap === "bigint" &&
+    typeof p.window_secs === "bigint" &&
+    typeof p.window_cap === "bigint" &&
+    Array.isArray(p.assets) &&
+    Array.isArray(p.protocols) &&
+    Array.isArray(p.recipients) &&
+    typeof p.allow_any_recipient === "boolean" &&
+    typeof p.active_from === "bigint" &&
+    typeof p.active_until === "bigint" &&
+    typeof p.paused === "boolean" &&
+    typeof p.dms_grace_secs === "bigint"
+  );
+}
+
 export async function readStatus(
   server: rpc.Server,
   guard: string,
   source?: string,
 ): Promise<ReadResult<GuardStatus>> {
   return await withTimeout(async () => {
-    return readContract<GuardStatus>(server, guard, "status", [], source);
+    return readContract<GuardStatus>(server, guard, "status", [], source, (retval) => {
+      const native = scValToNative(retval);
+      if (!isValidGuardStatus(native)) {
+        throw new Error(
+          "malformed GuardStatus payload from RPC: missing required status fields (not in guard's shape)",
+        );
+      }
+      return native;
+    });
   });
 }
 
@@ -169,9 +206,14 @@ export function readPolicy(
   guard: string,
   source?: string,
 ): Promise<ReadResult<PolicyConfig | null>> {
-  return readContract<PolicyConfig | null>(server, guard, "policy", [], source, (retval) =>
-    retval.type === "scvVoid" ? null : decodePolicy(retval),
-  );
+  return readContract<PolicyConfig | null>(server, guard, "policy", [], source, (retval) => {
+    if (retval.type === "scvVoid") return null;
+    const policy = decodePolicy(retval);
+    if (!isValidPolicyConfig(policy)) {
+      throw new Error("malformed PolicyConfig payload from RPC: missing required policy fields");
+    }
+    return policy;
+  });
 }
 
 /**
@@ -383,9 +425,31 @@ export async function readNativeXlmBalance(
 ): Promise<ReadResult<bigint>> {
   try {
     const response = await server.getAssetBalance(guard, Asset.native(), passphrase);
+    if (!response || typeof response !== "object") {
+      return readFailure(
+        server,
+        "getAssetBalance(native XLM)",
+        "malformed RPC response: expected asset balance object",
+      );
+    }
     const entry = response.balanceEntry;
     if (!entry) return { ok: true, value: 0n };
-    return { ok: true, value: BigInt(entry.amount) };
+    if (typeof entry !== "object" || entry.amount === undefined || entry.amount === null) {
+      return readFailure(
+        server,
+        "getAssetBalance(native XLM)",
+        "malformed balanceEntry: missing amount",
+      );
+    }
+    const amountStr = String(entry.amount).trim();
+    if (!/^\d+$/.test(amountStr)) {
+      return readFailure(
+        server,
+        "getAssetBalance(native XLM)",
+        `malformed balanceEntry: invalid amount "${entry.amount}"`,
+      );
+    }
+    return { ok: true, value: BigInt(amountStr) };
   } catch (error) {
     return readFailure(server, "getAssetBalance(native XLM)", error);
   }
