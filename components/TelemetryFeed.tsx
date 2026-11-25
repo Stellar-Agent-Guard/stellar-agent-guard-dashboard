@@ -1302,7 +1302,13 @@ const TelemetryRow = memo(function TelemetryRow({
   // one on (`eventIdentityOf` is what the store itself refuses on).
   const rowIdentity = eventIdentityOf(event);
   return (
-    <tr id={rowAnchorId(event.id)} tabIndex={-1} className={`severity-${severity}`} data-severity={severity} data-stream={event.source}>
+    <tr
+      id={rowAnchorId(event.id)}
+      tabIndex={-1}
+      className={`severity-${severity}`}
+      data-severity={severity}
+      data-stream={event.source}
+    >
       <td data-label="Event">
         {/* The severity tier is already colour-coded by the row class; this is the
             same fact as text, so reduced-motion or monochrome reading keeps it. */}
@@ -1484,7 +1490,6 @@ const TelemetryRow = memo(function TelemetryRow({
     </tr>
   );
 });
-
 
 /**
  * One item in the investigation timeline (#489).
