@@ -77,12 +77,14 @@ jobs:
       - name: Enforcement-scope statement is consistent
         run: node --test tests/unit/scopeStatement.test.ts
 
-      # Browser end-to-end suites (issues #112/#113): the operator lifecycle
-      # and the telemetry filter/export paths, driven through the real pages in
-      # headless Chromium against an in-process mock chain — no testnet, no
-      # network. These live inside the required `ci` job rather than beside it
-      # so branch protection (which requires the check named `ci`) actually
-      # gates on them.
+      # Browser end-to-end suites (issues #112/#113/#550): the operator
+      # lifecycle, the telemetry filter/export paths, and a per-route smoke pass
+      # over `/`, `/configure`, `/deploy`, `/fleet` and `/panic` — each driven
+      # through the real pages in headless Chromium against an in-process mock
+      # chain, with no wallet, no testnet and no network. The smoke suite also
+      # fails on a page error or hydration mismatch, which unit tests cannot see.
+      # These live inside the required `ci` job rather than beside it so branch
+      # protection (which requires the check named `ci`) actually gates on them.
       #
       # The perf benchmark (tests/perf, #114) is deliberately absent:
       # frame-rate assertions depend on the runner's GPU/CPU, so it runs

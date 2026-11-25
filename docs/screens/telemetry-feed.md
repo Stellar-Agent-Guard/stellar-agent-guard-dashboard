@@ -32,7 +32,36 @@
   the one that decoded it.
 - Color-coded badges highlight blocked transactions and policy violations in real-time.
 
+## Alert Delivery Guarantees & Non-Guarantees
+
+Client-side alerts (audio chimes, browser desktop notifications, and outbound webhooks) are **best-effort operator conveniences**, never authoritative monitoring or on-chain enforcement. The Soroban contract's on-chain `status()` and committed ledger events remain the sole source of truth.
+
+### Guarantees & Non-Guarantees
+
+1. **Browser Lifecycle**:
+   - Alerts only evaluate while this dashboard tab is open and actively polling. Closing the tab, suspending the browser, or background tab throttling stops polling and prevents alerts from firing.
+   - Missed events that occur while the tab is closed, offline, or paused are **not** queued or replayed on reconnect; review the Telemetry Feed and `status()` for missed history.
+2. **Browser Permissions & Audio Autoplay**:
+   - Browser notification permission (`granted`, `denied`, `default`, or `unsupported`) is controlled by the browser and may be revoked externally in site settings at any time.
+   - The dashboard checks live permission state without re-prompting automatically; if permission is revoked, the desktop channel immediately reports `blocked` / `needs permission` and clears any stale delivery-success state.
+   - Web Audio requires an explicit user gesture (clicking **Enable chime**) per tab session before audio can play.
+3. **Webhook Requirements & Secret Hygiene**:
+   - Webhooks are dispatched directly from the browser via HTTPS `POST` (plain `http://` is permitted only on `localhost`). The destination server must allow this console's origin via CORS.
+   - Requests have a 10-second timeout and are **never retried silently** in the background. Only guards explicitly scoped for the active network are dispatched.
+   - URLs containing embedded credentials (`user:pass@`) or secret-bearing query parameters (`?token=`, `?api_key=`, `?secret=`, etc.) are rejected with a redacted preview and **cannot be stored** in `localStorage`.
+4. **Quiet Hours & Class Filtering**:
+   - Events suppressed by unticked alert classes or active quiet hours are still marked as seen so they do not replay when quiet hours end or a class is re-enabled.
+5. **Consolidated Channel Health**:
+   - Browser notifications, audio chimes, and webhook dispatch report readiness, failure causes, and focused recovery steps independently of telemetry feed health.
+
+### Operator Verification Steps
+
+1. **Audio Chime**: Click **Enable chime** and confirm the channel health badge reads `Audio chime: ready` and you hear the test tone.
+2. **Browser Notifications**: Click **Enable notifications**, accept the browser prompt, and confirm `Browser notifications: ready`. If previously denied, re-allow notifications in browser site settings.
+3. **Webhook Dispatch**: Open **Webhook alerts**, enter a credential-free `https://` URL, scope at least one guard for the active network, and click **Test webhook** to confirm `Test webhook delivered` and `Webhook dispatch: ready`.
+
 ## Row severity tiers
+
 
 Rows are tiered so a block is findable by looking, not by reading every row. The tier
 rides on the `<tr>` as a class and a `data-severity` attribute; `data-stream` carries the
