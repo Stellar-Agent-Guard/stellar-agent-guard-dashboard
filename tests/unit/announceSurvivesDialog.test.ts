@@ -37,7 +37,10 @@ before(async () => {
   act = loaded.act;
 });
 
-const TEST_GUARD_ID = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+// Real strkeys, not placeholders: the freeze dialog derives its pre-signature
+// authorization summary (#343) from the guard and the connected account, and an
+// address the SDK cannot parse leaves nothing to acknowledge.
+const TEST_GUARD_ID = "CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU7";
 
 const SUBMITTED: InvokeResult = {
   kind: "submitted",
@@ -64,7 +67,7 @@ function guardContext(overrides: Record<string, unknown> = {}): any {
       { get: () => () => Promise.reject(new Error("no network in unit tests")) },
     ),
     wallet: {
-      address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWH",
+      address: "GAOBCRXTCO4ZCBNHALJUMJJ5JDXNOUZ7U6VZJX4UBTXAHQEO66IPU6PH",
       networkPassphrase: "Test SDF Network ; September 2015",
       network: "Testnet",
     },

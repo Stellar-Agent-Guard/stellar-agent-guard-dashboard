@@ -149,6 +149,58 @@ export function streamResumed(added: number): Spoken {
   };
 }
 
+/** The operator asked for the current window again, right now (#488). */
+export function feedRefreshed(params: {
+  events: number;
+  failedGuards: number;
+  coalesced: boolean;
+}): Spoken {
+  if (params.coalesced) {
+    return {
+      message:
+        "Refresh requested while a poll round was already running; it will be served as soon as that round returns",
+      priority: "polite",
+    };
+  }
+  if (params.failedGuards > 0) {
+    return {
+      message: `Refresh failed for ${params.failedGuards} guard${
+        params.failedGuards === 1 ? "" : "s"
+      }; the reasons are listed in the feed panel`,
+      priority: "assertive",
+    };
+  }
+  return {
+    // "returned", not "new": a round's page is counted before the feed's dedupe
+    // set has had a say, and a refresh that redelivers nothing already on screen
+    // must not be announced as events the operator has not seen.
+    message:
+      params.events === 0
+        ? "Feed refreshed; no events returned"
+        : `Feed refreshed; ${params.events} event${params.events === 1 ? "" : "s"} returned`,
+    priority: "polite",
+  };
+}
+
+/**
+ * A row was added to, or taken off, the investigation timeline (#489).
+ *
+ * The number is the timeline's total rather than a bare "bookmarked": the point
+ * of pressing the row is to build a sequence, and the count is what tells the
+ * operator the item landed without moving their eyes to the panel below. It is
+ * the total across every saved guard, which is what the list they will read
+ * contains.
+ */
+export function bookmarkToggled(params: { bookmarked: boolean; total: number }): Spoken {
+  const held = `the investigation timeline holds ${params.total} item${
+    params.total === 1 ? "" : "s"
+  }`;
+  return {
+    message: params.bookmarked ? `Bookmarked; ${held}` : `Bookmark removed; ${held}`,
+    priority: "polite",
+  };
+}
+
 /**
  * A mark was written to this browser.
  *
@@ -203,9 +255,12 @@ export function markNotStored(kind: MarkKind, reason: string): Spoken {
  * The operator-facing reason a write did not take effect.
  *
  * Ordered by how much each one explains: what the enforced simulation refused
- * and why, then what the network rejected, then a transaction that was only
- * exported — nothing on chain changed, which is the whole point of saying so —
- * and finally the caller's own fallback, which is used for the cases the result
+ * and why, then what the network rejected, then a broadcast that never answered
+ * — which is reported as the unknown it is rather than as a rejection, because
+ * saying "rejected" could send an operator away to make a second, identical
+ * write (issue #344) — then a transaction that was only exported, nothing on
+ * chain changed, which is the whole point of saying so, and finally the caller's
+ * own fallback, which is used for the cases the result
  * type cannot speak for: a write that was included but whose effect a `status()`
  * re-read contradicted.
  *
@@ -216,6 +271,9 @@ export function markNotStored(kind: MarkKind, reason: string): Spoken {
 export function writeFailureReason(result: InvokeResult, fallback: string): string {
   if (result.kind === "refused") return `refused during ${result.stage}: ${result.detail}`;
   if (result.kind === "failed") return `the network rejected the transaction: ${result.detail}`;
+  if (result.kind === "ambiguous") {
+    return "the network did not answer the broadcast, so it is not known whether it landed";
+  }
   if (result.kind === "exported") {
     return "the transaction was only exported for offline signing, so nothing on chain changed";
   }

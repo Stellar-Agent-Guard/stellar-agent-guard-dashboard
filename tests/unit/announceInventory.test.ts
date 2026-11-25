@@ -21,6 +21,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+  bookmarkToggled,
   freezeConfirmed,
   freezeFailed,
   freezeSubmitted,
@@ -110,6 +111,14 @@ test("every operation outcome has a template, and each is wired to a call site",
     {
       what: "a batch of blocked decisions",
       used: callSites("lib/guard/blockedEvents.ts").includes("blockedBatchMessage("),
+    },
+    {
+      what: "a manual refresh of the feed",
+      used: callSites(ANNOUNCE_COPY).includes("feedRefreshed("),
+    },
+    {
+      what: "a bookmark added to or taken off the timeline",
+      used: callSites(ANNOUNCE_COPY).includes("bookmarkToggled("),
     },
     { what: "a mark the operator saved", used: callSites(ANNOUNCE_COPY).includes("markSaved(") },
     {
@@ -292,6 +301,23 @@ test("pausing and resuming the feed are announced once, with the queue depth", (
     false,
     "the feed must not keep its own live region: the queue is the only channel",
   );
+});
+
+test("a bookmark names the timeline it just changed (#489)", () => {
+  assert.deepEqual(bookmarkToggled({ bookmarked: true, total: 1 }), {
+    message: "Bookmarked; the investigation timeline holds 1 item",
+    priority: "polite",
+  });
+  assert.deepEqual(bookmarkToggled({ bookmarked: true, total: 4 }), {
+    message: "Bookmarked; the investigation timeline holds 4 items",
+    priority: "polite",
+  });
+  // Removing says so. "Bookmarked" for a press that took a row off the
+  // timeline is the kind of announcement an operator stops trusting.
+  assert.deepEqual(bookmarkToggled({ bookmarked: false, total: 3 }), {
+    message: "Bookmark removed; the investigation timeline holds 3 items",
+    priority: "polite",
+  });
 });
 
 test("an operator mark is spoken as the operator's own, in the browser's words", () => {

@@ -31,7 +31,6 @@ import { createServer } from "../lib/guard/chain.ts";
 import { readGuardSnapshot, type GuardSnapshot } from "../lib/guard/guardOps.ts";
 import { NETWORK } from "../lib/guard/network.ts";
 import { POLLING, jitteredInterval, startRefreshTimer } from "../lib/guard/polling.ts";
-import { refreshSources, type RefreshSource } from "../lib/guard/refreshStatus.ts";
 import {
   FEED_SWITCH_HISTORY_LEDGERS,
   GuardFeed,
@@ -50,8 +49,17 @@ import {
   MultiGuardFeed,
   feedGapNotices,
   type FeedGapNotice,
+  type FeedPollResult,
   type FeedSource,
 } from "../lib/guard/feedSubscriptions.ts";
+import {
+  createPollGate,
+  feedGuardFailures,
+  pollRound,
+  type FeedGuardFailure,
+  type FeedRefreshOutcome,
+  type PollGate,
+} from "../lib/guard/feedRefresh.ts";
 import {
   loadTailSelection,
   planTailSources,
@@ -263,6 +271,23 @@ export interface GuardContextValue {
      * not mean complete — only that no discontinuity has been detected.
      */
     gaps: FeedGapNotice[];
+    /**
+     * Every tailed guard whose last poll round failed, in tailing order (#488).
+     *
+     * This is a list rather than a string because one guard's failure used to be
+     * the only failure the panel could see: with three of five guards down, the
+     * operator fixed the one that was named and still saw nothing from the rest.
+     * `error` stays for a round that never reached the per-guard stage at all —
+     * the two are different failures and are rendered separately.
+     */
+    failures: FeedGuardFailure[];
+    /**
+     * Ask the RPC for the current window again now, without discarding the
+     * cursor (#488). Resolves once the press has been served — either by the
+     * round it ran itself or, when a round was already in flight, by the moment
+     * that request was remembered. Returns null when nothing is being watched.
+     */
+    refresh: () => Promise<FeedRefreshOutcome | null>;
   };
   startWatching: () => void;
   stopWatching: () => void;
@@ -400,11 +425,6 @@ export function GuardProvider({
   });
   const [snapshot, setSnapshot] = useState<GuardSnapshot | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
-  // When the last snapshot read failed, kept apart from `snapshotError` because
-  // the text is cleared as the panel moves on (a guard switch, a retry) while the
-  // date is a fact about the transport. #528: an undated failure cannot be
-  // ordered against a later success, which is how recovery is detected.
-  const [snapshotFailureAt, setSnapshotFailureAt] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<number | null>(null);
   // Per-read retry state (issue #36): which single field is re-reading. Only
@@ -420,7 +440,7 @@ export function GuardProvider({
   // be confused by a later edit. `lastSuccessAt` is written ONLY by a round that
   // returned; the attempt stamp lives on `feed.lastPolledAt`.
   const [poll, setPoll] = useState<PollRaw>(INITIAL_POLL);
-  const [feed, setFeed] = useState<Omit<GuardContextValue["feed"], "health">>({
+  const [feed, setFeed] = useState<Omit<GuardContextValue["feed"], "health" | "refresh">>({
     watching: false,
     latestLedger: null,
     error: null,
@@ -429,6 +449,7 @@ export function GuardProvider({
     capped: 0,
     cappedLabels: [],
     gaps: [],
+    failures: [],
   });
 
   /**
@@ -471,6 +492,16 @@ export function GuardProvider({
   // Ledgers are chain-global, so a head learned while watching guard A is the
   // valid priming point for guard B's history window (FEED_SWITCH_HISTORY_LEDGERS).
   const knownLedgerRef = useRef<number | null>(null);
+  // The single-slot lock over poll rounds for the watch that is live now (#488).
+  // It is opened by the poll effect and closed by that effect's cleanup, so it
+  // is non-null exactly while a tail is running — which is also exactly when a
+  // refresh has a window to re-read. `null` is therefore not a missing value but
+  // the answer to "should this press poll at all?".
+  const pollGateRef = useRef<PollGate | null>(null);
+  // Whether the round's result still belongs to a watch this component is
+  // showing. A ref rather than a closure variable because the round is shared
+  // with the refresh button, which is not inside the effect that owns the watch.
+  const watchActiveRef = useRef(false);
 
   /**
    * Drop every guard-scoped feed cursor at once.
@@ -848,7 +879,6 @@ export function GuardProvider({
       // drop the previous snapshot rather than leaving stale numbers on screen.
       setSnapshot(null);
       setSnapshotError(error instanceof Error ? error.message : String(error));
-      setSnapshotFailureAt(new Date().toISOString());
     } finally {
       if (epoch === readEpochRef.current) setRefreshing(false);
     }
@@ -1236,6 +1266,7 @@ export function GuardProvider({
         guards: supervisor?.guards() ?? [],
         capped: capped.length,
         cappedLabels: capped.map((source) => source.label),
+        failures: [],
       }));
       return;
     }
@@ -1256,6 +1287,7 @@ export function GuardProvider({
       capped: 0,
       cappedLabels: [],
       gaps: [],
+      failures: [],
     }));
   }, []);
 
@@ -1441,6 +1473,122 @@ export function GuardProvider({
     });
   }, [feed.watching, poll, healthNowMs]);
 
+  /**
+   * One round of the tail: ask every tailed guard once, then apply the page.
+   *
+   * Extracted from the interval effect because a manual refresh has to be *this
+   * round* (#488), not a second implementation of it — the cursor advance, the
+   * gap memory and the health stamps are written here and nowhere else, so a
+   * refresh cannot drift from what the schedule would have done. Returns the
+   * page it applied, or null when there was no watch left to apply it to.
+   */
+  const runFeedRound = useCallback(async (): Promise<FeedPollResult | null> => {
+    // Identity-check on every round: the supervisor holds one listener per tailed
+    // guard, and it is reconciled against the registry rather than pinned to
+    // whichever guard the loop was born with. A feed added mid-watch is primed
+    // for recent history so the operator arrives with context rather than a
+    // blank page (see FEED_SWITCH_HISTORY_LEDGERS).
+    const supervisor = multiFeedRef.current;
+    if (!supervisor) return null;
+    const attemptedAt = new Date().toISOString();
+    setPoll((current) => ({ ...current, polling: true, lastAttemptAt: attemptedAt }));
+    try {
+      const page = await supervisor.pollAll();
+      if (!watchActiveRef.current) return null;
+      if (page.latestLedger !== null) {
+        knownLedgerRef.current = Math.max(knownLedgerRef.current ?? 0, page.latestLedger);
+      }
+      pushEvents(page.events as TelemetryEvent[]);
+      // One guard failing to poll is reported on its own line and does not blank
+      // the guards that answered (#488). Every failure is listed, because naming
+      // only the first left an operator fixing one guard while three more stayed
+      // silent.
+      const failures = feedGuardFailures(page.watch);
+      const anyAnswered = page.watch.some((entry) => entry.ok);
+      const completedAt = new Date().toISOString();
+      setFeed((current) => ({
+        ...current,
+        latestLedger: page.latestLedger ?? current.latestLedger,
+        // An *attempt* stamp. #311: it is not a success claim, which is why the
+        // success stamp below is a separate field with its own writer.
+        lastPolledAt: completedAt,
+        guards: supervisor.guards(),
+        gaps: feedGapNotices(page.watch),
+        failures,
+        // `error` is reserved for a round that failed before it could be
+        // attributed to a guard at all. A per-guard failure has its own block, and
+        // filling both would let one line claim two different things.
+        error: null,
+      }));
+      setPoll((current) => ({
+        polling: false,
+        lastAttemptAt: completedAt,
+        // A round that returned is a live poll even when it carried nothing:
+        // an empty page from a quiet guard must advance the success stamp and
+        // leave the event count at zero, which is the pairing the panel reads
+        // as "alive, nothing happened" rather than "broken".
+        lastSuccessAt: completedAt,
+        // Only a round where *no* guard answered counts as a poll failure. A
+        // partial failure keeps the feed healthy and shows its own error line,
+        // because "three of five guards answered" is not a dead endpoint.
+        lastFailureAt: anyAnswered ? current.lastFailureAt : completedAt,
+        error: failures.length > 0 ? `${failures[0]!.label}: ${failures[0]!.error}` : null,
+        eventsInLastRound: page.events.length,
+      }));
+      return page;
+    } catch (error) {
+      if (!watchActiveRef.current) return null;
+      const failedAt = new Date().toISOString();
+      const message = error instanceof Error ? error.message : String(error);
+      setFeed((current) => ({
+        ...current,
+        error: message,
+        lastPolledAt: failedAt,
+        failures: [],
+      }));
+      // The success stamp is left exactly where it was: a failed round cannot
+      // make the feed look recently-healthy, and a later success has to be able
+      // to overtake this failure — which is the recovery the issue asks to show.
+      setPoll((current) => ({
+        ...current,
+        polling: false,
+        lastAttemptAt: failedAt,
+        lastFailureAt: failedAt,
+        error: message,
+      }));
+      return null;
+    }
+  }, [pushEvents]);
+
+  /**
+   * Re-read the current window now, without discarding the cursor (#488).
+   *
+   * This is the same round the schedule runs, requested early, and it goes
+   * through the same gate: pressing it during a round that is still in flight
+   * adds no request, it adds a remembered one that the in-flight round serves as
+   * its successor. Nothing is cleared — the cursor is what makes "the current
+   * window" mean the same thing it did five seconds ago, and dropping it would
+   * re-fetch history the operator already has.
+   *
+   * Returns null when no poll was made, which is either of two honest answers:
+   * nothing is being watched (a stopped tail or a historical range), or the
+   * watch ended while the round was in flight. `Clear buffer` and Stop/Start stay
+   * separate controls with separate meanings; this adds neither.
+   */
+  const refreshFeed = useCallback(async (): Promise<FeedRefreshOutcome | null> => {
+    const gate = pollGateRef.current;
+    if (!gate) return null;
+    const outcome = await pollRound(gate, runFeedRound);
+    if (gate.isClosed()) return null;
+    if (!outcome.coalesced && outcome.value === null) return null;
+    return {
+      coalesced: outcome.coalesced,
+      rounds: outcome.rounds,
+      events: outcome.value?.events.length ?? 0,
+      failedGuards: feedGuardFailures(outcome.value?.watch ?? []).length,
+    };
+  }, [runFeedRound]);
+
   useEffect(() => {
     if (!feed.watching) return;
 
@@ -1475,84 +1623,31 @@ export function GuardProvider({
       };
     }
 
-    let cancelled = false;
-    const tick = async () => {
-      // Identity-check on every tick: the supervisor holds one listener per tailed
-      // guard, and it is reconciled against the registry rather than pinned to
-      // whichever guard the loop was born with. A feed added mid-watch is primed
-      // for recent history so the operator arrives with context rather than a
-      // blank page (see FEED_SWITCH_HISTORY_LEDGERS).
-      const supervisor = multiFeedRef.current;
-      if (!supervisor) return;
-      const attemptedAt = new Date().toISOString();
-      setPoll((current) => ({ ...current, polling: true, lastAttemptAt: attemptedAt }));
-      try {
-        const page = await supervisor.pollAll();
-        if (cancelled) return;
-        if (page.latestLedger !== null) {
-          knownLedgerRef.current = Math.max(knownLedgerRef.current ?? 0, page.latestLedger);
-        }
-        pushEvents(page.events as TelemetryEvent[]);
-        // One guard failing to poll is reported on its own line and does not
-        // blank the guards that answered. `error` carries the first failure so
-        // the panel still has a headline to show.
-        const failed = page.watch.find((entry) => !entry.ok);
-        const anyAnswered = page.watch.some((entry) => entry.ok);
-        const completedAt = new Date().toISOString();
-        setFeed((current) => ({
-          ...current,
-          latestLedger: page.latestLedger ?? current.latestLedger,
-          // An *attempt* stamp. #311: it is not a success claim, which is why the
-          // success stamp below is a separate field with its own writer.
-          lastPolledAt: completedAt,
-          guards: supervisor.guards(),
-          gaps: feedGapNotices(page.watch),
-          error: failed ? `${failed.label}: ${failed.error}` : null,
-        }));
-        setPoll((current) => ({
-          polling: false,
-          lastAttemptAt: completedAt,
-          // A round that returned is a live poll even when it carried nothing:
-          // an empty page from a quiet guard must advance the success stamp and
-          // leave the event count at zero, which is the pairing the panel reads
-          // as "alive, nothing happened" rather than "broken".
-          lastSuccessAt: completedAt,
-          // Only a round where *no* guard answered counts as a poll failure. A
-          // partial failure keeps the feed healthy and shows its own error line,
-          // because "three of five guards answered" is not a dead endpoint.
-          lastFailureAt: anyAnswered ? current.lastFailureAt : completedAt,
-          error: failed ? `${failed.label}: ${failed.error}` : null,
-          eventsInLastRound: page.events.length,
-        }));
-      } catch (error) {
-        if (cancelled) return;
-        const failedAt = new Date().toISOString();
-        const message = error instanceof Error ? error.message : String(error);
-        setFeed((current) => ({ ...current, error: message, lastPolledAt: failedAt }));
-        // The success stamp is left exactly where it was: a failed round cannot
-        // make the feed look recently-healthy, and a later success has to be able
-        // to overtake this failure — which is the recovery the issue asks to show.
-        setPoll((current) => ({
-          ...current,
-          polling: false,
-          lastAttemptAt: failedAt,
-          lastFailureAt: failedAt,
-          error: message,
-        }));
-      }
+    // The gate is owned by the watch, not by the module: a refresh pressed after
+    // this effect has been cleaned up must not start a round against a table that
+    // is gone, and closing it here is what makes that true.
+    const gate = createPollGate();
+    pollGateRef.current = gate;
+    watchActiveRef.current = true;
+
+    // The interval and the refresh button both ask for a round through the same
+    // gate (#488), so a slow round cannot be joined by a second one: the extra
+    // request is remembered and served as the in-flight round's successor.
+    const tick = () => void pollRound(gate, runFeedRound);
+    tick();
+    const timer = setInterval(tick, FEED_INTERVAL_MS);
+    const endWatch = () => {
+      watchActiveRef.current = false;
+      gate.close();
+      pollGateRef.current = null;
+      clearInterval(timer);
     };
-    void tick();
-    const timer = setInterval(() => void tick(), FEED_INTERVAL_MS);
-    const unregister = memoryWiper.add(() => {
-      cancelled = true;
-      clearInterval(timer);
-    });
+    const unregister = memoryWiper.add(endWatch);
     return () => {
-      cancelled = true;
-      clearInterval(timer);
+      endWatch();
       unregister();
     };
-  }, [feed.watching, pushEvents, demo]);
+  }, [feed.watching, runFeedRound, demo]);
 
   // Built from primitives so a live batch — which replaces `buffer` but leaves
   // these unchanged — does not change the context value's identity.
@@ -1561,80 +1656,6 @@ export function GuardProvider({
   const stream = useMemo(
     () => ({ paused, pendingCount, dropped }),
     [paused, pendingCount, dropped],
-  );
-
-  /**
-   * What this provider's two pollers tell the header strip about themselves (#528).
-   *
-   * Both readings come from state the panel below is already showing, never from a
-   * second read: the strip that exists to say whether the numbers on screen are
-   * current would be useless if it had its own idea of current.
-   *
-   * `lastSuccessAt` is keyed on the snapshot rather than on `lastRefresh` alone.
-   * A guard switch nulls the snapshot without nulling the stamp, and reporting the
-   * previous guard's read as this guard's freshness is the exact conflation of
-   * "we refreshed" with "this is what this guard says" that #311 and #528 exist to
-   * prevent. A success is a stamp that belongs to what is on screen.
-   */
-  const statusSource = useMemo<RefreshSource>(
-    () => ({
-      id: "status",
-      intervalMs: SNAPSHOT_INTERVAL_MS,
-      // The poller is on this screen whenever there is a guard to read.
-      watching: guard.length > 0,
-      polling: refreshing,
-      lastSuccessAt:
-        snapshot === null || lastRefresh === null ? null : new Date(lastRefresh).toISOString(),
-      // A round that is not in flight has no attempt stamp of its own; the
-      // failure below carries its own date, which is the only one needed.
-      lastAttemptAt: null,
-      lastFailureAt: snapshotFailureAt,
-      error: snapshotError,
-      deliveredInLastRound: snapshot === null ? 0 : 1,
-      paused: false,
-    }),
-    [guard, refreshing, snapshot, lastRefresh, snapshotFailureAt, snapshotError],
-  );
-
-  const telemetrySource = useMemo<RefreshSource>(
-    () => ({
-      id: "telemetry",
-      intervalMs: FEED_INTERVAL_MS,
-      watching: feed.watching,
-      polling: poll.polling,
-      lastSuccessAt: poll.lastSuccessAt,
-      lastAttemptAt: poll.lastAttemptAt,
-      lastFailureAt: poll.lastFailureAt,
-      error: poll.error,
-      deliveredInLastRound: poll.eventsInLastRound,
-      // The freeze stops rows moving, not the poll. Stated beside the phase for
-      // that reason: `watching` is still true while this is true.
-      paused: stream.paused,
-    }),
-    [feed.watching, poll, stream.paused],
-  );
-
-  // Publish, and stop publishing. Demo mode is the one case where this provider's
-  // timers are not chain reads at all - the snapshot is a fixture and the feed is
-  // a synthetic event generator - so both sources are withdrawn rather than
-  // dressed up, and the strip says nothing about data the chain never sent.
-  useEffect(() => {
-    if (demo) {
-      refreshSources.retire("status");
-      refreshSources.retire("telemetry");
-      return;
-    }
-    refreshSources.publish(statusSource);
-    refreshSources.publish(telemetrySource);
-  }, [demo, statusSource, telemetrySource]);
-
-  // The provider is per screen, so leaving on one must take its rows with it.
-  useEffect(
-    () => () => {
-      refreshSources.retire("status");
-      refreshSources.retire("telemetry");
-    },
-    [],
   );
 
   // Memoised so an `events` batch — the frequent update — cannot change this
@@ -1670,7 +1691,7 @@ export function GuardProvider({
       refresh,
       retryRead,
       retryingField,
-      feed: { ...feed, health },
+      feed: { ...feed, health, refresh: refreshFeed },
       stream,
       pauseStream,
       resumeStream,
@@ -1721,6 +1742,7 @@ export function GuardProvider({
       retryingField,
       feed,
       health,
+      refreshFeed,
       stream,
       pauseStream,
       resumeStream,

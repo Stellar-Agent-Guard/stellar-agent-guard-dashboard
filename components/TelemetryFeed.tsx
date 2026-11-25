@@ -25,9 +25,15 @@ import { NETWORK } from "../lib/guard/network.ts";
 import { loadScopedValue, saveScopedValue } from "../lib/guard/guardScoped.ts";
 import { useAnnounce } from "../lib/guard/useAnnounce.ts";
 import { eventsToCsv, eventsToJson, exportFilename } from "../lib/guard/eventExport.ts";
-import { buildExportScope, describeExportScope } from "../lib/guard/exportScope.ts";
+import {
+  buildExportScope,
+  describeExportScope,
+  exportFormatTitle,
+} from "../lib/guard/exportScope.ts";
 import { POLL_PHASE_WORDS, type PollPhase } from "../lib/guard/feedHealth.ts";
 import {
+  bookmarkToggled,
+  feedRefreshed,
   markNotStored,
   markRejected,
   markRemoved,
@@ -45,6 +51,19 @@ import {
   type EventMark,
   type MarkPatch,
 } from "../lib/guard/eventMarks.ts";
+import {
+  bookmarkBucketFor,
+  buildTimeline,
+  loadBookmarks,
+  mergeBookmarks,
+  removeBookmark,
+  rowAnchorId,
+  toggleBookmark,
+  type BookmarkRecord,
+  type TimelineItem,
+  type TimelineOrdering,
+} from "../lib/guard/investigations.ts";
+import { describeFeedFailures, feedFailuresHeadline } from "../lib/guard/feedRefresh.ts";
 import { BlockedEventBadge } from "./BlockedEventBadge.tsx";
 import { useDemoMode } from "../lib/guard/useDemoMode.ts";
 import {
@@ -56,6 +75,11 @@ import {
   type VerdictFilter,
 } from "../lib/guard/telemetryExport.ts";
 import { severityFor } from "../lib/guard/feedSeverity.ts";
+import {
+  describeUnknownFields,
+  provenanceForEvent,
+  summarizeProvenance,
+} from "../lib/guard/decodeProvenance.ts";
 import { formatEventTimestamp } from "../lib/guard/time.ts";
 import { decodeUrlState, writeUrlState } from "../lib/guard/urlState.ts";
 import { eventHref, eventLinkTargetFor, writeEventLink } from "../lib/guard/eventLink.ts";
@@ -69,6 +93,63 @@ import {
 
 /** The scoped-state base under which each guard's feed filter is remembered. */
 const SCOPED_FILTER_BASE = "feedFilter";
+
+/**
+ * The one document that explains why the table can be short, empty, or missing
+ * a stretch of history (#491).
+ *
+ * Linked from the four places the panel reports an absence — the health line, a
+ * gap notice, the empty table, and an empty filtered view — because each of them
+ * can be read as "nothing happened", and only one of those readings is usually
+ * correct. The labels differ per context so the link says what *that* absence
+ * might mean; the document behind all four is the same, and its numbers come
+ * from this repository's own constants.
+ */
+const EVENT_HISTORY_DOC_HREF =
+  "https://github.com/Stellar-Agent-Guard/stellar-agent-guard-dashboard/blob/main/docs/concepts/historical-event-availability.md";
+
+function AvailabilityDocLink({ label }: { label: string }) {
+  return (
+    <a
+      className="tiny"
+      href={EVENT_HISTORY_DOC_HREF}
+      target="_blank"
+      rel="noreferrer"
+      title={EVENT_HISTORY_DOC_HREF}
+      data-testid="feed-availability-doc"
+    >
+      {label} ↗
+    </a>
+  );
+}
+
+/**
+ * The buckets the timeline reads: the ones already loaded this session, and
+ * storage for the rest. Kept outside the component so the count announced right
+ * after a toggle and the list rendered on the next render come from one
+ * computation rather than two that can drift.
+ */
+function readBuckets(
+  loaded: Record<string, BookmarkRecord[]>,
+  guards: readonly string[],
+): BookmarkRecord[][] {
+  return guards.map((guard) => loaded[guard] ?? loadBookmarks(guard));
+}
+
+/**
+ * How a timeline item says what placed it (#489).
+ *
+ * "ledger time" and "observed locally" are different kinds of fact: a
+ * diagnostic row was never broadcast, so there is no ledger close to put it
+ * against, and sorting it silently among the dated rows would present this
+ * console's clock as chain time. An item with neither is labelled for what it
+ * is rather than dropped or guessed at.
+ */
+const ORDERING_LABELS: Record<TimelineOrdering, string> = {
+  ledger: "ledger time",
+  observed: "observed locally",
+  missing: "no ordering data",
+};
 
 /** Human names for the topic filter's options, keyed by the topic symbol. */
 const TOPIC_LABELS: Record<string, string> = {
@@ -397,6 +478,102 @@ export function TelemetryFeed() {
    * Stable across renders, which is what lets the memoised row take it as a prop
    * without defeating its own memoisation.
    */
+  /**
+   * Refresh the current window (#488), then say what the round did.
+   *
+   * The counts are read from the outcome rather than from the table: the feed's
+   * own buffer is capped and de-duplicated, so "4 events" from the round and "4
+   * rows" on screen are different numbers, and the operator pressed this button
+   * to find out about the round.
+   *
+   * A `null` outcome means no request was made — the watch had already stopped —
+   * and silence is the honest report. Announcing "refreshed" for a press that
+   * polled nothing is how an operator stops believing the announcements.
+   */
+  async function onRefresh() {
+    if (!feed.refresh) return;
+    const outcome = await feed.refresh();
+    if (!outcome) return;
+    const spoken = feedRefreshed(outcome);
+    announce(spoken.message, spoken.priority);
+  }
+
+  /**
+   * Bookmarks and the investigation timeline (#489).
+   *
+   * A bookmark outlives the row it came from: the table is a window, and the
+   * feed's buffer, the filter, the tailed set and the guard on screen all change
+   * underneath it. So the timeline reads its own records, merged across every
+   * saved guard, and only *adds* the link to a row when that row happens to be
+   * on screen — it never claims a sequence the buffer still holds.
+   *
+   * The buckets are read lazily and cached in state by guard address: a guard
+   * whose bucket has not been touched this render is read from storage, exactly
+   * the way the per-guard filter above is. Nothing is written except through
+   * `toggleBookmark`, which keeps the bucket's own scoped key.
+   */
+  const [bookmarkBuckets, setBookmarkBuckets] = useState<Record<string, BookmarkRecord[]>>({});
+  const bookmarkGuards = useMemo(() => {
+    const guards = new Set<string>([guard]);
+    for (const instance of instances) guards.add(instance.guard);
+    return [...guards];
+  }, [guard, instances]);
+
+  const bookmarkRecords = useMemo(
+    () => mergeBookmarks(readBuckets(bookmarkBuckets, bookmarkGuards)),
+    [bookmarkBuckets, bookmarkGuards],
+  );
+  const bookmarkedIds = useMemo(
+    () => new Set(bookmarkRecords.map((record) => record.eventId)),
+    [bookmarkRecords],
+  );
+  // Deliberately not a `useMemo`. `rows` is a fresh array on every render (it is
+  // a filter, not a cached value), so a memo keyed on it would recompute every
+  // render while claiming a stabilisation it never provided — and the compiler
+  // refuses to preserve one. The set is a scan of at most the buffer's 250 rows.
+  const timeline = buildTimeline(bookmarkRecords, new Set(rows.map((row) => row.id)));
+
+  // A `useCallback`, not a plain function: the rows are memo components, and a
+  // handler that changed identity every render would re-render the whole table on
+  // each poll batch for a button that only one row's state actually followed.
+  const onToggleBookmark = useCallback(
+    (event: TelemetryEvent) => {
+      const bucket = bookmarkBucketFor(event, guard);
+      const outcome = toggleBookmark({
+        event,
+        guard: bucket,
+        bookmarkedAt: new Date().toISOString(),
+      });
+      const next = { ...bookmarkBuckets, [bucket]: outcome.records };
+      setBookmarkBuckets(next);
+      // The total is counted from the buckets the timeline will read on the next
+      // render, so the number the operator hears is the number they then see —
+      // including the bookmarks held for guards that are not on screen.
+      const total = mergeBookmarks(readBuckets(next, bookmarkGuards)).length;
+      const spoken = bookmarkToggled({ bookmarked: outcome.bookmarked, total });
+      announce(spoken.message, spoken.priority);
+    },
+    [announce, bookmarkBuckets, bookmarkGuards, guard],
+  );
+
+  /**
+   * Take a bookmark off from the timeline itself, for an item whose row has
+   * already left the table. Removal only: pressing the entry of a row that is
+   * gone must not re-add a bookmark that was deleted elsewhere.
+   */
+  function onRemoveBookmark(record: BookmarkRecord) {
+    const next = {
+      ...bookmarkBuckets,
+      [record.guard]: removeBookmark({ eventId: record.eventId, guard: record.guard }),
+    };
+    setBookmarkBuckets(next);
+    const spoken = bookmarkToggled({
+      bookmarked: false,
+      total: mergeBookmarks(readBuckets(next, bookmarkGuards)).length,
+    });
+    announce(spoken.message, spoken.priority);
+  }
+
   const applyMark = useCallback(
     (event: GuardEvent, patch: MarkPatch, kind: MarkKind): string | null => {
       const before = eventMarks.markFor(event);
@@ -448,6 +625,25 @@ export function TelemetryFeed() {
             </button>
           ) : (
             <button onClick={startWatching}>Start watching</button>
+          )}
+          {/*
+            Manual refresh (#488). Only offered while a tail is running, because
+            the thing it re-reads is the live cursor: with the tail stopped, or
+            with a historical range on screen, there is no current window to
+            refresh. Disabled during a round rather than starting a second one —
+            the request is remembered and served by that round's successor, so a
+            press is never lost and never overlaps.
+          */}
+          {feed.watching && (
+            <button
+              className="secondary"
+              data-testid="feed-refresh"
+              onClick={() => void onRefresh()}
+              disabled={feed.health.polling}
+              title="Ask the RPC for the current window again now. The cursor is kept, so nothing is re-fetched and nothing is skipped."
+            >
+              {feed.health.polling ? "Polling…" : "Refresh now"}
+            </button>
           )}
           {stream.paused ? (
             <button onClick={onResume}>
@@ -594,7 +790,7 @@ export function TelemetryFeed() {
           className="secondary"
           onClick={() => downloadExport("csv")}
           disabled={scope.rowCount === 0}
-          title="Stable append-only schema (docs/export-schema.md): schema_version, guard, topic, kind, source, decision, reason, reason_label, ledger, ledger_closed_at, transaction_hash — BOM-prefixed for Excel"
+          title={exportFormatTitle("csv")}
         >
           Export CSV
         </button>
@@ -602,7 +798,7 @@ export function TelemetryFeed() {
           className="secondary"
           onClick={() => downloadExport("json")}
           disabled={scope.rowCount === 0}
-          title="Same schema as the CSV export, as one JSON object: schemaVersion, columns, guard, rows"
+          title={exportFormatTitle("json")}
         >
           Export JSON
         </button>
@@ -610,12 +806,13 @@ export function TelemetryFeed() {
           className="secondary"
           onClick={() =>
             downloadText(
-              "guard-telemetry.ndjson",
+              exportFilename(guard, "ndjson", scope.rowCount),
               telemetryToNdjson(scope.rows),
               "application/x-ndjson",
             )
           }
           disabled={scope.rowCount === 0}
+          title={exportFormatTitle("ndjson")}
         >
           Export NDJSON
         </button>
@@ -623,7 +820,7 @@ export function TelemetryFeed() {
           className="secondary"
           onClick={exportAuditLog}
           disabled={scope.rowCount === 0}
-          title="NDJSON audit log: a header line, then decoded fields, verdict, ledger, transaction hash and the raw event XDR per event (terms in docs/glossary.md — XDR, Ledger, Stroop)"
+          title={exportFormatTitle("audit")}
         >
           Export audit log
         </button>
@@ -747,8 +944,25 @@ export function TelemetryFeed() {
             (Last attempt <TimeAgo iso={feed.lastPolledAt} suffix=" ago" />
             .)
           </>
-        )}
+        )}{" "}
+        <AvailabilityDocLink label="Why an empty table is not proof of no activity" />
       </p>
+
+      {(feed.failures ?? []).length > 0 && (
+        <div
+          className="notice danger"
+          role="alert"
+          aria-label="Tailed guards whose poll failed"
+          data-testid="feed-guard-failures"
+        >
+          <strong>{feedFailuresHeadline(feed.failures ?? [])}</strong>
+          {describeFeedFailures(feed.failures ?? [], feed.guards.length).map((line) => (
+            <span className="tiny" key={line}>
+              {line}
+            </span>
+          ))}
+        </div>
+      )}
 
       {feed.guards.length > 0 && (
         <p className="tiny muted" style={{ marginTop: 8 }}>
@@ -797,6 +1011,7 @@ export function TelemetryFeed() {
               {describeFeedGap(notice.unsettled).range} This clears once a later poll is consistent.
             </span>
           )}
+          <AvailabilityDocLink label="How far back this endpoint can go, and what a lost range means" />
         </div>
       ))}
 
@@ -907,6 +1122,12 @@ export function TelemetryFeed() {
               : feed.guards.length > 1
                 ? "Start watching to tail these guards' events."
                 : "Start watching to tail this guard's events."}
+            {feed.watching && (
+              <>
+                {" "}
+                <AvailabilityDocLink label="Why nothing appears here" />
+              </>
+            )}
           </p>
         )
       ) : rows.length === 0 ? (
@@ -914,7 +1135,8 @@ export function TelemetryFeed() {
           No events match the current filter. The feed still holds {guardVisible.length} event(s);
           widen the verdict, topic, contract
           {selectedGuards.size > 0 ? ", guard" : ""}
-          {bookmarkedOnly ? " or bookmark" : ""} filter to see them.
+          {bookmarkedOnly ? " or bookmark" : ""} filter to see them.{" "}
+          <AvailabilityDocLink label="What the feed held before the filter was applied" />
         </p>
       ) : (
         <div className="scrolly table-stack">
@@ -928,11 +1150,52 @@ export function TelemetryFeed() {
                   guardLabel={attributionLabel(event.contractId, chipSources)}
                   mark={eventMarks.markFor(event)}
                   onMark={applyMark}
+                  bookmarked={bookmarkedIds.has(event.id)}
+                  onBookmark={onToggleBookmark}
                 />
               ))}
             </tbody>
           </table>
         </div>
+      )}
+
+      {/*
+        The investigation timeline (#489): the bookmarks across every saved
+        guard, in one sequence, without touching the query above. It is rendered
+        from the bookmark records rather than from the table because the rows
+        they were taken from are usually gone — the feed holds a window, and a
+        filter or a stopped watch replaces what is in it. The link to a row is
+        therefore a fact checked per item, not an assumption.
+      */}
+      {timeline.length > 0 ? (
+        <section
+          className="notice"
+          aria-label="Investigation timeline"
+          data-testid="investigation-timeline"
+        >
+          <strong>Investigation timeline — {timeline.length} bookmarked</strong>
+          <ol className="tiny" style={{ marginTop: 6 }}>
+            {timeline.map((item) => (
+              <TimelineEntry
+                key={`${item.record.guard}/${item.record.eventId}`}
+                item={item}
+                guardLabel={attributionLabel(item.record.guard, chipSources)}
+                onRemove={onRemoveBookmark}
+              />
+            ))}
+          </ol>
+          <span className="tiny muted">
+            Ordered by ledger close time where the event has one; a diagnostic row carries no chain
+            time, so those are placed by when this console observed them and labelled as such, and
+            anything with neither is listed last. Bookmarks are stored in this browser only, per
+            guard and network, and go away with the guard.
+          </span>
+        </section>
+      ) : (
+        <p className="tiny muted" style={{ marginTop: 8 }}>
+          Bookmark a row to keep it in an investigation timeline — one ordered sequence across every
+          guard you have saved, which survives the row leaving this table.
+        </p>
       )}
 
       <p className="tiny muted" style={{ marginTop: 8 }}>
@@ -983,6 +1246,8 @@ const TelemetryRow = memo(function TelemetryRow({
   guardLabel,
   mark,
   onMark,
+  bookmarked,
+  onBookmark,
 }: {
   event: TelemetryEvent;
   /** The registry label for this row's guard, resolved by the caller. */
@@ -991,6 +1256,9 @@ const TelemetryRow = memo(function TelemetryRow({
   mark: EventMark | null;
   /** Apply one half of the mark; returns a rejection's wording, or `null`. */
   onMark: (event: GuardEvent, patch: MarkPatch, kind: MarkKind) => string | null;
+  /** Whether this row is in the investigation timeline (#489). */
+  bookmarked: boolean;
+  onBookmark: (event: TelemetryEvent) => void;
 }) {
   // The note editor is row-local on purpose: a draft belongs to the row being
   // annotated, it must not survive a remount of a different row, and lifting it
@@ -1020,6 +1288,11 @@ const TelemetryRow = memo(function TelemetryRow({
   }
 
   const severity = severityFor(event);
+  // Per-field provenance for this row: which displayed values are chain bytes,
+  // which are the SDK's decoding, and which are missing. Cheap and pure (see
+  // `decodeProvenance.ts`), so it is computed rather than threaded through the
+  // provider — the row is already memoised on its event.
+  const provenance = provenanceForEvent(event);
   const iso = event.ledgerClosedAt ?? event.observedAt ?? null;
   // Derived from the row's own event, so the permalink costs no new prop and the
   // memoisation above stays exactly as it was. Null for a refusal and for a row the
@@ -1039,13 +1312,47 @@ const TelemetryRow = memo(function TelemetryRow({
   // one on (`eventIdentityOf` is what the store itself refuses on).
   const rowIdentity = eventIdentityOf(event);
   return (
-    <tr className={`severity-${severity}`} data-severity={severity} data-stream={event.source}>
+    <tr
+      id={rowAnchorId(event.id)}
+      tabIndex={-1}
+      className={`severity-${severity}`}
+      data-severity={severity}
+      data-stream={event.source}
+    >
       <td data-label="Event">
         {/* The severity tier is already colour-coded by the row class; this is the
             same fact as text, so reduced-motion or monochrome reading keeps it. */}
         <span className="visually-hidden">Severity: {severity}. </span>
         <div>{labelFor(event)}</div>
         <div className="tiny muted mono">{describeGuardEvent(event)}</div>
+        {/* One line, because this is an operations table: the label above is the
+            SDK's interpretation, not a chain value, and the title names the
+            fields that are missing rather than leaving them to render as text. */}
+        <div
+          className="tiny muted"
+          data-testid="event-decode-provenance"
+          title={describeUnknownFields(provenance)}
+        >
+          {summarizeProvenance(provenance)}
+        </div>
+        {/* #489: the row is where the bookmark is taken, because the row is what
+            the operator is looking at when they decide this event matters. */}
+        <div style={{ marginTop: 2 }}>
+          <button
+            type="button"
+            className={`pill${bookmarked ? " ok" : ""}`}
+            aria-pressed={bookmarked}
+            data-testid="feed-bookmark"
+            onClick={() => onBookmark(event)}
+            title={
+              bookmarked
+                ? "Take this row out of the investigation timeline"
+                : "Keep this row in the investigation timeline"
+            }
+          >
+            {bookmarked ? "bookmarked" : "bookmark"}
+          </button>
+        </div>
         {permalink !== null && (
           <a
             className="tiny"
@@ -1149,7 +1456,10 @@ const TelemetryRow = memo(function TelemetryRow({
       <td data-label="Decision">
         {event.decision ? (
           event.decision.result === "blocked" ? (
-            <span className="pill danger">{event.decision.reason ?? "blocked"}</span>
+            // A missing reason is not the reason. The old `?? "blocked"` put a
+            // word shaped like a reason code in the badge, so a refusal with no
+            // decoded reason read as if it had been explained.
+            <span className="pill danger">{event.decision.reason ?? "reason unknown"}</span>
           ) : (
             <span className="pill ok">allowed</span>
           )
@@ -1204,6 +1514,88 @@ const TelemetryRow = memo(function TelemetryRow({
   );
 });
 
+/**
+ * One item in the investigation timeline (#489).
+ *
+ * Everything here is read from the bookmark record rather than from the table,
+ * because the row it came from is usually gone by the time the timeline is
+ * open. The two things the record cannot know are answered by the caller and by
+ * the ordering: which guard this belongs to, and what placed it in the sequence.
+ * An item whose row is on screen links to it; one whose row is not says so and
+ * offers the way out, because a bookmark you cannot reach is also a bookmark you
+ * cannot un-bookmark by pressing its row.
+ */
+function TimelineEntry({
+  item,
+  guardLabel,
+  onRemove,
+}: {
+  item: TimelineItem;
+  guardLabel: string | null;
+  onRemove: (record: BookmarkRecord) => void;
+}) {
+  const { record } = item;
+  // The instant shown is the one that placed the item, so the wording and the
+  // time under it cannot disagree.
+  const stamp =
+    item.ordering === "ledger"
+      ? record.ledgerClosedAt
+      : item.ordering === "observed"
+        ? record.observedAt
+        : null;
+  return (
+    <li data-testid="timeline-item" data-ordering={item.ordering} data-stream={record.source}>
+      <span className="mono">{labelFor(record)}</span> <span className="muted">{guardLabel}</span>{" "}
+      <span className={`pill${record.source === "diagnostic" ? " warn" : ""}`}>
+        {record.source}
+      </span>{" "}
+      {record.decision !== null && (
+        <span className={`pill${record.decision === "blocked" ? " danger" : " ok"}`}>
+          {record.reason ?? record.decision}
+        </span>
+      )}{" "}
+      <span className="muted">
+        {stamp !== null ? <TimeAgo iso={stamp} /> : "no time recorded"} ·{" "}
+        {ORDERING_LABELS[item.ordering]}
+      </span>{" "}
+      {item.rowPresent ? (
+        <a
+          href={`#${item.anchorId}`}
+          data-testid="timeline-source-link"
+          onClick={(event) => jumpToRow(event, item.anchorId)}
+        >
+          source row
+        </a>
+      ) : (
+        <>
+          <span className="muted">its row is not in this table</span>{" "}
+          <button type="button" data-testid="timeline-remove" onClick={() => onRemove(record)}>
+            remove bookmark
+          </button>
+        </>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Follow a timeline item to the row it came from.
+ *
+ * Handled rather than left to the browser's fragment matching because the anchor
+ * is percent-encoded (see `rowAnchorId`) and a fragment is decoded before it is
+ * looked up, so `#row-ledger%3A…` would search for an id of `row-ledger:A…` and
+ * find nothing. `getElementById` compares the literal attribute. The row is
+ * focused as well as scrolled: an item that moves the viewport without moving
+ * the reader's place in the page leaves them somewhere they did not ask to be.
+ */
+function jumpToRow(event: { preventDefault(): void }, anchorId: string): void {
+  event.preventDefault();
+  const row = document.getElementById(anchorId);
+  if (!row) return;
+  row.scrollIntoView({ block: "center" });
+  row.focus({ preventScroll: true });
+}
+
 const feedHead = (
   <thead>
     <tr>
@@ -1217,7 +1609,7 @@ const feedHead = (
   </thead>
 );
 
-function labelFor(event: GuardEvent): string {
+function labelFor(event: Pick<GuardEvent, "kind" | "topic">): string {
   switch (event.kind) {
     case "auth_checked":
       return "Authorization decision";
@@ -1234,6 +1626,9 @@ function labelFor(event: GuardEvent): string {
     case "policy_revoked":
       return "Policy revoked";
     default:
-      return event.topic;
+      // There is no decoded label for this topic, so the row shows the symbol
+      // the chain carried — and marks it as the symbol. A bare string in a
+      // column of labels reads like a label the decoder chose.
+      return `${event.topic} (raw topic)`;
   }
 }

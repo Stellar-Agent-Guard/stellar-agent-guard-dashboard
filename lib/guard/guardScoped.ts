@@ -33,7 +33,12 @@ export const SCOPED_STORAGE_PREFIX = "stellar-agent-guard-dashboard.scoped.v1";
  * or a note belongs to the guard whose event it annotates, so deleting that guard
  * has to take them with it.
  */
-export const SCOPED_STORAGE_BASES = ["feedFilter", "policyDraft", "eventMarks"] as const;
+export const SCOPED_STORAGE_BASES = [
+  "feedFilter",
+  "policyDraft",
+  "eventMarks",
+  "bookmarks",
+] as const;
 
 export type ScopedBase = (typeof SCOPED_STORAGE_BASES)[number];
 
