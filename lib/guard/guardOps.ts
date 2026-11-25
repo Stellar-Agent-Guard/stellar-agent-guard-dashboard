@@ -32,10 +32,12 @@ import {
   isWalletCancellation,
   diagnosticEventsOf,
   invokeWithWallet,
+  previewAuthorizationSummary,
   writeBoundary,
   type InvokeResult,
   type WalletSigner,
 } from "./submit.ts";
+import type { AuthorizationContext } from "./authorizationSummary.ts";
 import { addressToScVal, hexToBytes } from "./scval.ts";
 import { announce } from "./useAnnounce.ts";
 import { recordTx } from "./txHistory.ts";
@@ -521,6 +523,35 @@ export async function deployGuard(params: {
 
 // ── Initialize, policy, freeze ─────────────────────────────────────────────
 
+/**
+ * The authorization context a write is executed under (issue #343).
+ *
+ * A panel that showed the operator the operation, the guard, the network and the
+ * admin account passes that copy, and the pipeline checks it against the
+ * transaction it is about to simulate. A caller with no panel — the local sandbox
+ * script, the Phase 3 proof harness, a unit test driving one operation — gets the
+ * same reading of the same transaction from `previewAuthorizationSummary`, so the
+ * check runs on every write rather than only on the ones that remembered to ask.
+ * `null` means there was nothing to read (no admin address yet, so no wallet is
+ * connected), and the pipeline refuses a `null` authorization instead of treating
+ * the absence as agreement.
+ */
+function authorizationFor(params: {
+  contract: string;
+  fn: string;
+  admin: string;
+  passphrase: string;
+  confirmed: AuthorizationContext | null | undefined;
+}): AuthorizationContext | null {
+  if (params.confirmed !== undefined) return params.confirmed;
+  return previewAuthorizationSummary({
+    contract: params.contract,
+    fn: params.fn,
+    admin: params.admin,
+    passphrase: params.passphrase,
+  });
+}
+
 /** Register the admin (the connected wallet) and the agent's raw Ed25519 key. */
 export async function initializeGuard(params: {
   server: rpc.Server;
@@ -528,6 +559,7 @@ export async function initializeGuard(params: {
   guard: string;
   agentPubkeyHex: string;
   passphrase?: string;
+  authorization?: AuthorizationContext | null;
 }): Promise<InvokeResult> {
   const pubkey = hexToBytes(params.agentPubkeyHex.trim());
   if (pubkey.length !== 32) {
@@ -538,6 +570,7 @@ export async function initializeGuard(params: {
       diagnosticEvents: [],
     };
   }
+  const passphrase = params.passphrase ?? NETWORK.passphrase;
   return invokeWithWallet({
     server: params.server,
     contract: params.guard,
@@ -548,6 +581,13 @@ export async function initializeGuard(params: {
     // an outcome the operator can act on rather than a thrown error (issue #291).
     cancelOnDecline: true,
     ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
+    authorization: authorizationFor({
+      contract: params.guard,
+      fn: "initialize",
+      admin: params.signer.address,
+      passphrase,
+      confirmed: params.authorization,
+    }),
   });
 }
 
@@ -559,6 +599,7 @@ export async function installPolicy(params: {
   draft: PolicyDraft;
   passphrase?: string;
   exportOnly?: boolean;
+  authorization?: AuthorizationContext | null;
 }): Promise<{ kind: "invalid"; issues: string[] } | { kind: "invoked"; result: InvokeResult }> {
   const built = buildPolicyConfig(params.draft);
   if (!built.ok)
@@ -571,6 +612,13 @@ export async function installPolicy(params: {
     signer: params.signer,
     ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
     ...(params.exportOnly !== undefined ? { exportOnly: params.exportOnly } : {}),
+    authorization: authorizationFor({
+      contract: params.guard,
+      fn: "set_policy",
+      admin: params.signer.address,
+      passphrase: params.passphrase ?? NETWORK.passphrase,
+      confirmed: params.authorization,
+    }),
   });
   return { kind: "invoked", result };
 }
@@ -582,6 +630,7 @@ export function freezeGuard(params: {
   guard: string;
   passphrase?: string;
   exportOnly?: boolean;
+  authorization?: AuthorizationContext | null;
 }): Promise<InvokeResult> {
   return invokeWithWallet({
     server: params.server,
@@ -591,6 +640,13 @@ export function freezeGuard(params: {
     signer: params.signer,
     ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
     ...(params.exportOnly !== undefined ? { exportOnly: params.exportOnly } : {}),
+    authorization: authorizationFor({
+      contract: params.guard,
+      fn: "freeze",
+      admin: params.signer.address,
+      passphrase: params.passphrase ?? NETWORK.passphrase,
+      confirmed: params.authorization,
+    }),
   });
 }
 
@@ -775,6 +831,7 @@ export function unfreezeGuard(params: {
   guard: string;
   passphrase?: string;
   exportOnly?: boolean;
+  authorization?: AuthorizationContext | null;
 }): Promise<InvokeResult> {
   return invokeWithWallet({
     server: params.server,
@@ -784,6 +841,13 @@ export function unfreezeGuard(params: {
     signer: params.signer,
     ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
     ...(params.exportOnly !== undefined ? { exportOnly: params.exportOnly } : {}),
+    authorization: authorizationFor({
+      contract: params.guard,
+      fn: "unfreeze",
+      admin: params.signer.address,
+      passphrase: params.passphrase ?? NETWORK.passphrase,
+      confirmed: params.authorization,
+    }),
   });
 }
 
@@ -794,6 +858,7 @@ export function revokePolicy(params: {
   guard: string;
   passphrase?: string;
   exportOnly?: boolean;
+  authorization?: AuthorizationContext | null;
 }): Promise<InvokeResult> {
   return invokeWithWallet({
     server: params.server,
@@ -803,6 +868,13 @@ export function revokePolicy(params: {
     signer: params.signer,
     ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
     ...(params.exportOnly !== undefined ? { exportOnly: params.exportOnly } : {}),
+    authorization: authorizationFor({
+      contract: params.guard,
+      fn: "revoke_policy",
+      admin: params.signer.address,
+      passphrase: params.passphrase ?? NETWORK.passphrase,
+      confirmed: params.authorization,
+    }),
   });
 }
 
@@ -813,6 +885,7 @@ export async function rotateAgentKey(params: {
   guard: string;
   newAgentPubkeyHex: string;
   passphrase?: string;
+  authorization?: AuthorizationContext | null;
 }): Promise<InvokeResult> {
   const pubkey = hexToBytes(params.newAgentPubkeyHex.trim());
   if (pubkey.length !== 32) {
@@ -830,6 +903,13 @@ export async function rotateAgentKey(params: {
     args: [xdr.ScVal.scvBytes(pubkey)],
     signer: params.signer,
     ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
+    authorization: authorizationFor({
+      contract: params.guard,
+      fn: "rotate_agent_key",
+      admin: params.signer.address,
+      passphrase: params.passphrase ?? NETWORK.passphrase,
+      confirmed: params.authorization,
+    }),
   });
 }
 

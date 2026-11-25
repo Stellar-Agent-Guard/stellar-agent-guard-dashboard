@@ -41,6 +41,14 @@ before(async () => {
   ({ dialogStack } = await import("../../lib/guard/useModalFocus.ts"));
 });
 
+/** A confirmed signer, so the review offers its Confirm button (see #343). */
+const TEST_AUTHORIZATION = {
+  operation: "set_policy",
+  guard: "CBBD7223BM5VCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNS",
+  networkPassphrase: "Test SDF Network ; September 2015",
+  admin: "GBBD7223BM5VCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNS",
+};
+
 let root: ReturnType<typeof createRoot> | null = null;
 
 afterEach(async () => {
@@ -88,6 +96,7 @@ function Harness(props: { diff: PolicyDiff; onCancel?: () => void; onConfirm?: (
     open &&
       h(PolicyDiffModal, {
         diff: props.diff,
+        authorization: TEST_AUTHORIZATION,
         onConfirm: () => {
           props.onConfirm?.();
           setOpen(false);
@@ -156,8 +165,8 @@ describe("policy comparison markup (#537)", () => {
     const rows = Array.from(dialog.querySelectorAll("tbody tr"));
     assert.equal(rows.length, 3, "only the changed fields are listed");
     for (const row of rows) {
-      const labels = Array.from(row.querySelectorAll("td")).map((td) =>
-        td.getAttribute("data-label"),
+      const labels = Array.from(row.querySelectorAll("th, td")).map((cell) =>
+        cell.getAttribute("data-label"),
       );
       assert.deepEqual(labels, [
         DIFF_COLUMN_LABELS.field,
@@ -167,7 +176,7 @@ describe("policy comparison markup (#537)", () => {
     }
     const perTx = rows.find((row) => row.textContent?.includes("per_tx_cap"));
     assert.ok(perTx);
-    const cells = perTx.querySelectorAll("td");
+    const cells = perTx.querySelectorAll("th, td");
     assert.equal(cells[1]!.textContent, "100", "before = installed value");
     assert.equal(cells[2]!.textContent, "250", "after = draft value");
   });

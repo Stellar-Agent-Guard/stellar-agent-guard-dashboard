@@ -12,6 +12,9 @@
  *     number and no precision is lost.
  *   - Reason codes carry both the raw contract symbol (`reason`) and the
  *     SDK's human explanation (`reason_label`).
+ *   - Every time cell is ISO-8601 **UTC** — see `canonicalUtc` in `time.ts` —
+ *     so two operators in two zones export byte-identical rows, and no cell
+ *     carries a local wall time that a reviewer would misread or mis-sort.
  *   - The CSV is BOM-prefixed so Excel opens it as UTF-8 instead of
  *     mojibake.
  *
@@ -19,6 +22,7 @@
  * two cannot drift apart silently.
  */
 import { explainReason, type GuardEvent } from "stellar-agent-guard-sdk";
+import { canonicalUtc } from "./time.ts";
 
 /** Bumped only when a change would break existing consumers — see the doc. */
 export const EVENT_EXPORT_SCHEMA_VERSION = 1;
@@ -39,6 +43,7 @@ export const EVENT_EXPORT_COLUMNS = [
   "ledger",
   "ledger_closed_at",
   "transaction_hash",
+  "observed_at",
 ] as const;
 
 export type EventExportColumn = (typeof EVENT_EXPORT_COLUMNS)[number];
@@ -53,6 +58,12 @@ export type EventExportRow = Record<EventExportColumn, string>;
  * export keeps naming its guard even for diagnostic events the RPC stream
  * could not attribute. `decision` is `allowed` / `blocked` / empty (non-auth
  * events carry no decision); `reason` is the raw contract symbol.
+ *
+ * The two time cells answer different questions, and a blocked call needs both:
+ * `ledger_closed_at` is when the ledger that holds the event closed, which a
+ * diagnostic refusal — a transaction that never reached a ledger — does not
+ * have. `observed_at` is when this console first saw the event, so a refusal
+ * still lands in a time-ordered file instead of exporting with no time at all.
  */
 export function eventToExportRow(event: GuardEvent, guard: string): EventExportRow {
   const decision = event.decision;
@@ -66,8 +77,9 @@ export function eventToExportRow(event: GuardEvent, guard: string): EventExportR
     reason: decision?.reason ?? "",
     reason_label: decision?.reason ? explainReason(decision.reason) : "",
     ledger: event.ledger === null ? "" : String(event.ledger),
-    ledger_closed_at: event.ledgerClosedAt ?? "",
+    ledger_closed_at: canonicalUtc(event.ledgerClosedAt),
     transaction_hash: event.transactionHash ?? "",
+    observed_at: canonicalUtc(event.observedAt),
   };
 }
 

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { DemoBadge } from "../components/DemoBadge.tsx";
+import { HeaderRefreshStatus } from "../components/HeaderRefreshStatus.tsx";
 import { SecretKeyGuard } from "../components/SecretKeyGuard.tsx";
 import { Tabs } from "../components/bits.tsx";
 import { AriaAnnouncer } from "../components/AriaAnnouncer.tsx";
@@ -92,6 +93,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     keyboard help
                   </a>
                 </div>
+                <HeaderRefreshStatus />
               </header>
               <div
                 className="row"

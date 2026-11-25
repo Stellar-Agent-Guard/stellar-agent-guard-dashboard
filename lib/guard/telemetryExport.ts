@@ -6,9 +6,15 @@
  * Column order is fixed and documented (it is a small public format: spreadsheets
  * and log shippers consume these files), and every row is derived from the same
  * `GuardEvent` the table renders — one row in, one line out.
+ *
+ * Both time cells are canonical ISO-8601 UTC (`canonicalUtc` in `time.ts`), the
+ * same form the CSV/JSON telemetry export and the audit log write, so a file
+ * downloaded in one zone sorts identically to one downloaded in another
+ * (issue #318).
  */
 
 import type { GuardEvent } from "stellar-agent-guard-sdk";
+import { canonicalUtc } from "./time.ts";
 import { neutralizeFormulaCell } from "./csv.ts";
 
 export type VerdictFilter = "all" | "allowed" | "blocked";
@@ -56,6 +62,10 @@ export function filterGuardEvents<T extends GuardEvent>(
  * The CSV header, in order. `data` is the event body as compact JSON — it is
  * quoted like any other field, so a body containing commas or newlines stays
  * one cell.
+ *
+ * Append-only, like the schema in `docs/export-schema.md`: a new column joins
+ * the end, and nothing before it is renamed, reordered or removed, so a script
+ * written against an older file keeps parsing.
  */
 export const TELEMETRY_CSV_COLUMNS = [
   "kind",
@@ -68,6 +78,7 @@ export const TELEMETRY_CSV_COLUMNS = [
   "transaction_hash",
   "contract_id",
   "data",
+  "observed_at",
 ] as const;
 
 /** Compact JSON that survives `bigint` (ScVal decoding produces them). */
@@ -94,10 +105,11 @@ function rowCells(event: GuardEvent): string[] {
     event.decision?.reason ?? "",
     event.source,
     event.ledger === null || event.ledger === undefined ? "" : String(event.ledger),
-    event.ledgerClosedAt ?? "",
+    canonicalUtc(event.ledgerClosedAt),
     event.transactionHash ?? "",
     event.contractId ?? "",
     dataJson(event.data),
+    canonicalUtc(event.observedAt),
   ];
 }
 
@@ -114,8 +126,19 @@ export function telemetryToCsv(events: GuardEvent[]): string {
 /** One JSON document per line (trailing newline), for log pipelines. */
 export function telemetryToNdjson(events: GuardEvent[]): string {
   const lines = events.map((event) => {
-    const [kind, topic, decision, reason, source, ledger, closedAt, hash, contractId, data] =
-      rowCells(event);
+    const [
+      kind,
+      topic,
+      decision,
+      reason,
+      source,
+      ledger,
+      closedAt,
+      hash,
+      contractId,
+      data,
+      observedAt,
+    ] = rowCells(event);
     return JSON.stringify({
       kind,
       topic,
@@ -127,6 +150,7 @@ export function telemetryToNdjson(events: GuardEvent[]): string {
       transaction_hash: hash,
       contract_id: contractId,
       data: JSON.parse(data ?? "null") as unknown,
+      observed_at: observedAt,
     });
   });
   return lines.length > 0 ? `${lines.join("\n")}\n` : "";

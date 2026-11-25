@@ -2,11 +2,25 @@
 
 The primary console screen provides full visibility into the active guard account:
 
-- **Wallet Header**: Displays the connected wallet address, the target network, and quick-disconnect.
+- **Wallet Header**: Displays the connected wallet address, the target network, and quick-disconnect. **Wallet diagnostics** opens a prompt-free view of the selected provider, the connected address, both networks and the capabilities this browser reports ([wallet diagnostics](wallet-diagnostics.md)).
 - **Account Summary**: Shows the guard custom account address, its rolling spend window, and the installed policy.
 - **Dead-Man Switch Status**: Displays the heartbeat grace remaining, derived from the ledger clock.
-- **Panic Button**: Immediate access to the emergency freeze modal.
+- **Panic Button**: Immediate access to the emergency freeze modal, which shows the [pre-signature authorization summary](authorization-summary.md) before it asks the wallet to sign.
 - **Telemetry Feed**: Live scrolling feed of recent `event_auth_checked` authorization events.
+- **Incident Actions**: The admin writes worth doing to this account in the state the chain reports,
+  each with what it does and the confirmation the existing control asks for; anything not offered is
+  listed with its reason rather than left out. Rows hand off to the control that performs the write —
+  they focus it, never click it — and a separate block re-reads `status()` once, on demand, to answer
+  whether the write landed. See
+  [the incident action list](../../SPEC.md#the-incident-action-list-on-the-overview).
+- **Refresh Strip**: One row, on the single line the site header sets aside for it, per panel that
+  polls, stating its cadence, when its last round landed, and whether it is `polling`, `connecting`,
+  `poll failing`, `no response` or `stopped`. The strip reads nothing itself — panels report their own
+  liveness and withdraw it when they unmount — and a frozen display is shown as `display paused` beside
+  the phase rather than in place of it. The line is reserved whether or not anything has published yet,
+  so the panels below it never move when the first round lands; a strip with more rows than width
+  scrolls sideways. Each row links to that panel's diagnostics. See
+  [the read path](../../SPEC.md#where-the-console-says-when-it-last-read).
 
 **Related:** [Enforcement scope](../enforcement-scope.md) ·
 [Emergency freeze & incident response](../runbooks/emergency-freeze.md) ·
