@@ -4,14 +4,15 @@
 that holds no keys and runs no server code, so most changes are UI, client-side Soroban
 RPC, or tests.
 
-## Browser Capability Changes
+## Artifact Pin Changes
 
-> **Adding or modifying browser APIs requires documented fallbacks and secure-context
-> verification.** Before opening a PR that modifies any browser API usage (Clipboard,
-> Storage, Web Workers, or Wallet), ensure the browser-capabilities checklist in
-> `docs/operations/browser-capabilities.md` is updated and the requirements are met.
-> All PRs that change browser API usage must satisfy the relevant items in the checklist.
-> Pull requests that do not will be returned for completion.
+> **Changing the pinned WASM identity affects deployment trust and requires coordinated,
+> evidence-backed review.** Before opening a PR that modifies the pinned artifact, complete
+> the **Artifact Pin Change Checklist** in `docs/operations/artifact-pin-checklist.md` and
+> reference it in your PR description.
+
+All PRs that change the pinned artifact must satisfy every item in the checklist. Pull
+requests that do not will be returned for completion.
 
 ## First run (local development walkthrough)
 
