@@ -6,9 +6,15 @@
  * Column order is fixed and documented (it is a small public format: spreadsheets
  * and log shippers consume these files), and every row is derived from the same
  * `GuardEvent` the table renders — one row in, one line out.
+ *
+ * Both time cells are canonical ISO-8601 UTC (`canonicalUtc` in `time.ts`), the
+ * same form the CSV/JSON telemetry export and the audit log write, so a file
+ * downloaded in one zone sorts identically to one downloaded in another
+ * (issue #318).
  */
 
 import type { GuardEvent } from "stellar-agent-guard-sdk";
+import { canonicalUtc } from "./time.ts";
 import { neutralizeFormulaCell } from "./csv.ts";
 
 export type VerdictFilter = "all" | "allowed" | "blocked";
@@ -56,6 +62,10 @@ export function filterGuardEvents<T extends GuardEvent>(
  * The CSV header, in order. `data` is the event body as compact JSON — it is
  * quoted like any other field, so a body containing commas or newlines stays
  * one cell.
+ *
+ * Append-only, like the schema in `docs/export-schema.md`: a new column joins
+ * the end, and nothing before it is renamed, reordered or removed, so a script
+ * written against an older file keeps parsing.
  */
 export const TELEMETRY_CSV_COLUMNS = [
   "kind",
@@ -68,6 +78,7 @@ export const TELEMETRY_CSV_COLUMNS = [
   "transaction_hash",
   "contract_id",
   "data",
+  "observed_at",
 ] as const;
 
 /** One of this format's columns; the row map below is keyed by it. */
@@ -109,10 +120,11 @@ function rowFields(event: GuardEvent): Record<TelemetryExportColumn, string> {
     reason: event.decision?.reason ?? "",
     source: event.source,
     ledger: event.ledger === null || event.ledger === undefined ? "" : String(event.ledger),
-    ledger_closed_at: event.ledgerClosedAt ?? "",
+    ledger_closed_at: canonicalUtc(event.ledgerClosedAt),
     transaction_hash: event.transactionHash ?? "",
     contract_id: event.contractId ?? "",
     data: dataJson(event.data),
+    observed_at: canonicalUtc(event.observedAt),
   };
 }
 

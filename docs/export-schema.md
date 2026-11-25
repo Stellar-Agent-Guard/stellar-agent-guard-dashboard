@@ -1,80 +1,19 @@
 # Telemetry export schema
 
-The telemetry feed's four **Export** buttons write the events the operator can
-see to a file. They are not one format with two spellings: three writers back
-four downloads, and their field lists differ. This document is the contract for
-anything that parses those files.
-
-| Button               | Writer                      | Shape                                                   | Fields                                      | Carries `data` |
-| -------------------- | --------------------------- | ------------------------------------------------------- | ------------------------------------------- | -------------- |
-| **Export CSV**       | `lib/guard/eventExport`     | BOM-prefixed RFC 4180, header row first                 | `EVENT_EXPORT_COLUMNS` (11)                 | No             |
-| **Export JSON**      | `lib/guard/eventExport`     | one object: `schemaVersion`, `columns`, `guard`, `rows` | the same 11, as row keys                    | No             |
-| **Export NDJSON**    | `lib/guard/telemetryExport` | one object per line, no header line                     | `TELEMETRY_CSV_COLUMNS` (10)                | **Yes**        |
-| **Export audit log** | `lib/guard/exportFormats`   | NDJSON: a header line, then one record per event        | `AUDIT_HEADER_FIELDS`, `AUDIT_EVENT_FIELDS` | **Yes**        |
-
-Each list is a single source of truth rather than a copy: the export preview
-(`lib/guard/exportScope.ts`) imports the arrays above, so the field list shown
-beside the buttons cannot drift from what the writers emit.
-`tests/unit/eventExport.test.ts` syncs this document against the CSV/JSON
-columns, and `tests/unit/exportDiagnosticOrigin.test.ts` reads each format's
-field list back out of the bytes it emits — a header row, a key set — and
-compares it with what the preview advertises, in both directions.
+The telemetry feed's **Export CSV** and **Export JSON** buttons write the feed's
+visible events to a file. Both formats share one column schema; this document is
+the contract for anything that parses those exports, and
+`tests/unit/eventExport.test.ts` syncs the implementation against it.
 
 ## Compatibility rule: append-only
 
-**Columns are append-only, per format.** A schema change may _add_ a field at
-the end of one list; it must never rename, reorder, or remove an existing one,
-so a script written against today's export keeps parsing tomorrow's. A parser
-that ignores unknown trailing columns stays compatible with every future
-version.
+**Columns are append-only.** A schema change may _add_ a column at the end of
+the list; it must never rename, reorder, or remove an existing column. The
+`schema_version` cell lets a script assert which schema it is reading, and a
+parser that ignores unknown trailing columns stays compatible with every future
+version of this export.
 
-The version marker depends on the format:
-
-- CSV and JSON: the `schema_version` cell on every row — currently `1`.
-- Audit log: the header line's `schema`, currently
-  `stellar-agent-guard/telemetry-audit@1`.
-- NDJSON: no version field. Read it as `TELEMETRY_CSV_COLUMNS` plus whatever
-  trailing keys appear, which is all the append-only rule can promise.
-
-## Telling a refused transaction from a settled one
-
-A blocked decision comes from a simulation that was never broadcast, so an export
-row for it must not read as a chain event. Every format names the origin
-explicitly instead of leaving it to be inferred from an empty column:
-
-| Format    | Where the origin lives      | A refusal                                                                        |
-| --------- | --------------------------- | -------------------------------------------------------------------------------- |
-| CSV, JSON | `source`                    | `source=diagnostic`, with `ledger`, `ledger_closed_at`, `transaction_hash` empty |
-| NDJSON    | `source`                    | `"source": "diagnostic"`, the same three fields empty                            |
-| Audit log | `source`, `timestampSource` | `"source": "diagnostic"`, `"timestampSource": "observed"`                        |
-
-`source` is `ledger` for a row the chain committed and `diagnostic` for one this
-console decoded from simulation diagnostics. The audit log adds
-`timestampSource`, because it merges two different clocks into one `timestamp`
-field and a reader has to know which clock they are sorting by:
-
-- `ledger_close` — `timestamp` is the ledger close time (a committed row).
-- `observed` — `timestamp` is when this console decoded the row (a diagnostic).
-  That is a browser clock, not a chain fact.
-- `null` — the row carries no time at all.
-
-Two rules follow from this, and both are checked against emitted bytes rather
-than reviewed in a column list:
-
-1. **A refusal never borrows ledger facts.** Its `ledger`, `ledger_closed_at`
-   and `transaction_hash` are empty (CSV, JSON, NDJSON) or `null` (audit log)
-   even though the rest of the row is complete. A hash on a blocked row would be
-   a fabrication, and so would a close time copied from whichever ledger
-   happened to be current. For the same reason no format substitutes a plausible
-   timestamp for a missing one: an undated refusal stays undated.
-2. **`data` is in the two forensic formats only.** The decoded payload carries
-   whatever a caller brought with it. CSV and JSON omit it by construction — no
-   column is fed from `event.data` — while NDJSON and the audit log write it,
-   because an incident file that cannot show _what_ was refused is of little
-   use. The preview states which is which per format, so the operator reads the
-   difference before downloading rather than after opening the file.
-
-## Export CSV / Export JSON columns (in order)
+## Columns (in order)
 
 | #   | Column             | Meaning                                                                             | Empty when                                                          |
 | --- | ------------------ | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
@@ -89,68 +28,110 @@ than reviewed in a column list:
 | 9   | `ledger`           | Ledger sequence the event was committed in.                                         | Diagnostic events — a blocked transaction never reaches the ledger. |
 | 10  | `ledger_closed_at` | ISO-8601 close time of that ledger.                                                 | Diagnostic events.                                                  |
 | 11  | `transaction_hash` | Hash of the committed transaction.                                                  | Diagnostic events.                                                  |
+| 12  | `observed_at`      | ISO-8601 time this console first saw the event, committed or diagnostic.            | An event the feed carried before this field existed.                |
 
-## Export NDJSON fields (in order)
+### Practical ceiling
 
-| #   | Field              | Meaning                                                            | Empty when                              |
-| --- | ------------------ | ------------------------------------------------------------------ | --------------------------------------- |
-| 1   | `kind`             | Classified event kind.                                             | Never.                                  |
-| 2   | `topic`            | The event's topic symbol.                                          | Never.                                  |
-| 3   | `decision`         | `allowed` or `blocked`.                                            | Non-auth events.                        |
-| 4   | `reason`           | Raw contract block reason symbol.                                  | Allowed decisions and non-auth events.  |
-| 5   | `source`           | `ledger` or `diagnostic`.                                          | Never.                                  |
-| 6   | `ledger`           | Decimal string ledger sequence.                                    | Diagnostic events.                      |
-| 7   | `ledger_closed_at` | ISO-8601 close time.                                               | Diagnostic events.                      |
-| 8   | `transaction_hash` | Committed transaction hash.                                        | Diagnostic events.                      |
-| 9   | `contract_id`      | The contract the row was observed on, as the stream reported it.   | The stream could not attribute the row. |
-| 10  | `data`             | The decoded payload, as a JSON value, not as a quoted string cell. | `""` when the event carried no payload. |
+The feed keeps the **250 most recent events** (newest first), so an export
+contains at most 250 data rows and always reflects what the operator can see.
+Export earlier if you need more history; the feed is a console, not an archive.
 
-The guard on an NDJSON line is `contract_id`; the CSV/JSON formats call the same
-idea `guard`, because theirs is stamped from the console's watched guard on every
-row rather than read off the event. The two lists answer different questions and
-neither was renamed to suit the other — append-only applies to names as well as
-to order.
+## Timestamps are UTC, in every machine-readable file
 
-## Export audit log
+Both time columns above — and every event time in the NDJSON audit log below —
+are written by `canonicalUtc` in `lib/guard/time.ts` as **ISO-8601 UTC at second
+precision with a `Z` suffix** (`2026-03-08T06:59:59Z`), which is byte-identical
+to the UTC rendering the on-screen feed shows.
 
-Line 1 is the header (`"record": "audit_header"`), then one
-`"record": "guard_event"` line per event, in feed order. Header fields:
+- An explicit offset is folded into the same instant, so `01:59:59-05:00` and
+  `06:59:59Z` export as one value.
+- A value that carries **no** zone or offset is read as UTC, never as the
+  operator's local time. A zone-less wall time means a different instant in
+  every zone — and around a daylight-saving transition it can mean an instant
+  that never existed in that zone at all, which is how two incident reports
+  come to disagree about the same event.
+- Sub-second precision is dropped: it is not meaningful for a ledger close time,
+  and rows keep the feed's own newest-first order, so ordering never depends on
+  the fraction.
+- A value that does not parse as an instant is exported **verbatim** rather than
+  blanked. An export must not delete the only time a row carries; the anomaly
+  stays visible and attributable to whatever produced it.
 
-| Field           | Meaning                                                                               |
-| --------------- | ------------------------------------------------------------------------------------- |
-| `schema`        | `stellar-agent-guard/telemetry-audit@1`.                                              |
-| `exportedAt`    | ISO-8601 instant of the download — this console's clock, not the chain's.             |
-| `guard`         | The watched guard contract id.                                                        |
-| `network`       | Network name in force, e.g. `testnet`.                                                |
-| `scope`         | `filtered` when a filter narrowed the file, `full` for the whole buffer.              |
-| `filter`        | The exact filter (`verdict`, `topic`, `contract`) that produced these rows.           |
-| `eventCount`    | Records written by this export.                                                       |
-| `bufferedCount` | Events the in-memory buffer held, so a filtered file can be checked for completeness. |
-| `latestLedger`  | Decimal string, or `null` when no ledger has been read yet.                           |
-| `demo`          | `true` when the feed is demo data rather than chain reads.                            |
+Localized rendering exists only on screen (`formatEventTimestamp`), never in a
+file. The one exception in the machine-readable set is the audit log's header
+`exportedAt`, which keeps its milliseconds: it stamps when this export ran, not
+when something happened on chain.
 
-Event record fields, in the order the writer emits them:
+## NDJSON audit log schema
 
-| Field             | Meaning                                                                                |
-| ----------------- | -------------------------------------------------------------------------------------- |
-| `record`          | `guard_event`.                                                                         |
-| `kind`, `topic`   | As above.                                                                              |
-| `verdict`         | `allowed` / `blocked`, or `null` for an event that carries no decision.                |
-| `reason`          | Raw contract block reason symbol, or `null`.                                           |
-| `source`          | `ledger` or `diagnostic`.                                                              |
-| `contractId`      | Emitting contract, or `null`.                                                          |
-| `ledger`          | Decimal string, or `null` for a refusal.                                               |
-| `timestamp`       | The row's one place on a timeline: close time, else observation time, else `null`.     |
-| `timestampSource` | Which clock `timestamp` came from — the list in the section above.                     |
-| `ledgerClosedAt`  | Chain close time, or `null`.                                                           |
-| `observedAt`      | When this console decoded the row, or `null`.                                          |
-| `transactionHash` | Committed hash, or `null` for a refusal.                                               |
-| `data`            | The decoded payload, made JSON-safe (conventions below).                               |
-| `raw`             | The original XDR the row was decoded from, or `null` when the console did not keep it. |
+**Export NDJSON** writes the same feed for `jq`, log shippers and SIEM
+ingesters: one JSON object per line, the first line a header, the rest one line
+per event in feed order. The schema id is `stellar-agent-guard/telemetry-audit@1`
+(`AUDIT_LOG_SCHEMA` in `lib/guard/exportFormats.ts`), and the field names below
+follow the **same append-only rule as the columns above**: a change may add a
+field, never rename, reorder or remove one.
 
-`raw` carries `eventId`, `topicXdr`, `valueXdr`, `diagnosticEventXdr` and
-`inSuccessfulContractCall` — the bytes, so a reviewer can re-decode a row instead
-of trusting this console's decoder.
+The header line (`record: "audit_header"`) carries `schema`, `exportedAt`,
+`guard`, `network`, `scope` (`full`, or `filtered` when a filter narrowed the
+export), the exact `filter` applied, `eventCount`, `bufferedCount` (what the
+buffer held, so a filtered export can be checked for completeness),
+`latestLedger` and `demo`.
+
+Each event line (`record: "guard_event"`) carries:
+
+| Field               | Meaning                                                                                              |
+| ------------------- | ---------------------------------------------------------------------------------------------------- |
+| `record`            | Which kind of line this is — `guard_event` for every event line.                                     |
+| `kind`, `topic`     | Classified event kind and the event's topic symbol.                                                  |
+| `verdict`, `reason` | `allowed` / `blocked`, and the raw contract block reason symbol.                                     |
+| `source`            | `ledger` or `diagnostic`.                                                                            |
+| `contractId`        | The emitting contract, when the stream identifies one.                                               |
+| `ledger`            | Decimal string ledger sequence, or `null` for a diagnostic.                                          |
+| `timestamp`         | `ledgerClosedAt` when present, otherwise `observedAt`. Canonical UTC.                                |
+| `timestampSource`   | Which of the two it is: `ledger_close`, `observed`, or `null`.                                       |
+| `ledgerClosedAt`    | Canonical UTC close time, or `null`.                                                                 |
+| `observedAt`        | Canonical UTC time this console saw the event, or `null`.                                            |
+| `transactionHash`   | Committed transaction hash, or `null`.                                                               |
+| `data`              | The decoded event payload, big integers as decimal strings.                                          |
+| `raw`               | The original XDR the console received (event id, topic and value base64, diagnostic XDR), or `null`. |
+
+Integers that can exceed 2^53 — ledger sequences and every decoded `u64`/`i128`
+— are written as decimal strings, never as JSON numbers, so an audit log cannot
+silently round the figures it records. U+2028 and U+2029 are escaped inside
+strings so that "one line is one record" holds for every consumer.
+
+Filename: `guard-audit-log-[filtered-]<YYYY-MM-DDTHH-MM-SSZ>.ndjson` — the UTC
+export instant, colons swapped for hyphens so the name is filesystem-safe.
+
+## Feed NDJSON schema (`guard-telemetry.ndjson`)
+
+**Export NDJSON** on the filter bar is a separate, deliberately plainer file from
+the audit log above: `telemetryToNdjson` in `lib/guard/telemetryExport.ts` writes
+**one object per event and no header line**, in feed order, so `jq -c` and line
+oriented shippers can consume it without skipping a first record. It is filtered
+by the feed's verdict/topic/contract controls — the same projection the table
+renders, one line in, one line out.
+
+Each line's keys, in order (`TELEMETRY_CSV_COLUMNS`, which is also the CSV
+export in that module's header row):
+
+| Key                  | Meaning                                                                        |
+| -------------------- | ------------------------------------------------------------------------------ |
+| `kind`, `topic`      | Classified event kind and the event's topic symbol.                            |
+| `decision`, `reason` | `allowed` / `blocked` and the raw block reason symbol, or `""` for neither.    |
+| `source`             | `ledger` or `diagnostic`.                                                      |
+| `ledger`             | Decimal string ledger sequence, or `""` for a diagnostic.                      |
+| `ledger_closed_at`   | Canonical UTC close time (see above), or `""`.                                 |
+| `transaction_hash`   | Committed transaction hash, or `""`.                                           |
+| `contract_id`        | The emitting guard contract, or `""`.                                          |
+| `data`               | The decoded event payload as a nested object; big integers as decimal strings. |
+| `observed_at`        | Canonical UTC time this console saw the event, or `""`.                        |
+
+The append-only rule applies exactly as it does to the columns above: `observed_at`
+was added as field 11, and nothing before it was renamed, reordered or removed.
+Two differences from the audit log are intentional, and a parser must not assume
+them: this file writes the **empty string** where the audit log writes `null`, and
+it carries no header line and no `raw` XDR.
 
 ## Practical ceiling
 
@@ -164,35 +145,17 @@ is documented in
 
 ## Cell conventions
 
-- **Every scalar cell is a string.** Ledger sequences and the schema version are
-  decimal strings (`"4820001"`), timestamps are ISO-8601 strings — nothing is
-  coerced to a number, so i128 amounts and ISO precision survive round-trips.
-- **Integers beyond 2^53 stay decimal strings** in the JSON formats too (`data`,
-  `ledger`, `latestLedger`). JSON numbers are IEEE doubles, and an audit log must
-  not change the figures it records.
-- **Bytes are `{"hex": "…"}`** where a decoded payload contains a `Uint8Array`; a
-  `Map` becomes an object, a `Date` an ISO string, and values that know how to
-  render themselves (an SDK `Address`, a `Contract`) are recorded as their
-  canonical string rather than as their internals.
+- **Every cell is a string.** Ledger sequences and the schema version are
+  decimal strings (`"4820001"`), and timestamps are ISO-8601 UTC strings (see
+  [Timestamps are UTC](#timestamps-are-utc-in-every-machine-readable-file)) —
+  nothing is coerced to a number, so i128 amounts survive round-trips.
 - **CSV** follows RFC 4180: cells containing commas, quotes or newlines are
   quoted, embedded quotes are doubled. The file is **BOM-prefixed** (U+FEFF /
   `EF BB BF`) so Excel opens it as UTF-8. The first row is the column list
   verbatim; data rows follow in feed order.
-- **Formula-leading cells.** The `telemetryExport` writer prefixes an apostrophe
-  to any cell starting with `=`, `+`, `-` or `@`, so a hostile payload cannot
-  become a formula when the file is opened in a spreadsheet. That is the one
-  place the two CSV writers differ; the `eventExport` columns are a closed set of
-  symbols and ids and are written verbatim.
 - **JSON** is one object: `schemaVersion`, then `columns` (the same list), then
   `guard`, then `rows` — each row an object keyed by column name, values
   stringified exactly like the CSV cells.
-- **NDJSON** is one object per line, each line `\n`-terminated, and no header
-  line. U+2028 and U+2029 are escaped so that "one line is one record" holds for
-  every consumer, including ones that split on JavaScript line terminators.
-- **Filenames**:
-  - CSV, JSON and NDJSON: `guard-events-<guard[:8]>-<YYYY-MM-DD>-<rowCount>.<ext>`
-    — UTC ISO date, deterministic for a given day and row count. Two exports of
-    the same feed on the same day differ only when the row count differs, and
-    files from different guards never land on the same name.
-  - Audit log: `guard-audit-log-[filtered-]<UTC timestamp>.ndjson`, timestamped
-    to the second, with `filtered-` when a filter narrowed the file.
+- **Filename**: `guard-events-<guard[:8]>-<YYYY-MM-DD>-<rowCount>.<ext>` — UTC
+  ISO date, deterministic for a given day and row count, so two exports of the
+  same feed on the same day differ only when the row count differs.

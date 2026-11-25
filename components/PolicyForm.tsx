@@ -21,11 +21,22 @@ import {
   type SecurityProfile,
 } from "../lib/guard/presets.ts";
 import { installPolicy, revokePolicy } from "../lib/guard/guardOps.ts";
+import { validatePolicy } from "../lib/guard/chain.ts";
+import {
+  preflightDecision,
+  type PolicyRuleGuidance,
+  type PreflightDecision,
+} from "../lib/guard/policyPreflight.ts";
 import { historyShortcut, useHistoryState } from "../lib/guard/useHistoryState.ts";
 import { usePwaActivity } from "../lib/guard/usePwaActivity.ts";
+import { useModalFocus } from "../lib/guard/useModalFocus.ts";
 import { computePolicyDiff, type PolicyDiff } from "../lib/guard/policyDiff.ts";
 import { PolicyDiffModal } from "./PolicyDiffModal.tsx";
+import { PolicyComparisonModal } from "./PolicyComparisonModal.tsx";
 import type { InvokeResult } from "../lib/guard/submit.ts";
+import { previewAuthorizationSummary } from "../lib/guard/submit.ts";
+import type { AuthorizationContext } from "../lib/guard/authorizationSummary.ts";
+import { NETWORK } from "../lib/guard/network.ts";
 import {
   policyConfirmed,
   policyFailed,
@@ -54,7 +65,6 @@ import {
   fetchTokenMetadata,
   type TokenMetadata,
 } from "../lib/guard/tokenMetadata.ts";
-import { NETWORK } from "../lib/guard/network.ts";
 import { classifyFailure } from "../lib/guard/recoveryGuidance.ts";
 import { RecoveryGuidanceBlock } from "./RecoveryGuidance.tsx";
 import { writeControlState } from "../lib/guard/observerMode.ts";
@@ -82,11 +92,22 @@ type PolicyOutcome =
   { kind: "invalid"; issues: string[] } | { kind: "invoked"; result: InvokeResult };
 
 /**
- * What an operator approved: the draft as it stood, and the diff they were shown
- * (none for an export, which writes nothing). It is bound to the guard it was
- * produced for, so it can only ever be spent on that guard.
+ * What an operator approved: the draft as it stood, the diff they were shown
+ * (none for an export, which writes nothing), and the authorization copy they
+ * confirmed next to it. It is bound to the guard it was produced for, so it can
+ * only ever be spent on that guard.
+ *
+ * The authorization travels inside the approval instead of being re-read from the
+ * panel's props when the write runs (issue #343), so what the pipeline checks is
+ * literally what was on screen. A guard, wallet or network that moved while the
+ * dialog was open produces a transaction that no longer matches that copy, and the
+ * write is refused before the wallet is prompted.
  */
-type PolicyApproval = ScopeBound<{ draft: PolicyDraft; diff: PolicyDiff | null }>;
+type PolicyApproval = ScopeBound<{
+  draft: PolicyDraft;
+  diff: PolicyDiff | null;
+  authorization: AuthorizationContext | null;
+}>;
 type PolicyImportApproval = ScopeBound<PolicyDraft>;
 
 /** Speak a policy write's outcome, with the reason when it did not land. */
@@ -161,6 +182,12 @@ export function PolicyForm() {
   usePwaActivity(busy, "write");
   const [outcome, setOutcome] = useState<PolicyOutcome | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The contract's own verdict on the draft at the last install attempt (issue
+  // #259): nothing until a preflight has run, then the failing §8 rule's copy.
+  // Any edit clears it, because an edited draft is a new question to ask.
+  const [preflightIssue, setPreflightIssue] = useState<
+    (PolicyRuleGuidance & { rule: string }) | null
+  >(null);
   // The approval behind the open diff dialog, bound to the guard it was computed
   // for. A stale one is unreachable (see `approval` below), and is cleared outright
   // when the active guard changes.
@@ -186,6 +213,7 @@ export function PolicyForm() {
   // change event on the select.
   const [pendingPreset, setPendingPreset] = useState<PolicyPreset | null>(null);
   const [pendingPolicyImport, setPendingPolicyImport] = useState<PolicyImportApproval | null>(null);
+  const [showProfileComparison, setShowProfileComparison] = useState(false);
   // ── Which guard everything on this form belongs to ──────────────────────
   // The active guard is shared application context: the operator, another tab or
   // a link can change it while a draft, an approval or a write is still live.
@@ -214,6 +242,7 @@ export function PolicyForm() {
     setPendingApproval(null);
     setOutcome(null);
     setError(null);
+    setPreflightIssue(null);
     setPendingPreset(null);
     setPendingPolicyImport(null);
     setAssetCapChanges({});
@@ -226,6 +255,7 @@ export function PolicyForm() {
     if (draftForOtherGuard) return;
     pushDraft(next);
     setDraftScope(next === null ? null : activeScope);
+    setPreflightIssue(null);
   }
 
   /** Coalesced text edit. Refused while the draft belongs to another guard. */
@@ -233,6 +263,7 @@ export function PolicyForm() {
     if (draftForOtherGuard) return;
     editDraftRaw(next);
     setDraftScope(activeScope);
+    setPreflightIssue(null);
   }
 
   /** The explicit discard: the only way an edit for another guard is dropped. */
@@ -251,55 +282,16 @@ export function PolicyForm() {
 
   const confirmingPreset = pendingPreset !== null;
 
-  // Same focus discipline as the freeze dialog: move focus into the modal, keep
-  // Tab inside it, close on Escape, and return focus to the select afterwards.
-  useEffect(() => {
-    if (!confirmingPreset) return;
-    const dialog = presetDialog.current;
-    if (!dialog) return;
-
-    const focusables = () =>
-      Array.from(
-        dialog.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
-        ),
-      );
-
-    dialog.focus();
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setPendingPreset(null);
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const items = focusables();
-      if (items.length === 0) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-      const first = items[0]!;
-      const last = items[items.length - 1]!;
-      const active = document.activeElement as HTMLElement | null;
-      const inside = active !== null && dialog.contains(active);
-      if (event.shiftKey && (active === first || !inside)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (active === last || !inside)) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown, true);
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate late ref read, see PanicPanel
-      presetSelect.current?.focus();
-    };
-  }, [confirmingPreset]);
+  // Same focus discipline as the freeze dialog (shared hook): move focus into
+  // the modal, keep Tab inside it, close on Escape, and return focus to the
+  // select afterwards. The hook's dialog stack keeps this trap inert while a
+  // dialog above it (e.g. the secret-key alert) owns the keyboard.
+  useModalFocus({
+    open: confirmingPreset,
+    containerRef: presetDialog,
+    returnFocusRef: presetSelect,
+    onDismiss: () => setPendingPreset(null),
+  });
 
   function applyPreset(preset: PolicyPreset) {
     setDraft(draftFromPreset(preset));
@@ -403,7 +395,10 @@ export function PolicyForm() {
   // other write control in the console (issue #101).
   const installControl = writeControlState(wallet, {
     busy,
-    extraDisabled: issues.length > 0 || draftForOtherGuard,
+    // A failing preflight blocks submission (issue #259). The block is cleared
+    // by the next edit, which is also the only thing that could change the
+    // verdict — re-signing an unchanged config would fail the same rule.
+    extraDisabled: issues.length > 0 || draftForOtherGuard || preflightIssue !== null,
     label: "install the policy",
   });
   const exportControl = writeControlState(wallet, {
@@ -531,18 +526,52 @@ export function PolicyForm() {
     if (draftForOtherGuard) return;
     if (!exportOnly) {
       if (!validation.ok) return;
+      // Preflight before anything is shown for signing (issue #259): the
+      // contract dry-runs these exact bytes against its own §8 rules, so the
+      // operator sees which rule would reject the policy without spending a
+      // signature to find out. It is a read — no auth, no events, no writes —
+      // and an unavailable read leaves the verdict open rather than blocking:
+      // `set_policy` still rejects with `invalid_config` on chain, which is the
+      // guarantee clients running an older contract keep.
+      let verdict: PreflightDecision = { kind: "allow" };
+      setBusy(true);
+      try {
+        verdict = preflightDecision(await validatePolicy(server, guard, validation.scval));
+      } catch {
+        // No verdict is available; the write proceeds and the contract guards.
+      } finally {
+        setBusy(false);
+      }
+      if (verdict.kind === "block") {
+        setPreflightIssue({ rule: verdict.rule, field: verdict.field, message: verdict.message });
+        return;
+      }
+      setPreflightIssue(null);
       const installed =
         snapshot?.policy.ok && snapshot.policy.value !== null ? snapshot.policy.value : null;
-      // The approval carries the draft it was shown for and the guard it is for.
+      // The approval carries the draft it was shown for, the guard it is for, and
+      // the authorization the operator read in the dialog. That summary is read out
+      // of a transaction built by the same builder the write will use, so "this
+      // account signs set_policy on this guard, on this network" is a fact about the
+      // envelope rather than a restatement of what the form thinks it is sending.
       setPendingApproval(
         bindToScope(activeScope, {
           draft: effective,
           diff: computePolicyDiff(installed, validation.config),
+          authorization: previewAuthorizationSummary({
+            contract: guard,
+            fn: "set_policy",
+            admin: wallet?.address ?? "",
+            passphrase: NETWORK.passphrase,
+          }),
         }),
       );
       return;
     }
-    await runInstall(true, bindToScope(activeScope, { draft: effective, diff: null }));
+    await runInstall(
+      true,
+      bindToScope(activeScope, { draft: effective, diff: null, authorization: null }),
+    );
   }
 
   /**
@@ -568,6 +597,11 @@ export function PolicyForm() {
             guard: target,
             draft: approved.value.draft,
             exportOnly,
+            // An install carries the summary the operator confirmed, including when
+            // that summary was `null` — nothing shown means nothing confirmed, and the
+            // pipeline refuses it rather than signing. An XDR export asks the wallet
+            // for no signature at all, so it has nothing to carry.
+            ...(exportOnly ? {} : { authorization: approved.value.authorization }),
           }),
       });
       if (run.kind === "stale") {
@@ -770,6 +804,15 @@ export function PolicyForm() {
           </button>
           <button className="secondary" type="button" onClick={exportPolicyJson} disabled={busy}>
             Export Policy JSON
+          </button>
+          <button
+            className="secondary"
+            type="button"
+            onClick={() => setShowProfileComparison(true)}
+            disabled={busy}
+            title="Compare policy profiles side-by-side without applying"
+          >
+            Compare Profiles
           </button>
           <input
             ref={policyJsonInput}
@@ -1224,6 +1267,23 @@ export function PolicyForm() {
         </div>
       )}
 
+      {/* The contract's own verdict on the draft when it names a failing §8
+        rule (issue #259). Local validation only knows what the form can
+        express; this is the guard saying which rule *it* would reject — so it
+        blocks the install until the draft is edited, which is also the only
+        thing that could change the verdict. */}
+      {preflightIssue && (
+        <div className="error">
+          <span className="t">The guard would reject this policy</span>
+          <p className="tiny" style={{ margin: "4px 0 0" }}>
+            <strong>{preflightIssue.field}:</strong> {preflightIssue.message}
+          </p>
+          <p className="tiny" style={{ margin: "4px 0 0" }}>
+            Nothing was signed or submitted. Fix the field above and sign again.
+          </p>
+        </div>
+      )}
+
       <div className="form-actions row" style={{ marginTop: 14 }}>
         <button
           disabled={installControl.disabled}
@@ -1370,8 +1430,22 @@ export function PolicyForm() {
       {approval && approval.diff && pendingApproval && (
         <PolicyDiffModal
           diff={approval.diff}
+          authorization={approval.authorization}
+          expectedAccount={wallet?.address}
           onConfirm={() => void runInstall(false, pendingApproval)}
           onCancel={() => setPendingApproval(null)}
+        />
+      )}
+
+      {showProfileComparison && (
+        <PolicyComparisonModal
+          currentDraftConfig={validation.ok ? validation.config : null}
+          installedConfig={
+            snapshot?.policy.ok && snapshot.policy.value !== null ? snapshot.policy.value : null
+          }
+          activeGuard={guard}
+          activeNetwork={NETWORK.name}
+          onClose={() => setShowProfileComparison(false)}
         />
       )}
     </div>
@@ -1493,6 +1567,19 @@ export function OutcomeBlock({
             context: "write",
           })}
         />
+      </div>
+    );
+  }
+  if (result.kind === "ambiguous") {
+    return (
+      <div className="error">
+        <span className="t">
+          Broadcast with no answer — the policy may or may not have changed: {starLink(result.hash)}
+        </span>
+        <span className="mono tiny">
+          {result.detail} — re-read the contract, or look this hash up on the explorer, before
+          sending anything again.
+        </span>
       </div>
     );
   }

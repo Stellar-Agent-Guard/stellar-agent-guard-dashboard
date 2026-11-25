@@ -221,7 +221,7 @@ describe("every format names the row's origin (issue #490)", () => {
     const [settled, refused] = recordRows;
     assert.equal(settled?.source, "ledger");
     assert.equal(settled?.timestampSource, "ledger_close");
-    assert.equal(settled?.timestamp, "2026-09-25T14:03:07.000Z");
+    assert.equal(settled?.timestamp, "2026-09-25T14:03:07Z");
     assert.equal(refused?.source, "diagnostic");
     assert.equal(refused?.ledger, null);
     assert.equal(refused?.transactionHash, null);

@@ -191,13 +191,18 @@ Tick every box that applies before signing.
 
 1. Confirm the `Review` line one more time.
 2. Click **Sign and install policy**. Freighter prompts for signature.
-3. The panel reports one of three outcomes — read which one:
+3. The panel reports one of four outcomes — read which one:
    - **Landed on chain** — a `set_policy` transaction hash and ledger are shown. The
      receipt proves the write; it does not prove the policy is what you meant.
    - **Refused during simulation** — nothing was broadcast and nothing was paid.
      The detail names the stage. Fix and re-submit.
    - **Broadcast but rejected on chain** — a hash is shown and the transaction was
      included and rejected. The fee was spent. The detail explains why.
+   - **Broadcast, never answered** — the console sent the transaction and the network
+     fell silent, so whether the policy changed is **unknown**, not failed. The hash is
+     shown anyway. Resolve it from the chain — section 8, or the explorer — before
+     signing the same change again: a second send does not retry the first one, it puts
+     a second write on the network. Nothing here re-broadcasts on its own.
 4. Any refused-decision diagnostics are pushed into the telemetry feed as
    **diagnostic** rows, labelled as such — they are local evidence of a refusal, not
    ledger history.
