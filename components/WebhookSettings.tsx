@@ -30,10 +30,12 @@ import {
   WEBHOOK_TIMEOUT_MS,
   buildVerificationPing,
   describeDispatch,
+  detectWebhookUrlSecretParams,
   dispatchWebhook,
   getScopedGuardsForNetwork,
   loadWebhookSettings,
   normalizeWebhookSettings,
+  redactWebhookUrl,
   saveWebhookSettings,
   setScopedGuardsForNetwork,
   validateWebhookUrl,
@@ -129,6 +131,9 @@ export function WebhookSettingsModal({ onClose }: { onClose: () => void }) {
   }, [onClose]);
 
   const urlError = settings.url.trim() === "" ? null : validateWebhookUrl(settings.url);
+  const secretQueryParams =
+    settings.url.trim() === "" ? [] : detectWebhookUrlSecretParams(settings.url);
+  const safeUrlPreview = secretQueryParams.length > 0 ? redactWebhookUrl(settings.url) : null;
 
   function update(patch: Partial<WebhookSettings>) {
     setSettings((current) => ({ ...current, ...patch }));
@@ -233,6 +238,15 @@ export function WebhookSettingsModal({ onClose }: { onClose: () => void }) {
           {urlError ? (
             <span className="hint" style={{ color: "var(--danger)" }}>
               {urlError}
+              {safeUrlPreview && (
+                <span
+                  className="mono"
+                  style={{ display: "block", marginTop: 4 }}
+                  data-testid="webhook-url-secret-warning"
+                >
+                  Redacted preview: {safeUrlPreview}
+                </span>
+              )}
             </span>
           ) : (
             <span className="hint">

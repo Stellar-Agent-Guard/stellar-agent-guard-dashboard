@@ -95,18 +95,21 @@ and are not re-verified on every sweep. The README now frames the on-chain table
 
 ## 5. Runbooks, Architecture, and policy sections
 
-| #   | README claim                                                                   | Evidence                                                                    | Status                 | Last verified |
-| --- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------- | ---------------------- | ------------- |
-| 45  | Emergency Freeze runbook link                                                  | [`docs/runbooks/emergency-freeze.md`](./runbooks/emergency-freeze.md)       | PASS                   | 2026-09-29    |
-| 46  | Routine Policy Updates runbook link                                            | [`docs/runbooks/policy-updates.md`](./runbooks/policy-updates.md)           | PASS                   | 2026-09-29    |
-| 47  | Three-repository architecture diagram + repo table                             | `README.md`, [`docs/architecture.md`](./architecture.md)                    | PASS                   | 2026-09-29    |
-| 48  | Architecture section links the normative internal spec — was missing           | [`SPEC.md`](../SPEC.md)                                                     | **FIXED** (link added) | 2026-09-29    |
-| 49  | Honest limitations (wallet dependency, static deploy, arbitrary-call boundary) | `README.md`; enforcement-scope statement                                    | PASS                   | 2026-09-29    |
-| 50  | Enforcement-scope statement matches code + SPEC word for word                  | [`tests/unit/scopeStatement.test.ts`](../tests/unit/scopeStatement.test.ts) | PASS                   | 2026-09-29    |
-| 51  | Project structure row claims `lib/guard/` is the tested surface                | `tests/unit/*.test.ts` exercise `lib/guard/*`; see `SPEC.md` §9             | PASS                   | 2026-09-29    |
-| 52  | Topics/keyword section — did not exist (issue #51)                             | `README.md` "Topics" section                                                | **FIXED** (added)      | 2026-09-29    |
-| 53  | Export scope is stated before a download, and matches the exported rows        | `lib/guard/exportScope.ts`, `tests/unit/exportScope.test.ts`                | **FIXED** (added)      | 2026-10-21    |
-| 54  | Poll health is reported apart from event activity                              | `lib/guard/feedHealth.ts`, `tests/unit/feedHealth.test.ts`                  | **FIXED** (added)      | 2026-10-21    |
+| #   | README claim                                                                   | Evidence                                                                                                                     | Status                 | Last verified |
+| --- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------- |
+| 45  | Emergency Freeze runbook link                                                  | [`docs/runbooks/emergency-freeze.md`](./runbooks/emergency-freeze.md)                                                        | PASS                   | 2026-09-29    |
+| 46  | Routine Policy Updates runbook link                                            | [`docs/runbooks/policy-updates.md`](./runbooks/policy-updates.md)                                                            | PASS                   | 2026-09-29    |
+| 47  | Three-repository architecture diagram + repo table                             | `README.md`, [`docs/architecture.md`](./architecture.md)                                                                     | PASS                   | 2026-09-29    |
+| 48  | Architecture section links the normative internal spec — was missing           | [`SPEC.md`](../SPEC.md)                                                                                                      | **FIXED** (link added) | 2026-09-29    |
+| 49  | Honest limitations (wallet dependency, static deploy, arbitrary-call boundary) | `README.md`; enforcement-scope statement                                                                                     | PASS                   | 2026-09-29    |
+| 50  | Enforcement-scope statement matches code + SPEC word for word                  | [`tests/unit/scopeStatement.test.ts`](../tests/unit/scopeStatement.test.ts)                                                  | PASS                   | 2026-09-29    |
+| 51  | Project structure row claims `lib/guard/` is the tested surface                | `tests/unit/*.test.ts` exercise `lib/guard/*`; see `SPEC.md` §9                                                              | PASS                   | 2026-09-29    |
+| 52  | Topics/keyword section — did not exist (issue #51)                             | `README.md` "Topics" section                                                                                                 | **FIXED** (added)      | 2026-09-29    |
+| 53  | Export scope is stated before a download, and matches the exported rows        | `lib/guard/exportScope.ts`, `tests/unit/exportScope.test.ts`                                                                 | **FIXED** (added)      | 2026-10-21    |
+| 54  | Poll health is reported apart from event activity                              | `lib/guard/feedHealth.ts`, `tests/unit/feedHealth.test.ts`                                                                   | **FIXED** (added)      | 2026-10-21    |
+| 55  | Fleet-Wide Emergency Freeze Rehearsal runbook link                             | [`docs/runbooks/fleet-freeze-rehearsal.md`](./runbooks/fleet-freeze-rehearsal.md), `tests/unit/fleetFreezeRehearsal.test.ts` | PASS                   | 2026-11-19    |
+| 56  | Lost Browser Profile recovery runbook link                                     | [`docs/runbooks/lost-browser-profile.md`](./runbooks/lost-browser-profile.md), `tests/unit/lostBrowserProfile.test.ts`       | PASS                   | 2026-11-19    |
+| 57  | Custom-RPC migration runbook link                                              | [`docs/runbooks/custom-rpc-migration.md`](./runbooks/custom-rpc-migration.md), `tests/unit/customRpcMigration.test.ts`       | PASS                   | 2026-11-19    |
 
 ## 6. Timing, retries, and input validation (issues #389, #386, #384, #394)
 

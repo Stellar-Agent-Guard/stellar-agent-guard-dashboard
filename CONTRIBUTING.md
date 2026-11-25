@@ -334,7 +334,11 @@ named exactly **`ci`**. The `ci` workflow runs typecheck, lint, the unit tests, 
 production build, a dedicated step that re-checks the enforcement-scope statement in
 `README.md` and `SPEC.md` against the canonical constant in `lib/guard/network.ts`
 (`tests/unit/scopeStatement.test.ts`), and the Playwright end-to-end suites
-(`npm run test:e2e`, headless Chromium against a mocked chain). Rewording the boundary fails CI, which is the
+(`npm run test:e2e`, headless Chromium against a mocked chain). That suite includes
+`tests/e2e/smoke.spec.ts`, which loads every primary route — `/`, `/configure`, `/deploy`,
+`/fleet` and `/panic` — without a wallet and fails on a page error or a hydration mismatch,
+plus a chain-unreachable case that asserts a failed read is surfaced rather than rendered as
+zeros. Rewording the boundary fails CI, which is the
 point — see [Enforcement scope](README.md#enforcement-scope--read-this-before-relying-on-the-caps).
 
 ## Keeping docs true to the code

@@ -312,7 +312,9 @@ For every policy update, record:
 
 The console's transaction history panel keeps a local record of this console's own
 writes, exportable as CSV or JSON — but it is **local to the browser profile**. Export
-it to durable storage whenever the change must remain auditable.
+it to durable storage whenever the change must remain auditable. If the profile is
+lost before the export, the local record is gone; [Lost browser profile
+recovery](./lost-browser-profile.md) lists what can and cannot be restored.
 
 ---
 
