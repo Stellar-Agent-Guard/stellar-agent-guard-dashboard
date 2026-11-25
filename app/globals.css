@@ -2077,3 +2077,148 @@ code {
   display: block;
   margin-top: 2px;
 }
+
+/* Read-only policy review print view (issue #468) */
+.policy-review-print-modal {
+  max-width: 820px;
+  width: 90vw;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.policy-review-document {
+  background: var(--bg, #fff);
+  color: var(--text, #111);
+  padding: 8px 4px;
+}
+
+.policy-review-header {
+  border-bottom: 2px solid var(--border, #ccc);
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+}
+
+.policy-review-draft-badge {
+  display: inline-block;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  padding: 4px 10px;
+  background: #fff8c5;
+  color: #7a4c00;
+  border: 1px dashed #d4a72c;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.policy-review-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: var(--surface-muted, #f6f8fa);
+  border: 1px solid var(--border, #e1e4e8);
+  border-radius: 6px;
+}
+
+.policy-review-meta-grid .meta-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.policy-review-meta-grid .meta-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--text-muted, #586069);
+  font-weight: 600;
+}
+
+.policy-review-meta-grid .meta-value {
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.policy-review-section {
+  margin-bottom: 18px;
+}
+
+.policy-review-section .section-title {
+  font-size: 1rem;
+  margin: 0 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border, #eaecef);
+}
+
+.policy-summary-box {
+  background: var(--surface-muted, #f6f8fa);
+  padding: 8px 12px;
+  border: 1px solid var(--border, #e1e4e8);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.review-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.review-table th,
+.review-table td {
+  padding: 6px 10px;
+  border: 1px solid var(--border, #e1e4e8);
+  text-align: left;
+}
+
+.review-table th {
+  background: var(--surface-muted, #f6f8fa);
+  font-weight: 600;
+}
+
+.review-list {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .policy-review-print-backdrop,
+  .policy-review-print-backdrop * {
+    visibility: visible;
+  }
+  .policy-review-print-backdrop {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    background: white !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .policy-review-print-modal {
+    position: static !important;
+    box-shadow: none !important;
+    border: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+  }
+  .policy-review-document {
+    padding: 0 !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .policy-review-draft-badge {
+    border: 2px solid #000 !important;
+    color: #000 !important;
+    background: transparent !important;
+  }
+}

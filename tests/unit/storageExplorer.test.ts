@@ -69,6 +69,15 @@ import { StorageExplorerButton } from "../../components/StorageExplorer.tsx";
 /** The ledger head the fixtures below are read against. */
 const CURRENT_LEDGER = 1_000;
 
+/**
+ * A transaction record inside the local history's 30-day retention window.
+ *
+ * Computed at run time rather than pinned to a calendar date: a fixed date
+ * silently falls out of retention as the clock advances, which fails this
+ * suite for reasons that have nothing to do with the behaviour under test.
+ */
+const RECENT_RECORDED_AT = new Date().toISOString();
+
 /** `getLedgerEntries` hands back a fixture as `{ key, val, … }`. */
 function asRaw(fixture: {
   key: xdr.LedgerKey;

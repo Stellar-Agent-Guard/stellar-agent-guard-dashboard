@@ -41,6 +41,7 @@ import { jsonWithBigints } from "./scval.ts";
 import type { DmsAlert } from "./dmsAlert.ts";
 import { looksLikeContractAddress, defaultGuardLabel } from "./instance.ts";
 import { findSecretKeyInText, findDisallowedLabelChar } from "./inputSanitizer.ts";
+import { DIAGNOSTIC_REDACTED, redactDiagnosticText } from "../rpc/timeouts.ts";
 
 // ── The alert vocabulary ───────────────────────────────────────────────────
 
@@ -181,6 +182,54 @@ function defaultStorage(): StorageLike | null {
  * operator meant. A host that will not parse is likewise refused; it would
  * otherwise resolve to an endpoint nobody chose.
  */
+const SECRET_QUERY_PARAM_RE =
+  /(?:^|[_-])(token|secret|key|apikey|api_key|auth|password|passwd|pwd|sig|signature|bearer|credential|private_key|jwt|session|hmac)(?:$|[_-])/i;
+
+/**
+ * Detect likely secret-bearing query parameters in a webhook URL (#497).
+ *
+ * Returns the deduplicated list of offending parameter names without echoing
+ * their values. Checks both secret-like parameter names (`token`, `secret`,
+ * `api_key`, `auth`, `sig`, etc.) and Stellar secret seed values (`S...`).
+ */
+export function detectWebhookUrlSecretParams(url: string): string[] {
+  const trimmed = url.trim();
+  if (trimmed === "") return [];
+  const offending = new Set<string>();
+  try {
+    const parsed = new URL(trimmed);
+    for (const [name, value] of parsed.searchParams.entries()) {
+      if (SECRET_QUERY_PARAM_RE.test(name) || findSecretKeyInText(value) !== null) {
+        offending.add(name);
+      }
+    }
+  } catch {
+    const qIdx = trimmed.indexOf("?");
+    if (qIdx !== -1) {
+      const queryPart = trimmed.slice(qIdx + 1).split("#")[0] ?? "";
+      for (const pair of queryPart.split("&")) {
+        if (!pair) continue;
+        const eqIdx = pair.indexOf("=");
+        const name = decodeURIComponent(eqIdx === -1 ? pair : pair.slice(0, eqIdx));
+        const value = eqIdx === -1 ? "" : pair.slice(eqIdx + 1);
+        if (SECRET_QUERY_PARAM_RE.test(name) || findSecretKeyInText(value) !== null) {
+          offending.add(name || "query");
+        }
+      }
+    }
+  }
+  return [...offending];
+}
+
+/**
+ * Redact embedded userinfo and query-string parameter values from a webhook URL
+ * for safe diagnostics and logs (#497). Never mutates the operator's input.
+ */
+export function redactWebhookUrl(url: string): string {
+  if (!url || typeof url !== "string") return "";
+  return redactDiagnosticText(url);
+}
+
 export function validateWebhookUrl(url: string): string | null {
   const trimmed = url.trim();
   if (trimmed === "") return "Enter a webhook URL.";
@@ -199,8 +248,20 @@ export function validateWebhookUrl(url: string): string | null {
   if (parsed.username !== "" || parsed.password !== "" || authorityHasCredentials(trimmed)) {
     return "Remove the username, password, or `@` from the host. A webhook URL must not carry credentials.";
   }
-  if (parsed.protocol === "https:") return null;
-  if (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname)) return null;
+  if (parsed.protocol === "https:") {
+    const secretParams = detectWebhookUrlSecretParams(trimmed);
+    if (secretParams.length > 0) {
+      return `Remove secret-bearing query parameter(s) (${secretParams.join(", ")}) from the webhook URL; secrets in query strings must not be stored.`;
+    }
+    return null;
+  }
+  if (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname)) {
+    const secretParams = detectWebhookUrlSecretParams(trimmed);
+    if (secretParams.length > 0) {
+      return `Remove secret-bearing query parameter(s) (${secretParams.join(", ")}) from the webhook URL; secrets in query strings must not be stored.`;
+    }
+    return null;
+  }
   if (parsed.protocol === "http:") {
     return "Use https:// for a webhook URL. Plain http is only allowed on localhost.";
   }
@@ -373,6 +434,11 @@ export function saveWebhookSettings(
   storage: StorageLike | null = defaultStorage(),
 ): WebhookSettings {
   const normalised = normalizeWebhookSettings(settings);
+  // Prevent secret-bearing query parameters from being persisted (#497) without
+  // silently rewriting the operator's destination URL.
+  if (detectWebhookUrlSecretParams(normalised.url).length > 0) {
+    return normalised;
+  }
   if (storage) {
     try {
       storage.setItem(WEBHOOK_SETTINGS_STORAGE_KEY, JSON.stringify(normalised));
@@ -704,6 +770,33 @@ function browserReportsOffline(): boolean {
  * may still have landed), `cors` (the host is fine but does not allow this page
  * — the endpoint has to change) and `network` (nothing answered at that address).
  */
+let lastDispatchResult: DispatchResult | null = null;
+const dispatchListeners = new Set<() => void>();
+
+/** Latest webhook dispatch outcome observed in this tab (#499). */
+export function getLastWebhookDispatch(): DispatchResult | null {
+  return lastDispatchResult;
+}
+
+/** Subscribe to webhook dispatch outcome updates in this tab (#499). */
+export function subscribeLastWebhookDispatch(listener: () => void): () => void {
+  dispatchListeners.add(listener);
+  return () => {
+    dispatchListeners.delete(listener);
+  };
+}
+
+/** Reset recorded dispatch status (for test isolation). */
+export function clearLastWebhookDispatch(): void {
+  lastDispatchResult = null;
+}
+
+function recordDispatchResult(result: DispatchResult): DispatchResult {
+  lastDispatchResult = result;
+  for (const listener of [...dispatchListeners]) listener();
+  return result;
+}
+
 export async function dispatchWebhook(
   payload: WebhookPayload,
   settings: WebhookSettings,
@@ -713,7 +806,7 @@ export async function dispatchWebhook(
     ok: false,
     outcome,
     status: null,
-    error,
+    error: error === null ? null : redactDiagnosticText(error),
     payload,
   });
 
@@ -738,7 +831,9 @@ export async function dispatchWebhook(
 
   const doFetch = deps.fetch ?? globalThis.fetch;
   if (typeof doFetch !== "function") {
-    return notSent("failed", "This browser has no fetch, so nothing could be sent.");
+    return recordDispatchResult(
+      notSent("failed", "This browser has no fetch, so nothing could be sent."),
+    );
   }
   const timeoutMs = deps.timeoutMs ?? WEBHOOK_TIMEOUT_MS;
   const isOffline = deps.isOffline ?? browserReportsOffline;
@@ -747,7 +842,9 @@ export async function dispatchWebhook(
   try {
     request = await buildWebhookRequest(payload, settings);
   } catch (error) {
-    return notSent("failed", error instanceof Error ? error.message : String(error));
+    return recordDispatchResult(
+      notSent("failed", error instanceof Error ? error.message : String(error)),
+    );
   }
 
   const controller = new AbortController();
@@ -768,32 +865,36 @@ export async function dispatchWebhook(
     ]);
     const status = typeof response.status === "number" ? response.status : null;
     if (status !== null && (status < 200 || status >= 300)) {
-      return {
+      return recordDispatchResult({
         ok: false,
         outcome: "rejected",
         status,
         error: `The webhook endpoint answered ${status}.`,
         payload,
-      };
+      });
     }
-    return { ok: true, outcome: "sent", status, error: null, payload };
+    return recordDispatchResult({ ok: true, outcome: "sent", status, error: null, payload });
   } catch (error) {
     if (error instanceof WebhookTimeoutError || controller.signal.aborted) {
-      return {
+      return recordDispatchResult({
         ok: false,
         outcome: "timeout",
         status: null,
-        error: error instanceof Error ? error.message : String(error),
+        error: redactDiagnosticText(error instanceof Error ? error.message : String(error)),
         payload,
-      };
+      });
     }
-    const message = error instanceof Error ? error.message : String(error);
+    const message = redactDiagnosticText(error instanceof Error ? error.message : String(error));
     if (isOffline()) {
-      return notSent("network", `${message} This browser reports that it is offline.`);
+      return recordDispatchResult(
+        notSent("network", `${message} This browser reports that it is offline.`),
+      );
     }
     // The browser collapsed two very different failures into one `TypeError`, so
     // ask which of them it was instead of guessing from the message text.
-    return notSent((await hostAnswers(request.url, doFetch)) ? "cors" : "network", message);
+    return recordDispatchResult(
+      notSent((await hostAnswers(request.url, doFetch)) ? "cors" : "network", message),
+    );
   } finally {
     clearTimeout(deadline);
   }
