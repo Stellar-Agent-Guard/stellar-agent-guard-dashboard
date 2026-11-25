@@ -117,8 +117,28 @@ describe("readContract / readStatus / readPolicy", () => {
     assert.match(!limited.ok ? limited.error : "", /429/);
 
     // …and the next poll, once the limiter lets go, succeeds.
-    mock.onSimulate({ fn: "status" }, simSuccess(xdr.ScVal.scvBool(true)));
-    assert.deepEqual(await readStatus(server, MOCK_GUARD), { ok: true, value: true });
+    mock.onSimulate(
+      { fn: "status" },
+      simSuccess(
+        guardStatusScVal({
+          admin_frozen: false,
+          has_policy: true,
+          heartbeat_expired: false,
+          last_heartbeat: 1_789_481_712,
+          now: 1_789_481_732,
+        }),
+      ),
+    );
+    assert.deepEqual(await readStatus(server, MOCK_GUARD), {
+      ok: true,
+      value: {
+        admin_frozen: false,
+        has_policy: true,
+        heartbeat_expired: false,
+        last_heartbeat: 1_789_481_712n,
+        now: 1_789_481_732n,
+      },
+    });
   });
 
   test("reads are simulated from the fallback source and carry pre-encoded args", async () => {

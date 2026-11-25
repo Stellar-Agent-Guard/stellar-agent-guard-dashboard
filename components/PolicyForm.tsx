@@ -1432,6 +1432,8 @@ export function PolicyForm() {
           diff={approval.diff}
           authorization={approval.authorization}
           expectedAccount={wallet?.address}
+          signerAccount={wallet?.address}
+          network={NETWORK.name}
           onConfirm={() => void runInstall(false, pendingApproval)}
           onCancel={() => setPendingApproval(null)}
         />

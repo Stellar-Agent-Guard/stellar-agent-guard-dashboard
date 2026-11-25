@@ -1,3 +1,4 @@
+import { DEFAULT_FLEET_PROBE_CONCURRENCY } from "./fleet.ts";
 import {
   NETWORK,
   probeReadOnlyEndpoint,
@@ -19,17 +20,35 @@ export class RpcPool {
   currentNetwork: string;
   failureCount: number = 0;
   rtt: number = 0;
+  maxConcurrency: number = DEFAULT_FLEET_PROBE_CONCURRENCY;
+  private activeRequests: number = 0;
   private healthCheckTimer: any;
   /** Cursors mapped by endpoint URL or network name. */
   private cursors: Map<string, string | null> = new Map();
   private endpointListeners: Array<(newUrl: string, oldUrl: string) => void> = [];
   private networkListeners: Array<(newNetwork: string, oldNetwork: string) => void> = [];
 
-  constructor(primaryUrl: string, fallbackUrls: string[], network: string = NETWORK.name) {
+  constructor(
+    primaryUrl: string,
+    fallbackUrls: string[],
+    networkOrOptions?: string | { maxConcurrency?: number; network?: string },
+    options?: { maxConcurrency?: number },
+  ) {
     this.primaryUrl = primaryUrl;
     this.fallbackUrls = fallbackUrls;
     this.currentUrl = primaryUrl;
-    this.currentNetwork = network;
+    if (typeof networkOrOptions === "string") {
+      this.currentNetwork = networkOrOptions;
+      if (options?.maxConcurrency) {
+        this.maxConcurrency = Math.max(1, options.maxConcurrency);
+      }
+    } else {
+      this.currentNetwork = networkOrOptions?.network ?? NETWORK.name;
+      const opts = networkOrOptions ?? options;
+      if (opts?.maxConcurrency) {
+        this.maxConcurrency = Math.max(1, opts.maxConcurrency);
+      }
+    }
   }
 
   /**
@@ -154,6 +173,7 @@ export class RpcPool {
 
   async fetch(endpoint: string, options: RequestInit = {}): Promise<Response> {
     const start = Date.now();
+    this.activeRequests++;
     try {
       const response = await fetch(`${this.currentUrl}${endpoint}`, options);
       this.rtt = Date.now() - start;
@@ -172,7 +192,40 @@ export class RpcPool {
         error.message = safeMsg;
       }
       throw error;
+    } finally {
+      this.activeRequests = Math.max(0, this.activeRequests - 1);
     }
+  }
+
+  /**
+   * Run operations across an array of items bounded by maxConcurrency.
+   * Cancels cleanly on AbortSignal and maintains original item ordering.
+   */
+  async mapConcurrent<T, R>(
+    items: T[],
+    fn: (item: T, index: number) => Promise<R>,
+    concurrency: number = this.maxConcurrency,
+    signal?: AbortSignal,
+  ): Promise<R[]> {
+    const results: R[] = new Array(items.length);
+    const limit = Math.max(1, concurrency);
+    let nextIndex = 0;
+
+    const workerCount = Math.min(limit, items.length);
+    if (workerCount === 0) return [];
+
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        if (signal?.aborted) {
+          break;
+        }
+        const index = nextIndex++;
+        results[index] = await fn(items[index]!, index);
+      }
+    });
+
+    await Promise.all(workers);
+    return results;
   }
 
   private handleFailure() {

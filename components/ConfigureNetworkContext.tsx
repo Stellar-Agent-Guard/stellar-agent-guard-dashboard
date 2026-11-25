@@ -26,6 +26,9 @@ export function rpcHostname(rpcUrl: string): string {
   }
 }
 
+export const EVALUATE_ENDPOINTS_GUIDE_PATH = "/docs/guides/evaluating-rpc-endpoints.md";
+export const EVALUATE_ENDPOINTS_LABEL = "Evaluating third-party endpoints";
+
 export interface ConfigureNetworkContextProps {
   networkName?: string;
   rpcUrl?: string;
@@ -103,6 +106,17 @@ export function ConfigureNetworkContext({
         >
           {rpcHostname(rpcUrl)}
         </code>
+        <a
+          href={EVALUATE_ENDPOINTS_GUIDE_PATH}
+          className="tiny rpc-checklist-link"
+          data-testid="rpc-checklist-link"
+          title="Safe checklist for evaluating third-party endpoints"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ marginLeft: 8 }}
+        >
+          {EVALUATE_ENDPOINTS_LABEL}
+        </a>
       </div>
     );
   }
@@ -124,6 +138,17 @@ export function ConfigureNetworkContext({
           {rpcHostname(rpcUrl)}
         </code>
         <CopyButton value={safeCopyEndpoint(rpcUrl)} label="RPC endpoint" className="tiny" />
+        <a
+          href={EVALUATE_ENDPOINTS_GUIDE_PATH}
+          className="tiny rpc-checklist-link"
+          data-testid="rpc-checklist-link"
+          title="Safe checklist for evaluating third-party endpoints"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ marginLeft: 8 }}
+        >
+          {EVALUATE_ENDPOINTS_LABEL}
+        </a>
       </div>
 
       {/* Role explanation (Issue #508) */}

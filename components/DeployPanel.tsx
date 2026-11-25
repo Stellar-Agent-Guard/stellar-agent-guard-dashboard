@@ -41,6 +41,8 @@ import {
 } from "../lib/guard/initValidator.ts";
 import { useFormValidation } from "../lib/guard/useFormValidation.ts";
 import { sanitizeAddressInput } from "../lib/guard/inputSanitizer.ts";
+import { PendingActionSummary } from "./PendingActionSummary.tsx";
+import { createPendingActionSnapshot } from "../lib/guard/walletConnector.ts";
 import {
   contractAlreadyDeployed,
   createSaltAddressPredictor,
@@ -1136,6 +1138,25 @@ export function DeployPanel() {
             </div>
           )}
         </div>
+      )}
+
+      {wallet && (
+        <PendingActionSummary
+          snapshot={createPendingActionSnapshot({
+            account: wallet.address,
+            network: NETWORK.name,
+            actionName: "Deploy Guard",
+          })}
+          currentAccount={wallet.address}
+          currentNetwork={NETWORK.name}
+          onCancel={(reason) => {
+            setFailure({
+              source: "deploy",
+              detail: reason,
+              cancelled: true,
+            });
+          }}
+        />
       )}
 
       <div className="row" style={{ marginTop: 14 }}>

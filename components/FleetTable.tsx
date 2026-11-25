@@ -8,6 +8,7 @@ import { refreshSources, type RefreshSource } from "../lib/guard/refreshStatus.t
 import {
   pollFleet,
   defaultSortDirection,
+  DEFAULT_FLEET_PROBE_CONCURRENCY,
   computeFleetRiskSummary,
   getAllFleetTags,
   addGuardTag,
@@ -172,7 +173,10 @@ export function FleetTable() {
 
   useEffect(() => {
     let mounted = true;
+    const controller = new AbortController();
+
     const fetchFleet = async () => {
+      setLoading(true);
       const instances = loadInstances();
       const contacts = instances.map((i) => ({
         address: i.guard,
@@ -181,8 +185,11 @@ export function FleetTable() {
       }));
       setFleetRead((current) => ({ ...current, polling: true }));
       try {
-        const result = await pollFleet(server, contacts);
-        if (!mounted) return;
+        const result = await pollFleet(server, contacts, {
+          concurrency: DEFAULT_FLEET_PROBE_CONCURRENCY,
+          signal: controller.signal,
+        });
+        if (!mounted || controller.signal.aborted) return;
         setRows(result);
         setLoading(false);
         const answered = result.filter((row) => row.snapshot !== null).length;
@@ -211,7 +218,7 @@ export function FleetTable() {
               },
         );
       } catch (error) {
-        if (!mounted) return;
+        if (!mounted || controller.signal.aborted) return;
         const failedAt = new Date().toISOString();
         setFleetRead((current) => ({
           polling: false,
@@ -227,6 +234,7 @@ export function FleetTable() {
     const interval = setInterval(fetchFleet, FLEET_INTERVAL_MS);
     return () => {
       mounted = false;
+      controller.abort();
       clearInterval(interval);
     };
   }, [server, refreshKey]);
@@ -389,11 +397,22 @@ export function FleetTable() {
 
   return (
     <div className="panel">
-      <div className="row" style={{ justifyContent: "space-between" }}>
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <h2 style={{ margin: 0 }}>Fleet Overview</h2>
-        <span className="tiny muted">
-          {rows.length} guard{rows.length !== 1 ? "s" : ""} in registry
-        </span>
+        <div className="row" style={{ gap: 8, alignItems: "center" }}>
+          <button
+            className="secondary"
+            data-testid="fleet-refresh-button"
+            style={{ fontSize: "12px", padding: "4px 8px" }}
+            onClick={() => setRefreshKey((k) => k + 1)}
+            disabled={loading}
+          >
+            {loading ? "Refreshing…" : "Refresh fleet"}
+          </button>
+          <span className="tiny muted">
+            {rows.length} guard{rows.length !== 1 ? "s" : ""} in registry
+          </span>
+        </div>
       </div>
 
       <div className="split" style={{ marginTop: 12 }}>

@@ -23,6 +23,7 @@
 - [Guides](guides/)
   - [Agent Integration](guides/agent-integration.md)
   - [Air-Gapped Multisig Signing](guides/air-gapped-multisig-signing.md)
+  - [Evaluating Third-Party Endpoints](guides/evaluating-rpc-endpoints.md)
   - [Keyboard & Screen-Reader Guide](guides/keyboard-and-screen-reader.md)
   - [Registry Backups vs. On-Chain State](guides/registry-backups.md)
 - [Architecture](architecture.md)
