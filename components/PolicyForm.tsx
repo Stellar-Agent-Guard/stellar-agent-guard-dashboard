@@ -33,6 +33,7 @@ import { useModalFocus } from "../lib/guard/useModalFocus.ts";
 import { computePolicyDiff, type PolicyDiff } from "../lib/guard/policyDiff.ts";
 import { PolicyDiffModal } from "./PolicyDiffModal.tsx";
 import { PolicyComparisonModal } from "./PolicyComparisonModal.tsx";
+import { PolicyReviewPrintView } from "./PolicyReviewPrintView.tsx";
 import type { InvokeResult } from "../lib/guard/submit.ts";
 import { previewAuthorizationSummary } from "../lib/guard/submit.ts";
 import type { AuthorizationContext } from "../lib/guard/authorizationSummary.ts";
@@ -214,6 +215,7 @@ export function PolicyForm() {
   const [pendingPreset, setPendingPreset] = useState<PolicyPreset | null>(null);
   const [pendingPolicyImport, setPendingPolicyImport] = useState<PolicyImportApproval | null>(null);
   const [showProfileComparison, setShowProfileComparison] = useState(false);
+  const [showPrintReview, setShowPrintReview] = useState(false);
   // ── Which guard everything on this form belongs to ──────────────────────
   // The active guard is shared application context: the operator, another tab or
   // a link can change it while a draft, an approval or a write is still live.
@@ -245,6 +247,8 @@ export function PolicyForm() {
     setPreflightIssue(null);
     setPendingPreset(null);
     setPendingPolicyImport(null);
+    setShowPrintReview(false);
+    setShowProfileComparison(false);
     setAssetCapChanges({});
   }
   const approval = valueInScope(pendingApproval, activeScope);
@@ -1329,6 +1333,15 @@ export function PolicyForm() {
         >
           Load installed
         </button>
+        <button
+          className="secondary"
+          type="button"
+          onClick={() => setShowPrintReview(true)}
+          disabled={busy || draftForOtherGuard}
+          title="Open read-only printable review of proposed policy draft"
+        >
+          Review & Print
+        </button>
       </div>
 
       {policyImportApproval && (
@@ -1448,6 +1461,16 @@ export function PolicyForm() {
           activeGuard={guard}
           activeNetwork={NETWORK.name}
           onClose={() => setShowProfileComparison(false)}
+        />
+      )}
+
+      {showPrintReview && (
+        <PolicyReviewPrintView
+          draft={effective}
+          guard={guard}
+          network={NETWORK.name}
+          validationOverride={validation}
+          onClose={() => setShowPrintReview(false)}
         />
       )}
     </div>

@@ -30,6 +30,11 @@ Interactive no-code form for configuring smart account guardrails:
   - **Field Differences**: Highlights changed, added, removed, and unchanged fields with visual markers and status badges, with an optional filter to show differences only.
   - **Network Mismatch Detection**: Automatically detects when comparing profiles configured for different networks (e.g. Testnet vs Mainnet) and displays a prominent warning to prevent cross-network contract address contamination.
   - **Strictly Non-Custodial & Read-Only**: Performs zero state mutations, zero transaction signing, and zero RPC calls.
+- **Read-Only Printable Review**: A dedicated inspection view accessible via "Review & Print" allowing auditors and team members to review a proposed policy draft prior to signing:
+  - **Draft Stamp**: Prominently watermarked and badged as `DRAFT - NOT SUBMITTED` to distinguish proposed configurations from active on-chain policies.
+  - **Context & Validation**: Explicitly renders target network, guard contract address, and real-time pre-flight validation status (including failing rules).
+  - **Non-Custodial & Privacy**: Completely read-only with all interactive inputs and buttons omitted; wallet addresses, signer keys, and session data are omitted.
+  - **Print & PDF Export**: Formatted with print media queries (`@media print`) for clean paper printing and compliance archiving.
 
 ## Reviewing changes before signing
 
