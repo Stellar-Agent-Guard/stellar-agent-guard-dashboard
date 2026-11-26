@@ -14,7 +14,7 @@
  *   2. **Every message names the operation, and the run ends with its outcome.**
  *      "Policy install: waiting for wallet approval" tells the operator what is
  *      being signed; the final line says whether it landed, failed, was refused,
- *      declined, exported or interrupted.
+ *      declined, exported, interrupted or has an unknown outcome.
  *   3. **Nothing from the envelope is ever spoken.** Messages are assembled
  *      from a fixed vocabulary plus the contract function's name, and the name
  *      itself is only used when it is a plain Soroban symbol. XDR, signatures,
@@ -42,6 +42,8 @@ const STAGE_ORDER: Readonly<Record<TxStage, number>> = {
 export type TxOutcome =
   | { kind: "confirmed"; ledger: number | null }
   | { kind: "failed" }
+  /** Broadcast, but the network never said what became of it. */
+  | { kind: "ambiguous" }
   | { kind: "refused"; stage: string }
   | { kind: "cancelled" }
   | { kind: "exported" }
@@ -151,6 +153,13 @@ export function outcomeMessage(
       };
     case "failed":
       return { message: `${operation} failed on chain`, tone: "failure" };
+    case "ambiguous":
+      // Something was broadcast and may have landed, so the line must claim
+      // neither success nor rejection (issue #341).
+      return {
+        message: `${operation} outcome unknown — verify on chain before retrying`,
+        tone: "failure",
+      };
     case "refused":
       return {
         message: `${operation} refused during ${
@@ -203,6 +212,8 @@ export function outcomeOf(result: InvokeResult): TxOutcome {
       };
     case "failed":
       return { kind: "failed" };
+    case "ambiguous":
+      return { kind: "ambiguous" };
     case "cancelled":
       return { kind: "cancelled" };
     case "exported":

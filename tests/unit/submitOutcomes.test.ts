@@ -7,7 +7,8 @@ import {
   type InvokeRequest,
 } from "../../lib/guard/submit.ts";
 import { WalletCancellationError } from "../../lib/guard/retry.ts";
-import { clearAnnouncements, pendingAnnouncements } from "../../lib/guard/useAnnounce.ts";
+import { clearAnnouncements } from "../../lib/guard/useAnnounce.ts";
+import { txProgressSnapshot } from "../../lib/guard/txProgress.ts";
 
 /**
  * The write path's outcomes, and the one rule issue #344 exists to hold: a read
@@ -176,11 +177,9 @@ test("a confirmed write is announced and reported exactly once, however the read
   if (result.kind !== "submitted") return;
   assert.equal(result.ledger, 4243);
   assert.equal(server.sendCalls, 1, "the two missed lookups never re-broadcast anything");
-  const spoken = pendingAnnouncements().map((entry) => entry.message);
-  assert.ok(
-    spoken.some((message) => /confirmed on ledger 4243/.test(message)),
-    `the confirmed write is announced, got: ${spoken.join(" | ")}`,
-  );
+  // The outcome is spoken once, by the transaction status region (issue #539).
+  const spoken = txProgressSnapshot().message;
+  assert.match(spoken, /confirmed on ledger 4243/, "the confirmed write is announced");
 });
 
 test("an unanswered broadcast is announced as unknown, never as a rejection", async () => {
@@ -189,13 +188,11 @@ test("an unanswered broadcast is announced as unknown, never as a rejection", as
 
   await invokeWithWallet(request(server, echoingSigner()));
 
-  const spoken = pendingAnnouncements().map((entry) => entry.message);
-  assert.ok(
-    spoken.some((message) => /outcome unknown/.test(message)),
-    `the operator is told it is unknown, got: ${spoken.join(" | ")}`,
-  );
-  assert.ok(
-    !spoken.some((message) => /failed on chain/.test(message)),
+  const spoken = txProgressSnapshot().message;
+  assert.match(spoken, /outcome unknown/, "the operator is told it is unknown");
+  assert.doesNotMatch(
+    spoken,
+    /failed on chain/,
     "and is not told the network rejected something it never answered for",
   );
 });

@@ -32,7 +32,13 @@ import {
   txProgressSnapshot,
   type TxOutcome,
 } from "../../lib/guard/txProgress.ts";
-import { invokeWithWallet, type InvokeResult, type WalletSigner } from "../../lib/guard/submit.ts";
+import {
+  invokeWithWallet,
+  previewAuthorizationSummary,
+  type InvokeRequest,
+  type InvokeResult,
+  type WalletSigner,
+} from "../../lib/guard/submit.ts";
 import { WalletUserRejectedError } from "../../lib/guard/walletConnector.ts";
 import { clearAnnouncements, pendingAnnouncements } from "../../lib/guard/useAnnounce.ts";
 
@@ -293,6 +299,23 @@ const REQUEST = {
   pollIntervalMs: 1,
 };
 
+/**
+ * A complete request: the confirmed authorization the write path demands
+ * (issue #343) is the one the pipeline itself derives for this signer, so these
+ * tests reach the stages they are about.
+ */
+function req(overrides: Omit<InvokeRequest, "authorization">): InvokeRequest {
+  return {
+    ...overrides,
+    authorization: previewAuthorizationSummary({
+      contract: overrides.contract,
+      fn: overrides.fn,
+      admin: overrides.signer.address,
+      passphrase: overrides.passphrase ?? PASSPHRASE,
+    }),
+  };
+}
+
 /** Nothing the wallet saw, nor the hash, address or args, may reach the region. */
 function assertNoEnvelopeContents(lines: string[], seenEnvelopes: string[]): void {
   for (const line of lines) {
@@ -312,11 +335,13 @@ describe("invokeWithWallet reports through the status region", () => {
     const seenEnvelopes: string[] = [];
     const prompts: string[] = [];
     const { lines, stop } = recordMessages();
-    const result = await invokeWithWallet({
-      ...REQUEST,
-      server: makeServer({ auth: [addressAuthEntry(keypair.publicKey())] }),
-      signer: makeSigner({ keypair, seenEnvelopes, prompts }),
-    });
+    const result = await invokeWithWallet(
+      req({
+        ...REQUEST,
+        server: makeServer({ auth: [addressAuthEntry(keypair.publicKey())] }),
+        signer: makeSigner({ keypair, seenEnvelopes, prompts }),
+      }),
+    );
     stop();
 
     assert.equal(result.kind, "submitted");
@@ -332,7 +357,7 @@ describe("invokeWithWallet reports through the status region", () => {
   });
 
   it("no longer duplicates the milestones into the general announcer queue", async () => {
-    await invokeWithWallet({ ...REQUEST, server: makeServer(), signer: makeSigner() });
+    await invokeWithWallet(req({ ...REQUEST, server: makeServer(), signer: makeSigner() }));
     const transactionChatter = pendingAnnouncements().filter((entry) =>
       /simulation|approve|submitted|confirmed/i.test(entry.message),
     );
@@ -342,12 +367,14 @@ describe("invokeWithWallet reports through the status region", () => {
   it("ends a declined signature as declined, without a broadcast", async () => {
     const sendCalls: string[] = [];
     const { lines, stop } = recordMessages();
-    const result = await invokeWithWallet({
-      ...REQUEST,
-      cancelOnDecline: true,
-      server: makeServer({ sendCalls }),
-      signer: makeSigner({ declineEnvelope: true }),
-    });
+    const result = await invokeWithWallet(
+      req({
+        ...REQUEST,
+        cancelOnDecline: true,
+        server: makeServer({ sendCalls }),
+        signer: makeSigner({ declineEnvelope: true }),
+      }),
+    );
     stop();
     assert.equal(result.kind, "cancelled");
     assert.deepEqual(sendCalls, []);
@@ -357,11 +384,13 @@ describe("invokeWithWallet reports through the status region", () => {
 
   it("still ends the run when a decline is thrown back to the caller", async () => {
     await assert.rejects(
-      invokeWithWallet({
-        ...REQUEST,
-        server: makeServer(),
-        signer: makeSigner({ declineEnvelope: true }),
-      }),
+      invokeWithWallet(
+        req({
+          ...REQUEST,
+          server: makeServer(),
+          signer: makeSigner({ declineEnvelope: true }),
+        }),
+      ),
       /declined/i,
     );
     assert.equal(
@@ -377,7 +406,7 @@ describe("invokeWithWallet reports through the status region", () => {
       throw new Error("provider crashed with AAAAAgAAAAB" + "Q".repeat(60));
     };
     await assert.rejects(
-      invokeWithWallet({ ...REQUEST, server: makeServer(), signer }),
+      invokeWithWallet(req({ ...REQUEST, server: makeServer(), signer })),
       /provider crashed/,
     );
     const { message, tone } = txProgressSnapshot();
@@ -398,7 +427,7 @@ describe("invokeWithWallet reports through the status region", () => {
       sendTransaction: async () => assert.fail("never broadcast"),
     } as unknown as rpc.Server;
     const { lines, stop } = recordMessages();
-    await invokeWithWallet({ ...REQUEST, fn: "freeze", server, signer: makeSigner() });
+    await invokeWithWallet(req({ ...REQUEST, fn: "freeze", server, signer: makeSigner() }));
     stop();
     assert.deepEqual(lines, [
       "Freeze: simulating",
@@ -408,12 +437,14 @@ describe("invokeWithWallet reports through the status region", () => {
 
   it("reports an on-chain failure as failed", async () => {
     const { lines, stop } = recordMessages();
-    const result = await invokeWithWallet({
-      ...REQUEST,
-      fn: "unfreeze",
-      server: makeServer({ included: false }),
-      signer: makeSigner(),
-    });
+    const result = await invokeWithWallet(
+      req({
+        ...REQUEST,
+        fn: "unfreeze",
+        server: makeServer({ included: false }),
+        signer: makeSigner(),
+      }),
+    );
     stop();
     assert.equal(result.kind, "failed");
     assert.equal(lines.at(-1), "Unfreeze failed on chain");
@@ -424,7 +455,7 @@ describe("invokeWithWallet reports through the status region", () => {
     const signer = makeSigner({ keypair });
     signer.currentAddress = async () => null;
     const { lines, stop } = recordMessages();
-    const result = await invokeWithWallet({ ...REQUEST, server: makeServer(), signer });
+    const result = await invokeWithWallet(req({ ...REQUEST, server: makeServer(), signer }));
     stop();
     assert.equal(result.kind, "refused");
     assert.equal(
@@ -440,12 +471,14 @@ describe("invokeWithWallet reports through the status region", () => {
 
   it("reports an export as exported, without speaking the exported XDR", async () => {
     const { lines, stop } = recordMessages();
-    const result = await invokeWithWallet({
-      ...REQUEST,
-      exportOnly: true,
-      server: makeServer(),
-      signer: makeSigner(),
-    });
+    const result = await invokeWithWallet(
+      req({
+        ...REQUEST,
+        exportOnly: true,
+        server: makeServer(),
+        signer: makeSigner(),
+      }),
+    );
     stop();
     assert.equal(result.kind, "exported");
     assert.deepEqual(lines, [

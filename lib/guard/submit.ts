@@ -630,7 +630,7 @@ export async function writeBoundary(
  * Run a wallet-authorized contract call, submitting only on a passing enforced
  * simulation.
  */
-async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
+async function runInvocation(request: InvokeRequest, progress: TxRun): Promise<InvokeResult> {
   setPendingWrite("discovery");
   const passphrase = request.passphrase ?? NETWORK.passphrase;
   const { server, signer } = request;
@@ -720,7 +720,7 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
     };
   }
 
-  announce("Transaction simulation started");
+  progress.stage("simulating");
   const discovery = await server.simulateTransaction(probe);
   if (rpc.Api.isSimulationError(discovery)) {
     // Recording mode: this pass records what the call *needs*, so a failure here
@@ -796,7 +796,6 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
         return interruptedResult(interruption.interruption);
       }
       if (isWalletRefusal(error)) {
-        announce("Transaction refused — nothing was broadcast");
         return {
           kind: "refused",
           stage: "wallet",
@@ -906,7 +905,6 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
       return interruptedResult(interruption.interruption);
     }
     if (isWalletRefusal(error)) {
-      announce("Transaction refused — nothing was broadcast");
       return {
         kind: "refused",
         stage: "wallet",
@@ -1044,7 +1042,7 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
  * (`lib/guard/txProgress.ts`, issue #539): the mid-flight stages (simulating,
  * waiting for wallet approval, submitted) are reported inside `runInvocation`
  * at the moment they happen, each exactly once, and the terminal outcome —
- * confirmed, failed, refused, declined, exported or interrupted — is reported
+ * confirmed, failed, refused, declined, exported, interrupted or unknown — is reported
  * once, here, so every return path gets the same line without that logic being
  * repeated at every `return`. Every line names the operation; none carries the
  * envelope, its arguments or the network's raw error payload.
@@ -1053,65 +1051,40 @@ async function runInvocation(request: InvokeRequest): Promise<InvokeResult> {
  * had a transaction to record.
  */
 export async function invokeWithWallet(request: InvokeRequest): Promise<InvokeResult> {
+  const progress = beginTxProgress(request.fn);
   try {
-    const result = await runInvocation(request);
-    const context = `for guard ${request.contract}`;
-    if (result.kind === "exported") {
-      announce(`Transaction XDR exported for offline signing ${context}`);
-    } else if (result.kind === "refused" && result.writeInterruption) {
-      // The provider went away or the account changed mid-write. The guidance is
-      // phase-specific and already on screen; the announcement says which phase,
-      // and deliberately does not claim the write failed — at submission time it
-      // may have landed.
-      const guidance = recoveryGuidance(result.writeInterruption);
-      announce(`${guidance.headline} ${guidance.nextStep}`, "assertive");
-    } else if (result.kind === "cancelled") {
-      // The operator's own decision, so the announcement says what did *not*
-      // happen and that nothing needs rescuing — no transaction exists to look up.
-      announce("Signing declined in the wallet — nothing was broadcast", "assertive");
-    } else if (result.kind === "refused") {
-      announce(`Transaction refused — nothing was broadcast ${context}`, "assertive");
-    } else if (result.kind === "failed") {
-      recordTx({
-        hash: result.hash,
-        operation: request.fn,
-        status: "failed",
-        feeStroops: result.feeStroops ?? null,
-        networkName: NETWORK.name,
-        networkPassphrase: request.passphrase ?? NETWORK.passphrase,
-      });
-      announce(`Transaction failed on chain ${context}`, "assertive");
-    } else if (result.kind === "ambiguous") {
-      // Nothing is recorded, because the history's two statuses are both claims
-      // about what the network did — confirmed or rejected — and an unanswered
-      // broadcast supports neither. The hash is announced for the operator to
-      // check; the panels that re-read `status()` are the ones that can then claim
-      // whether the write took effect.
-      announce(
-        `Transaction ${request.fn} outcome unknown — the network did not report an outcome ${context}`,
-        "assertive",
-      );
-    } else if (result.kind === "submitted") {
-      recordTx({
-        hash: result.hash,
-        operation: request.fn,
-        status: "confirmed",
-        feeStroops: result.feeStroops ?? null,
-        networkName: NETWORK.name,
-        networkPassphrase: request.passphrase ?? NETWORK.passphrase,
-      });
-      announce(
-        result.ledger !== null && result.status === rpc.Api.GetTransactionStatus.SUCCESS
-          ? `Transaction confirmed on ledger ${result.ledger} ${context}`
-          : `Transaction confirmed on the network ${context}`,
-      );
-      // Only the transaction is announced here, never what the operator meant by
-      // it. A freeze's *effect* is claimed by whoever can verify it: the panic
-      // panel, which re-reads `status()` and announces "Account frozen" or the
-      // reason it did not take, and the fleet table, which has no re-read and so
-      // announces the submission itself. One announcement per write, from the
-      // place that has the evidence for it.
+    let result: InvokeResult;
+    try {
+      result = await runInvocation(request, progress);
+    } catch (error) {
+      // A decline the caller did not ask to receive as a result, or an
+      // unexpected RPC failure, is thrown back to the caller exactly as before.
+      // The region still ends the run, so it never sits on "waiting for wallet
+      // approval".
+      progress.finish(isWalletCancellation(error) ? { kind: "cancelled" } : { kind: "errored" });
+      throw error;
     }
+
+    // Nothing is recorded for an ambiguous broadcast: the history's two
+    // statuses are both claims about what the network did, and an unanswered
+    // broadcast supports neither.
+    if (result.kind === "failed" || result.kind === "submitted") {
+      recordTx({
+        hash: result.hash,
+        operation: request.fn,
+        status: result.kind === "failed" ? "failed" : "confirmed",
+        feeStroops: result.feeStroops ?? null,
+        networkName: NETWORK.name,
+        networkPassphrase: request.passphrase ?? NETWORK.passphrase,
+      });
+    }
+    // Only the transaction is reported here, never what the operator meant by
+    // it. A freeze's *effect* is claimed by whoever can verify it: the panic
+    // panel, which re-reads `status()` and announces "Account frozen" or the
+    // reason it did not take, and the fleet table, which has no re-read and so
+    // announces the submission itself. One announcement per write, from the
+    // place that has the evidence for it.
+    progress.finish(outcomeOf(result));
     return result;
   } finally {
     setPendingWrite(null);
