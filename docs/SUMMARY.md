@@ -23,6 +23,8 @@
   - [Routine Policy Updates & Audit](runbooks/policy-updates.md)
   - [Recovering from a Lost Browser Profile](runbooks/lost-browser-profile.md)
   - [Migrating to a Different Soroban RPC Endpoint](runbooks/custom-rpc-migration.md)
+- [Operations](operations/)
+  - [Updating Shared Test Fixtures](operations/test-fixtures.md)
 - [Guides](guides/)
   - [Adding a Dashboard Read Panel](guides/adding-a-read-panel.md)
   - [Agent Integration](guides/agent-integration.md)

@@ -1,5 +1,10 @@
 # Phase 3 evidence — operator console against a real testnet deployment
 
+> **Changing anything in this directory?** Follow the
+> [fixture update workflow](../../docs/operations/test-fixtures.md): it covers where each fixture
+> comes from, what must be redacted, how to follow SDK vocabulary changes, and the focused commands
+> that prove a fixture still fits. Every file here must have a row in its inventory.
+
 This directory records the run that produced Phase 3's on-chain evidence. **Every hash below is a
 real Stellar testnet transaction**, re-readable from the RPC at the time of writing. Nothing here is
 simulated, and nothing is asserted from the console's own success message.
