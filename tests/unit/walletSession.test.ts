@@ -315,7 +315,7 @@ describe("the console wires the guard rather than relying on the tests", () => {
     );
     assert.match(
       provider,
-      /if \(!sessionGuardRef\.current\.isCurrent\(attempt\)\) setConnecting\(false\)/,
+      /if \(sessionGuardRef\.current\.isCurrent\(attempt\)\) setConnecting\(false\)/,
       "a stale attempt must not clear a live attempt's spinner",
     );
   });

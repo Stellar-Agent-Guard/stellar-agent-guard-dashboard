@@ -236,9 +236,7 @@ test("the window toggle switches between 1h, 6h and 24h", async () => {
 });
 
 test("a data table carries every interval for screen readers and anyone who prefers it", async () => {
-  const toggle = container.querySelector<HTMLButtonElement>(
-    '[data-testid="tchart-data-toggle"]',
-  );
+  const toggle = container.querySelector<HTMLButtonElement>('[data-testid="tchart-data-toggle"]');
   assert.ok(toggle, "the alternate view has its own button");
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   assert.equal(toggle.getAttribute("aria-controls"), "tchart-data-table");
@@ -252,6 +250,11 @@ test("a data table carries every interval for screen readers and anyone who pref
   assert.ok(table.querySelector("caption"));
   assert.equal(table.querySelectorAll("tbody tr").length, 24);
   assert.equal(table.querySelectorAll('th[scope="col"]').length, 6);
+
+  // Restore the collapsed state the next test starts from; this suite shares
+  // one mounted chart across tests.
+  await act(async () => toggle.click());
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
 });
 
 test("the data view is reachable and operable with the keyboard alone", async () => {
@@ -277,7 +280,15 @@ test("the data view is reachable and operable with the keyboard alone", async ()
 });
 
 test("an empty window says so, and still lists every interval as zero", async () => {
-  const rendered = await renderChart([], CONTEXT);
+  // Empty of spends as well as decisions: an empty *window* means no entries.
+  const emptyContext = {
+    ...CONTEXT,
+    snapshot: {
+      ...CONTEXT.snapshot,
+      window: { ok: true, value: { total: 0n, entries: [] } },
+    },
+  };
+  const rendered = await renderChart([], emptyContext);
   try {
     const empty = rendered.container.querySelector('[data-testid="tchart-empty"]');
     assert.ok(empty, "an empty window is stated in words");

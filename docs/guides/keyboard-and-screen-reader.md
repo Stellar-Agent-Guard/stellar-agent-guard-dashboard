@@ -120,8 +120,8 @@ and every cell prints its column name in front of its value.
 The chart is exposed as one image whose label summarizes the whole window. The
 highlighted interval's counts and spend are read out through a polite live
 region as you step. For a non-visual alternative that needs no stepping at all,
-expand **Data table** under the chart (<kbd>Enter</kbd> or <kbd>Space</kbd> on
-the disclosure): it lists every interval with allowed, blocked and other event
+select **Show data table** under the chart (<kbd>Enter</kbd> or <kbd>Space</kbd>
+on the toggle): it lists every interval with allowed, blocked and other event
 counts and settled spend.
 
 ## Telemetry time range

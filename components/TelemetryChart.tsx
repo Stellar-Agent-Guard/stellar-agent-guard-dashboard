@@ -14,7 +14,7 @@
  * is in a real table below the chart.
  */
 
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   CHART_WINDOWS,
   aggregateTelemetry,
@@ -50,6 +50,7 @@ export function TelemetryChart() {
   // with `aria-expanded` is focusable, keyboard-operable and verifiable in the
   // DOM, which is what the issue asks of the non-visual route into the data.
   const [tableOpen, setTableOpen] = useState(false);
+  const tableToggleRef = useRef<HTMLButtonElement>(null);
 
   // Real time: keep the window sliding even when no new events arrive.
   useEffect(() => {
@@ -65,9 +66,9 @@ export function TelemetryChart() {
   // A failed on-chain window read is surfaced, not rendered as zero spend: a
   // zero the console cannot vouch for is indistinguishable from "nothing was
   // spent", which is the one mistake a guard console must not make.
-  const spendUnavailable = snapshot !== null && snapshot.guard === guard && !snapshot.window.ok;
+  const spendUnavailable = snapshot != null && snapshot.guard === guard && !snapshot.window.ok;
   const spendError =
-    snapshot !== null && snapshot.guard === guard && !snapshot.window.ok
+    snapshot != null && snapshot.guard === guard && !snapshot.window.ok
       ? snapshot.window.error
       : null;
 
@@ -181,8 +182,8 @@ export function TelemetryChart() {
 
       {!hasData && (
         <p className="tiny muted" data-testid="tchart-empty" style={{ margin: "6px 0 0" }}>
-          No guard decisions or settled spends in this window yet. Every interval is still listed
-          in the data table, as zero.
+          No guard decisions or settled spends in this window yet. Every interval is still listed in
+          the data table, as zero.
         </p>
       )}
 
@@ -311,13 +312,21 @@ export function TelemetryChart() {
       </div>
 
       <button
+        ref={tableToggleRef}
         type="button"
         className="secondary"
         style={{ marginTop: 8 }}
         aria-expanded={tableOpen}
         aria-controls="tchart-data-table"
         data-testid="tchart-data-toggle"
-        onClick={() => setTableOpen((open) => !open)}
+        onClick={() => {
+          const next = !tableOpen;
+          setTableOpen(next);
+          // Closing removes the region the focus may be inside; return focus to
+          // the control that closed it rather than dropping the operator at
+          // the top of the document.
+          if (!next) tableToggleRef.current?.focus();
+        }}
       >
         {tableOpen ? "Hide data table" : "Show data table"}
       </button>
@@ -403,11 +412,7 @@ function BucketReadout({
   );
 }
 
-function readoutText(
-  bucket: ChartBucket,
-  timeZone: string,
-  spendUnavailable: boolean,
-): string {
+function readoutText(bucket: ChartBucket, timeZone: string, spendUnavailable: boolean): string {
   return (
     `${formatInstant(bucket.start, timeZone)} to ${formatInstant(bucket.end, timeZone)}: ` +
     `${bucket.allowed} allowed, ${bucket.blocked} blocked, ` +

@@ -26,8 +26,7 @@
 export const WALLET_RECOVERY_ANCHOR = "wallet-recovery";
 
 /** The link text shown under a wallet error. */
-export const WALLET_RECOVERY_LINK_LABEL =
-  "Wallet updated or not responding? Safe reconnect steps";
+export const WALLET_RECOVERY_LINK_LABEL = "Wallet updated or not responding? Safe reconnect steps";
 
 export type WalletRecoveryId = "extension-updated" | "disconnected" | "wrong-network";
 
@@ -105,14 +104,16 @@ export const WALLET_VS_CHAIN: readonly { label: string; detail: string }[] = [
   {
     label: "Wallet state (local)",
     detail:
-      "Connection, account and network as the extension last reported them. An update can " +
-      "invalidate all three while this tab stays open, so treat them as a hint until re-read.",
+      "Connection, account and network as the extension last reported them — local state that " +
+      "only this tab holds. An update can invalidate all three while this tab stays open, so " +
+      "treat them as a hint until re-read.",
   },
   {
     label: "Chain state (authoritative)",
     detail:
-      "Policy, freeze status, rolling window, telemetry and transaction outcomes are read from " +
-      "Soroban RPC. They are unaffected by an extension update, and they are what this console reports as fact.",
+      "Policy, freeze status, rolling window, telemetry and transaction outcomes are the " +
+      "authoritative state, read from Soroban RPC. They are unaffected by an extension update, " +
+      "and they are what this console reports as fact.",
   },
 ];
 

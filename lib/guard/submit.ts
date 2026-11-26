@@ -624,9 +624,7 @@ export async function writeBoundary(
       boundAddress: signer.address,
       phase,
       readAddress: signer.currentAddress,
-      ...(signer.networkPassphrase === undefined
-        ? {}
-        : { boundNetwork: signer.networkPassphrase }),
+      ...(signer.networkPassphrase === undefined ? {} : { boundNetwork: signer.networkPassphrase }),
       ...(signer.currentNetwork === undefined ? {} : { readNetwork: signer.currentNetwork }),
     });
     return null;
