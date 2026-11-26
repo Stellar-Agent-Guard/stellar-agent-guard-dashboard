@@ -1,5 +1,9 @@
 # Mock Soroban RPC server
 
+> The builders here are `synthetic` fixtures. Provenance, redaction and SDK-vocabulary updates for
+> them and for `tests/fixtures/` are covered by the
+> [fixture update workflow](../../docs/operations/test-fixtures.md).
+
 `mockRpcServer.ts` is an in-memory Soroban RPC server for offline tests. It
 speaks JSON-RPC 2.0 over real HTTP on a loopback port, so the unmodified
 `rpc.Server` from `@stellar/stellar-sdk`, and every `lib/guard/*` function
