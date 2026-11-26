@@ -4,6 +4,16 @@
 that holds no keys and runs no server code, so most changes are UI, client-side Soroban
 RPC, or tests.
 
+## Artifact Pin Changes
+
+> **Changing the pinned WASM identity affects deployment trust and requires coordinated,
+> evidence-backed review.** Before opening a PR that modifies the pinned artifact, complete
+> the **Artifact Pin Change Checklist** in `docs/operations/artifact-pin-checklist.md` and
+> reference it in your PR description.
+
+All PRs that change the pinned artifact must satisfy every item in the checklist. Pull
+requests that do not will be returned for completion.
+
 ## First run (local development walkthrough)
 
 This is a pure client-side Next.js app: there is no backend, database or API route to
@@ -324,8 +334,31 @@ named exactly **`ci`**. The `ci` workflow runs typecheck, lint, the unit tests, 
 production build, a dedicated step that re-checks the enforcement-scope statement in
 `README.md` and `SPEC.md` against the canonical constant in `lib/guard/network.ts`
 (`tests/unit/scopeStatement.test.ts`), and the Playwright end-to-end suites
-(`npm run test:e2e`, headless Chromium against a mocked chain). Rewording the boundary fails CI, which is the
+(`npm run test:e2e`, headless Chromium against a mocked chain). That suite includes
+`tests/e2e/smoke.spec.ts`, which loads every primary route — `/`, `/configure`, `/deploy`,
+`/fleet` and `/panic` — without a wallet and fails on a page error or a hydration mismatch,
+plus a chain-unreachable case that asserts a failed read is surfaced rather than rendered as
+zeros. Rewording the boundary fails CI, which is the
 point — see [Enforcement scope](README.md#enforcement-scope--read-this-before-relying-on-the-caps).
+
+## Adding a read panel
+
+A new panel that shows chain state follows the read-panel contract in
+[`docs/guides/adding-a-read-panel.md`](./docs/guides/adding-a-read-panel.md). In short:
+
+- **Typed outcomes** — every read returns `ReadResult<T>`; pending, failed and resolved (including a
+  genuine empty or zero) render differently, and no branch defaults a failure to `0`.
+- **Freshness** — a resolved value carries when it was read and the panel shows it; a failed refresh
+  is labelled, never left looking live.
+- **Cancellation** — a response for a guard, network or RPC server the operator has left is dropped
+  and not announced (the `GuardProvider` read epoch, guard-keyed state, or `lib/guard/guardScoped.ts`).
+- **Accessible errors** — failures go through `Read` / `ReadWithRetry` / `ErrorBlock` in
+  `components/bits.tsx`, name the read, and retry only that read.
+- **Tests** — the pending, failed, empty, stale-after-switch and retry cases each have a unit test.
+
+The page quotes `GuardProvider.refresh()` and `SetupWizard` as the reference implementation, and
+`tests/unit/readPanelContract.test.ts` fails if those quotes, or any file or symbol the page cites,
+drift from the code. Copy the checklist at the end of the page into the PR description.
 
 ## Keeping docs true to the code
 

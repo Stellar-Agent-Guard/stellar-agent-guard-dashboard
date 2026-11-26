@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import { Address, Contract, Keypair, rpc, scValToNative, xdr } from "@stellar/stellar-sdk";
 import type { GuardEvent } from "stellar-agent-guard-sdk";
+import { eventToExportRow } from "../../lib/guard/eventExport.ts";
 import {
   AUDIT_LOG_SCHEMA,
   auditLogFilename,
@@ -149,7 +151,9 @@ describe("audit records", () => {
     assert.equal(record.verdict, "blocked");
     assert.equal(record.reason, "admin_frozen");
     assert.equal(record.ledger, null);
-    assert.equal(record.timestamp, "2026-09-25T14:05:00.000Z");
+    // Issue #318: an event time is canonical UTC at second precision, so the
+    // `.000Z` the producer sent is not what the audit log writes.
+    assert.equal(record.timestamp, "2026-09-25T14:05:00Z");
     assert.equal(record.timestampSource, "observed");
     assert.equal(record.raw, null);
   });
@@ -376,6 +380,89 @@ describe("raw XDR capture", () => {
       assert.equal(refused.raw?.topicXdr.length, 3);
       assert.equal(refused.raw?.inSuccessfulContractCall, false);
       assert.ok(refused.observedAt);
+    }
+  });
+});
+
+// ── Stable UTC event times across both machine-readable formats (#318) ─────
+
+describe("audit log timestamps", () => {
+  test("every event time is canonical ISO-8601 UTC, whatever zone it arrived in", () => {
+    const cases: readonly [input: string, expected: string][] = [
+      ["2026-09-25T14:03:07Z", "2026-09-25T14:03:07Z"],
+      ["2026-09-25T14:03:07.412Z", "2026-09-25T14:03:07Z"],
+      ["2026-09-25T16:03:07+02:00", "2026-09-25T14:03:07Z"],
+      ["2026-09-25T09:03:07-05:00", "2026-09-25T14:03:07Z"],
+      // A zone-less wall time would mean a different instant in every zone, so
+      // the export reads it as UTC rather than as the operator's local time.
+      ["2026-09-25T14:03:07", "2026-09-25T14:03:07Z"],
+    ];
+    for (const [input, expected] of cases) {
+      const record = toAuditRecord(event({ ledgerClosedAt: input }));
+      assert.equal(record.ledgerClosedAt, expected, `ledgerClosedAt "${input}"`);
+      assert.equal(record.timestamp, expected, "the derived timestamp is the same instant");
+      assert.equal(record.timestampSource, "ledger_close");
+    }
+  });
+
+  test("a daylight-saving boundary keeps the instant it names", () => {
+    // 2026-03-29 is the night Europe/London springs forward, at 01:00 UTC.
+    const before = toAuditRecord(event({ ledgerClosedAt: "2026-03-29T00:59:59-05:00" }));
+    assert.equal(before.timestamp, "2026-03-29T05:59:59Z");
+    // 2026-03-08 is the US one, at 07:00 UTC; 02:30 local never existed there.
+    const impossible = toAuditRecord(event({ ledgerClosedAt: "2026-03-08T02:30:00" }));
+    assert.equal(impossible.timestamp, "2026-03-08T02:30:00Z");
+  });
+
+  test("absence is null in both time fields, so a diagnostic still sorts by observation", () => {
+    const record = toAuditRecord(
+      event({ ledgerClosedAt: null, observedAt: "2026-09-25T14:05:00.000Z", ledger: null }),
+    );
+    assert.equal(record.ledgerClosedAt, null);
+    assert.equal(record.observedAt, "2026-09-25T14:05:00Z");
+    assert.equal(record.timestamp, record.observedAt);
+    assert.equal(record.timestampSource, "observed");
+    // The fixture's `withIdentity` always stamps an observation, so the
+    // genuinely undated case is built by overriding it: a row with neither.
+    const bothUnknown = toAuditRecord({ ...event({ ledgerClosedAt: null }), observedAt: null });
+    assert.equal(bothUnknown.timestamp, null);
+    assert.equal(bothUnknown.timestampSource, null);
+  });
+
+  test("one instant is written identically by the CSV export and the audit log", () => {
+    const committed = event({ ledgerClosedAt: "2026-09-25T16:03:07+02:00" });
+    const row = eventToExportRow(committed, GUARD);
+    const record = toAuditRecord(committed);
+    assert.equal(row.ledger_closed_at, record.ledgerClosedAt ?? "");
+    assert.equal(row.observed_at, record.observedAt ?? "");
+  });
+
+  test("the header keeps its millisecond export stamp while event times are second-precise", () => {
+    const out = telemetryToAuditLog({
+      events: [event({ observedAt: "2026-09-25T14:03:07.412Z" })],
+      bufferedCount: 1,
+      guard: GUARD,
+      network: "testnet",
+      filter: EMPTY_TELEMETRY_FILTER,
+      latestLedger: null,
+      demo: false,
+      exportedAt: new Date("2026-09-25T14:03:07.412Z"),
+    });
+    const [header, row] = lines(out).map((line) => JSON.parse(line) as Record<string, string>);
+    assert.equal(
+      header!.exportedAt,
+      "2026-09-25T14:03:07.412Z",
+      "when this export ran is a provenance stamp, not a chain time",
+    );
+    assert.equal(row!.observedAt, "2026-09-25T14:03:07Z", "the chain time is canonical");
+  });
+
+  test("docs/export-schema.md documents the audit schema and every field it writes", () => {
+    const doc = readFileSync("docs/export-schema.md", "utf8");
+    assert.ok(doc.includes(AUDIT_LOG_SCHEMA), "the doc names the schema id the file carries");
+    assert.match(doc, /append-only/i, "and the compatibility rule those field names obey");
+    for (const field of Object.keys(toAuditRecord(event()))) {
+      assert.ok(doc.includes(`\`${field}\``), `the doc documents \`${field}\` in backticks`);
     }
   });
 });

@@ -53,6 +53,15 @@ export interface GuardFeedLike {
   }>;
   /** Release the runner. Absent on some runners; called when one is reconciled away. */
   stop?(): void;
+  /**
+   * Undo a previous `stop()` without discarding position.
+   *
+   * A factory backed by `GuardFeedCoordinator` hands the *same* instance back
+   * for a guard it has seen before, so a runner created after a `stopAll()` is
+   * a stopped one. Without this the second watch polls nothing at all and
+   * reports success doing it (#488).
+   */
+  resume?(): void;
 }
 
 /** A per-guard poll outcome, so one guard's RPC failure cannot blank the others. */
@@ -164,7 +173,13 @@ export class MultiGuardFeed {
     for (const source of accepted) {
       this.labels.set(source.guard, source.label);
       if (!this.runners.has(source.guard)) {
-        this.runners.set(source.guard, this.createFeed(source.guard));
+        const runner = this.createFeed(source.guard);
+        // Re-arming happens here rather than in the factory so that "a tailed
+        // guard polls" is a property of this supervisor, whatever the factory
+        // handed back. Cursor and gap memory are untouched — only the refusal to
+        // poll is lifted.
+        runner.resume?.();
+        this.runners.set(source.guard, runner);
       }
     }
   }

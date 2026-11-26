@@ -262,6 +262,9 @@ export class GuardFeed {
     const recording = Object.create(server) as rpc.Server;
     recording.getEvents = async (request) => {
       const response = await server.getEvents(request);
+      if (!response || !Array.isArray(response.events)) {
+        throw new Error("malformed getEvents response: events must be an array");
+      }
       this.lastRawEvents = response.events;
       return response;
     };
@@ -277,7 +280,21 @@ export class GuardFeed {
     this.stopped = true;
   }
 
-  /** True once `stop()` has been called. Exposed for lifecycle assertions. */
+  /**
+   * Poll again, keeping this feed's cursor.
+   *
+   * `GuardFeedCoordinator` caches one feed per guard identity, so the instance a
+   * stopped watch released is the very instance the next watch is handed back —
+   * and a stopped `pollOnce()` returns an empty page *successfully*, so a
+   * re-armed-but-still-stopped feed reads as "healthy, nothing happened" while
+   * the RPC is never asked (#488). Resuming rather than rebuilding is also the
+   * only restart that keeps the cursor, which is what a manual refresh requires.
+   */
+  resume(): void {
+    this.stopped = false;
+  }
+
+  /** True once `stop()` has been called and `resume()` has not undone it. */
   isStopped(): boolean {
     return this.stopped;
   }
@@ -587,6 +604,7 @@ export function attachLedgerXdr(
 // the name topic of an RPC event, and the SDK's `topicSymbols` reads a
 // `DiagnosticEvent`/base64 shape, not `rpc.Api.EventResponse`.
 function firstTopic(event: rpc.Api.EventResponse): string | null {
+  if (!event || !Array.isArray(event.topic)) return null;
   const [first] = event.topic;
   if (!first) return null;
   try {

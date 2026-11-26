@@ -449,6 +449,11 @@ Never rely on color alone to communicate state:
 
 ## Data and Error Handling Standards
 
+> [!IMPORTANT]
+> A panel that reads chain state must also meet the read-panel contract in
+> [Adding a Dashboard Read Panel](./adding-a-read-panel.md): typed outcomes, freshness, cancellation
+> of stale reads, accessible errors, and the tests for each.
+
 ### 1. No Mock Data
 
 > [!CAUTION]

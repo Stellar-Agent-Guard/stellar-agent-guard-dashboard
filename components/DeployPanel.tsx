@@ -21,7 +21,12 @@ import {
 import { rememberDeployment } from "../lib/guard/setupChecklist.ts";
 import type { ArtifactCheck, DeployOutcome, DeployPlan } from "../lib/guard/guardOps.ts";
 import { deployCostBreakdown } from "../lib/guard/deployCostCalculator.ts";
-import { isWalletCancellation, type InvokeResult } from "../lib/guard/submit.ts";
+import {
+  isWalletCancellation,
+  previewAuthorizationSummary,
+  type InvokeResult,
+} from "../lib/guard/submit.ts";
+import { AuthorizationSummaryBlock } from "./AuthorizationSummary.tsx";
 import { NETWORK, PHASE1_ARTIFACT } from "../lib/guard/network.ts";
 import {
   fetchContractWasm,
@@ -36,6 +41,8 @@ import {
 } from "../lib/guard/initValidator.ts";
 import { useFormValidation } from "../lib/guard/useFormValidation.ts";
 import { sanitizeAddressInput } from "../lib/guard/inputSanitizer.ts";
+import { PendingActionSummary } from "./PendingActionSummary.tsx";
+import { createPendingActionSnapshot } from "../lib/guard/walletConnector.ts";
 import {
   contractAlreadyDeployed,
   createSaltAddressPredictor,
@@ -209,6 +216,15 @@ export function initOutcomeView(result: InvokeResult): OutcomeView {
         retryable: false,
         detail: result.detail ?? null,
       };
+    case "ambiguous":
+      return {
+        headline: "initialize was broadcast and never answered",
+        tone: "error",
+        // Not retryable: something *was* broadcast. #344's rule is that a retry
+        // offer belongs only to outcomes where nothing left the browser.
+        retryable: false,
+        detail: result.detail,
+      };
     default:
       return {
         headline: "initialize was broadcast and rejected on chain",
@@ -309,6 +325,23 @@ export function DeployPanel() {
   // both rather than replacing the app underneath them (#398).
   usePwaActivity(deploying, "write");
   usePwaActivity(saltText.trim() !== "" || agentPubkey.trim() !== "", "draft");
+
+  /**
+   * What "Sign and initialize" will ask the wallet to authorize (issue #343).
+   *
+   * Read back out of a transaction built the same way the write builds its own,
+   * so the four facts on screen are the four facts in the envelope rather than a
+   * restatement of what the panel believes it is submitting. Before a deploy there
+   * is no guard to initialize, so there is nothing to show and the button stays
+   * disabled — an initialization nobody can name is not one anybody can approve.
+   */
+  const initializeTarget = outcome?.guard ?? "";
+  const initializeAuthorization = previewAuthorizationSummary({
+    contract: initializeTarget,
+    fn: "initialize",
+    admin: wallet?.address ?? "",
+    passphrase: NETWORK.passphrase,
+  });
 
   const [balance, setBalance] = useState<string | null>(null);
   useEffect(() => {
@@ -718,6 +751,9 @@ export function DeployPanel() {
         signer: signer(),
         guard: target,
         agentPubkeyHex: agentPubkey,
+        // The copy the operator was shown, so the pipeline can check it against
+        // the transaction it is about to simulate.
+        authorization: initializeAuthorization,
       });
       setInitResult(result);
       if (result.kind !== "cancelled") await refresh();
@@ -1104,6 +1140,25 @@ export function DeployPanel() {
         </div>
       )}
 
+      {wallet && (
+        <PendingActionSummary
+          snapshot={createPendingActionSnapshot({
+            account: wallet.address,
+            network: NETWORK.name,
+            actionName: "Deploy Guard",
+          })}
+          currentAccount={wallet.address}
+          currentNetwork={NETWORK.name}
+          onCancel={(reason) => {
+            setFailure({
+              source: "deploy",
+              detail: reason,
+              cancelled: true,
+            });
+          }}
+        />
+      )}
+
       <div className="row" style={{ marginTop: 14 }}>
         <button
           disabled={deployControl.disabled}
@@ -1487,6 +1542,13 @@ export function DeployPanel() {
       </div>
 
       <InitChecklist validation={initValidation} />
+
+      <div style={{ marginTop: 12 }}>
+        <AuthorizationSummaryBlock
+          authorization={initializeAuthorization}
+          purpose="this initialization"
+        />
+      </div>
 
       <div className="row">
         <button

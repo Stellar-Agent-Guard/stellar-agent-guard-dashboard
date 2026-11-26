@@ -27,6 +27,14 @@ test("configure network context shows the network and full RPC hostname", async 
     const hostname = container.querySelector<HTMLElement>('[data-testid="configure-rpc-hostname"]');
     assert.equal(hostname?.textContent, "rpc.example.test");
     assert.equal(hostname?.title, "https://rpc.example.test/soroban");
+
+    const guideLink = container.querySelector<HTMLAnchorElement>(
+      '[data-testid="rpc-checklist-link"]',
+    );
+    assert.ok(guideLink, "Expected checklist link to be rendered");
+    assert.equal(guideLink.getAttribute("href"), "/docs/guides/evaluating-rpc-endpoints.md");
+    assert.equal(guideLink.textContent, "Evaluating third-party endpoints");
+
     assert.equal(container.querySelector("button, select"), null);
   } finally {
     act(() => root.unmount());

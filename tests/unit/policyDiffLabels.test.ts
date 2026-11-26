@@ -26,6 +26,14 @@ import { computePolicyDiff, type PolicyDiff } from "../../lib/guard/policyDiff.t
 
 installDom();
 
+/** The summary a review dialog is opened with; the diff rows are what these tests read. */
+const TEST_AUTHORIZATION = {
+  operation: "set_policy",
+  guard: "CBBD7223BM5VCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNS",
+  networkPassphrase: "Test SDF Network ; September 2015",
+  admin: "GBBD7223BM5VCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNS",
+};
+
 let react: typeof import("react");
 let createRoot: typeof import("react-dom/client").createRoot;
 let act: Act;
@@ -96,11 +104,13 @@ async function render(diff: PolicyDiff): Promise<{
   const element = react.createElement(
     PolicyDiffModal as unknown as (p: {
       diff: PolicyDiff;
+      authorization: typeof TEST_AUTHORIZATION;
       onConfirm: () => void;
       onCancel: () => void;
     }) => ReactElement,
     {
       diff,
+      authorization: TEST_AUTHORIZATION,
       onConfirm: () => {
         confirmations += 1;
       },
@@ -194,7 +204,7 @@ test("the status word rides with the field: the cell is a row header", async () 
     const columns = Array.from(
       rendered.dialog.querySelectorAll<HTMLTableCellElement>('thead th[scope="col"]'),
     ).map((cell) => cell.textContent?.trim());
-    assert.deepEqual(columns, ["Field", "Current", "New"]);
+    assert.deepEqual(columns, ["Field", "Before (installed)", "After (this draft)"]);
     assert.ok(
       rendered.dialog.querySelector("caption"),
       "the table needs a caption so the header cells have context",
@@ -342,6 +352,7 @@ test("confirming still requires the operator, and cancelling never signs", async
     root.render(
       react.createElement(PolicyDiffModal, {
         diff: ADDED,
+        authorization: TEST_AUTHORIZATION,
         onConfirm: () => {
           confirmations += 1;
         },

@@ -8,6 +8,7 @@ import { refreshSources, type RefreshSource } from "../lib/guard/refreshStatus.t
 import {
   pollFleet,
   defaultSortDirection,
+  DEFAULT_FLEET_PROBE_CONCURRENCY,
   computeFleetRiskSummary,
   getAllFleetTags,
   addGuardTag,
@@ -107,6 +108,18 @@ function skippedCopy(count: number): string {
   return `${count} selected ${noun} kept: a build-seeded guard is a constant of this build and cannot be deleted.`;
 }
 
+/**
+ * Where the documentation lives for this build's operator (issue #481).
+ *
+ * The app serves no `/docs` route, so a `DocsLink`-style helper cannot render a
+ * relative path. This is the same absolute blob URL
+ * `lib/guard/recoveryGuidance.ts` uses for its guidance links: it resolves on
+ * GitHub, where `docs/SUMMARY.md` lists the page, and the ↗ suffix says out loud
+ * that it leaves the console.
+ */
+const REGISTRY_BACKUPS_DOC_HREF =
+  "https://github.com/Stellar-Agent-Guard/stellar-agent-guard-dashboard/blob/main/docs/guides/registry-backups.md";
+
 export function FleetTable() {
   const { wallet, server, instances, guard, removeInstances, restoreRegistry } = useGuard();
   const router = useRouter();
@@ -160,7 +173,10 @@ export function FleetTable() {
 
   useEffect(() => {
     let mounted = true;
+    const controller = new AbortController();
+
     const fetchFleet = async () => {
+      setLoading(true);
       const instances = loadInstances();
       const contacts = instances.map((i) => ({
         address: i.guard,
@@ -169,8 +185,11 @@ export function FleetTable() {
       }));
       setFleetRead((current) => ({ ...current, polling: true }));
       try {
-        const result = await pollFleet(server, contacts);
-        if (!mounted) return;
+        const result = await pollFleet(server, contacts, {
+          concurrency: DEFAULT_FLEET_PROBE_CONCURRENCY,
+          signal: controller.signal,
+        });
+        if (!mounted || controller.signal.aborted) return;
         setRows(result);
         setLoading(false);
         const answered = result.filter((row) => row.snapshot !== null).length;
@@ -199,7 +218,7 @@ export function FleetTable() {
               },
         );
       } catch (error) {
-        if (!mounted) return;
+        if (!mounted || controller.signal.aborted) return;
         const failedAt = new Date().toISOString();
         setFleetRead((current) => ({
           polling: false,
@@ -215,6 +234,7 @@ export function FleetTable() {
     const interval = setInterval(fetchFleet, FLEET_INTERVAL_MS);
     return () => {
       mounted = false;
+      controller.abort();
       clearInterval(interval);
     };
   }, [server, refreshKey]);
@@ -377,11 +397,22 @@ export function FleetTable() {
 
   return (
     <div className="panel">
-      <div className="row" style={{ justifyContent: "space-between" }}>
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <h2 style={{ margin: 0 }}>Fleet Overview</h2>
-        <span className="tiny muted">
-          {rows.length} guard{rows.length !== 1 ? "s" : ""} in registry
-        </span>
+        <div className="row" style={{ gap: 8, alignItems: "center" }}>
+          <button
+            className="secondary"
+            data-testid="fleet-refresh-button"
+            style={{ fontSize: "12px", padding: "4px 8px" }}
+            onClick={() => setRefreshKey((k) => k + 1)}
+            disabled={loading}
+          >
+            {loading ? "Refreshing…" : "Refresh fleet"}
+          </button>
+          <span className="tiny muted">
+            {rows.length} guard{rows.length !== 1 ? "s" : ""} in registry
+          </span>
+        </div>
       </div>
 
       <div className="split" style={{ marginTop: 12 }}>
@@ -535,6 +566,16 @@ export function FleetTable() {
           <span className="tiny">
             Nothing on chain was touched — this only cleared this browser&apos;s list.
           </span>
+          <a
+            className="tiny"
+            href={REGISTRY_BACKUPS_DOC_HREF}
+            target="_blank"
+            rel="noreferrer"
+            title={REGISTRY_BACKUPS_DOC_HREF}
+            data-testid="registry-backup-docs-link"
+          >
+            Registry backups — what is saved and what is not ↗
+          </a>
           <div className="row" style={{ marginTop: 6 }}>
             <button
               type="button"

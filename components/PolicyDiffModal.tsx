@@ -1,9 +1,28 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { PolicyDiff, DiffEntry } from "../lib/guard/policyDiff.ts";
+import { PendingActionSummary } from "./PendingActionSummary.tsx";
+import { createPendingActionSnapshot } from "../lib/guard/walletConnector.ts";
+import { NETWORK } from "../lib/guard/network.ts";
+import type { AuthorizationContext } from "../lib/guard/authorizationSummary.ts";
+import { AuthorizationSummaryBlock } from "./AuthorizationSummary.tsx";
 import { useGuard } from "./GuardProvider.tsx";
 import { short } from "./bits.tsx";
+import { useModalFocus } from "../lib/guard/useModalFocus.ts";
+
+/**
+ * Column labels for the comparison. They are rendered twice on purpose: once
+ * as the semantic `<th>` header, and once per cell as `data-label`, which the
+ * narrow-screen layout prints in front of each value (issue #537). Below the
+ * breakpoint the header row is visually hidden, so without the per-cell label
+ * an operator on a phone could not tell the installed value from the new one.
+ */
+export const DIFF_COLUMN_LABELS = {
+  field: "Field",
+  before: "Before (installed)",
+  after: "After (this draft)",
+} as const;
 
 /**
  * Each status three ways: a glyph, a word, and the class the stylesheet paints.
@@ -58,19 +77,43 @@ function renderValue(value: unknown): string {
  * caps are what the guard enforces. This renders the structured diff from
  * `lib/guard/policyDiff.ts` side by side and refuses to call `onConfirm` until
  * the operator has actually seen it.
+ *
+ * Below 720px the side-by-side table linearizes (issue #537): each changed
+ * field becomes its own card reading Field → Before → After, top to bottom, in
+ * DOM order, so reading order, screen-reader order and Tab order all agree and
+ * the before/after labels stay attached to their values. The stylesheet never
+ * reorders cells visually (no `order`, no `*-reverse`), which is what keeps the
+ * keyboard order logical.
+ *
+ * Focus follows the shared modal contract (`useModalFocus`): focus moves into
+ * the dialog on open, Tab is trapped, Escape cancels, and focus returns to the
+ * control that opened the review — including when another dialog (such as the
+ * secret-key alert) was stacked on top of it in the meantime (issue #540).
+ *
+ * The diff says *what* changes; the authorization block beneath it says *who is
+ * signing what, and where* (issue #343) — the two halves of the same question,
+ * which is why they share this dialog rather than sitting in separate panels. An
+ * install with no summary to show has no confirmed signer, so the confirm button
+ * stays disabled instead of offering a prompt the operator cannot evaluate.
  */
 export function PolicyDiffModal({
   diff,
+  authorization,
   expectedAccount,
   currentAccount,
   onConfirm,
   onCancel,
+  signerAccount,
+  network,
 }: {
   diff: PolicyDiff;
+  authorization: AuthorizationContext | null;
   expectedAccount?: string | undefined;
   currentAccount?: string | undefined;
   onConfirm: () => void;
-  onCancel: () => void;
+  onCancel: (reason?: string) => void;
+  signerAccount?: string | null | undefined;
+  network?: string;
 }) {
   let liveAddress: string | undefined = currentAccount;
   try {
@@ -87,17 +130,34 @@ export function PolicyDiffModal({
   const accountChanged = Boolean(targetAccount && liveAddress && targetAccount !== liveAddress);
 
   const changes = diff.entries.filter((entry) => entry.status !== "unchanged");
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useModalFocus({ open: true, containerRef: dialogRef, onDismiss: onCancel });
 
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onCancel}>
+    <div className="modal-backdrop" role="presentation" onClick={() => onCancel()}>
       <div
-        className="modal"
+        ref={dialogRef}
+        className="modal policy-diff"
         role="dialog"
         aria-modal="true"
         aria-label="Policy changes"
+        tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
         <h2 style={{ marginTop: 0 }}>Policy changes</h2>
+        {signerAccount && (
+          <PendingActionSummary
+            snapshot={createPendingActionSnapshot({
+              account: signerAccount,
+              network: network ?? NETWORK.name,
+              actionName: "Set Policy",
+            })}
+            currentAccount={signerAccount}
+            currentNetwork={network ?? NETWORK.name}
+            onCancel={(reason) => onCancel(reason)}
+          />
+        )}
         <p className="tiny muted">
           Review what will change before the wallet is prompted to sign. Signing installs the new
           policy and resets the rolling window.
@@ -142,16 +202,16 @@ export function PolicyDiffModal({
         ) : (
           <>
             <p className="tiny muted diff-summary">{summarize(changes)}</p>
-            <table className="diff-table">
+            <table className="diff-table diff-linear">
               <caption className="visually-hidden">
-                Fields this policy changes, with the value on chain now and the value a signature
-                would install.
+                {changes.length} changed policy field{changes.length === 1 ? "" : "s"}, installed
+                value before and draft value after
               </caption>
               <thead>
                 <tr>
-                  <th scope="col">Field</th>
-                  <th scope="col">Current</th>
-                  <th scope="col">New</th>
+                  <th scope="col">{DIFF_COLUMN_LABELS.field}</th>
+                  <th scope="col">{DIFF_COLUMN_LABELS.before}</th>
+                  <th scope="col">{DIFF_COLUMN_LABELS.after}</th>
                 </tr>
               </thead>
               <tbody>
@@ -159,15 +219,19 @@ export function PolicyDiffModal({
                   const status = STATUS[entry.status];
                   return (
                     <tr key={entry.field} className={status.className} data-status={entry.status}>
-                      <th scope="row">
+                      <th scope="row" data-label={DIFF_COLUMN_LABELS.field}>
                         <span className="diff-glyph" aria-hidden="true">
                           {status.glyph}
                         </span>
                         <span className="diff-field">{entry.field}</span>
                         <span className="diff-status">{` (${status.label})`}</span>
                       </th>
-                      <td className="mono tiny">{renderValue(entry.oldValue)}</td>
-                      <td className="mono tiny">{renderValue(entry.newValue)}</td>
+                      <td className="mono tiny" data-label={DIFF_COLUMN_LABELS.before}>
+                        {renderValue(entry.oldValue)}
+                      </td>
+                      <td className="mono tiny" data-label={DIFF_COLUMN_LABELS.after}>
+                        {renderValue(entry.newValue)}
+                      </td>
                     </tr>
                   );
                 })}
@@ -175,10 +239,18 @@ export function PolicyDiffModal({
             </table>
           </>
         )}
+        <div style={{ marginTop: 14 }}>
+          <AuthorizationSummaryBlock authorization={authorization} purpose="this policy install" />
+        </div>
 
-        <div className="row" style={{ marginTop: 14 }}>
+        <div className="row policy-diff-actions" style={{ marginTop: 14 }}>
           <button
-            disabled={changes.length === 0 || accountChanged}
+            disabled={authorization === null || changes.length === 0 || accountChanged}
+            title={
+              authorization === null
+                ? "This console cannot name the account and guard that would sign, so it will not ask your wallet to."
+                : undefined
+            }
             onClick={() => {
               if (accountChanged) return;
               onConfirm();
@@ -186,7 +258,7 @@ export function PolicyDiffModal({
           >
             Confirm and sign
           </button>
-          <button className="secondary" onClick={onCancel}>
+          <button className="secondary" onClick={() => onCancel()}>
             Cancel
           </button>
         </div>

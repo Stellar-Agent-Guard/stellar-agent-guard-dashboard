@@ -9,6 +9,13 @@ const SAMPLE_DIFF: PolicyDiff = {
   warnings: [],
 };
 
+const SAMPLE_AUTHORIZATION = {
+  operation: "set_policy",
+  guard: "CBBD7223BM5VCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNS",
+  networkPassphrase: "Test SDF Network ; September 2015",
+  admin: "GBBD7223BM5VCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNS",
+};
+
 describe("confirmation dialog account change protection (#515)", () => {
   let React: Awaited<ReturnType<typeof loadReact>>["react"];
   let createRoot: Awaited<ReturnType<typeof loadReact>>["createRoot"];
@@ -48,6 +55,7 @@ describe("confirmation dialog account change protection (#515)", () => {
       root!.render(
         React.createElement(PolicyDiffModal, {
           diff: SAMPLE_DIFF,
+          authorization: SAMPLE_AUTHORIZATION,
           expectedAccount:
             props.expectedAccount ?? "GBBD7223BM5VCEOR2G26KDW6Y4G6ZUNS5U67GZ2BGB26KDW6Y4G6ZUNS",
           currentAccount:
