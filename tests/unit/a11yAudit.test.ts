@@ -12,10 +12,12 @@ import { StatusPanel } from "../../components/StatusPanel.tsx";
 import { TxHistoryTable } from "../../components/TxHistoryTable.tsx";
 import { TelemetryFeed } from "../../components/TelemetryFeed.tsx";
 import { TelemetryChart } from "../../components/TelemetryChart.tsx";
+import { TxProgressStatus } from "../../components/TxProgressStatus.tsx";
 import { GuardContext, GuardEventsContext } from "../../components/GuardProvider.tsx";
 import { POLL_OFF } from "../../lib/guard/feedHealth.ts";
 import { TX_HISTORY_STORAGE_KEY, type TxHistoryEntry } from "../../lib/guard/txHistory.ts";
 import type { GuardSnapshot } from "../../lib/guard/guardOps.ts";
+import { beginTxProgress, resetTxProgress } from "../../lib/guard/txProgress.ts";
 
 type GuardEventsContextValue = NonNullable<ContextType<typeof GuardEventsContext>>;
 
