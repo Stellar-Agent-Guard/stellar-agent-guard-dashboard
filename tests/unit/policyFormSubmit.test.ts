@@ -24,7 +24,7 @@
 import assert from "node:assert/strict";
 import { afterEach, before, test } from "node:test";
 import { Account, SorobanDataBuilder, rpc, xdr } from "@stellar/stellar-sdk";
-import { decodePolicy } from "stellar-agent-guard-sdk";
+import { decodePolicy, type PolicyConfig } from "stellar-agent-guard-sdk";
 import type { ReactElement, ReactNode } from "react";
 import { installDom, loadReact, sleep, type Act } from "./domHarness.ts";
 import { PolicyForm } from "../../components/PolicyForm.tsx";
@@ -37,6 +37,7 @@ import type { GuardSnapshot } from "../../lib/guard/guardOps.ts";
 import type { WalletSigner } from "../../lib/guard/submit.ts";
 import { WalletUserRejectedError } from "../../lib/guard/walletConnector.ts";
 import { NETWORK } from "../../lib/guard/network.ts";
+import { exportPolicyToJson } from "../../lib/guard/policySchema.ts";
 import { decodeInvocation } from "../helpers/identityRace.ts";
 
 installDom();
@@ -60,12 +61,21 @@ const GUARD = "CBLQLJAG72M4XQRJMQHSKYIFVHQD7LNTNOQH2GRMCMBWMSLBSLTGTJC7";
 const SIGNER = "GA76DICZHOAA3L2OUCHG4X6J6DMM2NDEPLUWMK4PVLR2YTXZADHJZIXD";
 const TOKEN = "CDCYDGBGS5AZ5BZS6XY2SK2PHJHSOEGTN3N4INCK34KF6GU2BGC7Z6MB";
 const RECIPIENT = "GAOBCRXTCO4ZCBNHALJUMJJ5JDXNOUZ7U6VZJX4UBTXAHQEO66IPU6PH";
+const PROTOCOL = "CAPADGEK457RHKN4RYVUMDJTFHDSG7R5HREQONKLYK7MFKC5WFENPP44";
 
 /**
  * The calls the pipeline makes, in order. `sign` is recorded by the signer, the
  * rest by the fake server, so one array pins the whole sequence.
  */
 type Call = "getAccount" | "simulate" | "sign" | "send" | "getTransaction";
+
+function assertNoWrite(calls: readonly Call[], message: string): void {
+  assert.equal(
+    calls.some((call) => call === "sign" || call === "send" || call === "getTransaction"),
+    false,
+    message,
+  );
+}
 
 interface PipelineServer {
   server: rpc.Server;
@@ -273,6 +283,36 @@ async function fillValidPolicy(container: HTMLElement): Promise<void> {
   });
 }
 
+function importablePolicyJson(network: string = NETWORK.name): string {
+  const config: PolicyConfig = {
+    per_tx_cap: 1000n,
+    window_cap: 5000n,
+    window_secs: 86400n,
+    assets: [TOKEN],
+    protocols: [{ contract: PROTOCOL, fns: ["swap"] }],
+    recipients: [RECIPIENT],
+    allow_any_recipient: false,
+    active_from: 0n,
+    active_until: 0n,
+    paused: false,
+    dms_grace_secs: 3600n,
+  };
+  return exportPolicyToJson(config, [], network);
+}
+
+async function importPolicyFile(container: HTMLElement, source: string): Promise<void> {
+  const input = container.querySelector(
+    'input[type="file"][accept=".json,application/json"]',
+  ) as HTMLInputElement | null;
+  assert.ok(input, "expected the policy JSON file input");
+  const file = new window.File([source], "policy.json", { type: "application/json" });
+  await act(async () => {
+    Object.defineProperty(input, "files", { value: [file], configurable: true });
+    input.dispatchEvent(new window.Event("change", { bubbles: true }));
+    await sleep(60);
+  });
+}
+
 async function settle(ms = 60): Promise<void> {
   await act(async () => {
     await sleep(ms);
@@ -406,6 +446,67 @@ test("broadcast refusal: reported as refused, never as landed", async () => {
       false,
       "the form still offers a retry",
     );
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test("imported cap one unit past i128 is refused before the draft can be staged", async () => {
+  const harness = await renderForm({});
+  try {
+    const parsed = JSON.parse(importablePolicyJson());
+    parsed.max_amount_per_tx = "170141183460469231731687303715884105728";
+    await importPolicyFile(harness.container, JSON.stringify(parsed));
+
+    assert.match(harness.container.textContent ?? "", /Policy import failed: max_amount_per_tx:/);
+    assert.match(harness.container.textContent ?? "", /maximum supported/);
+    assert.equal(
+      (harness.container.textContent ?? "").includes("Preview imported policy draft"),
+      false,
+    );
+
+    await act(async () => {
+      button(harness.container, "Sign and install policy").click();
+    });
+    await settle();
+    assertNoWrite(harness.fake.calls, "an imported draft never reached sign or broadcast");
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test("malformed, unsupported and wrong-network imports never reach the transport", async () => {
+  const harness = await renderForm({});
+  try {
+    const malformedAsset = JSON.parse(importablePolicyJson());
+    malformedAsset.assets = ["not-an-address"];
+    const malformedProtocol = JSON.parse(importablePolicyJson());
+    malformedProtocol.allowed_protocols = [{ contract: "not-an-address", functions: null }];
+    const unsupportedVersion = JSON.parse(importablePolicyJson());
+    unsupportedVersion.version = 99;
+
+    const files = [
+      { source: JSON.stringify(malformedAsset), expected: /assets\[0\]/ },
+      { source: JSON.stringify(malformedProtocol), expected: /allowed_protocols\[0\]\.contract/ },
+      { source: JSON.stringify(unsupportedVersion), expected: /Unknown schema version/ },
+      { source: importablePolicyJson("mainnet"), expected: /targets "mainnet"/ },
+    ];
+
+    for (const file of files) {
+      await importPolicyFile(harness.container, file.source);
+      assert.match(harness.container.textContent ?? "", /Policy import failed:/);
+      assert.match(harness.container.textContent ?? "", file.expected);
+      assert.equal(
+        (harness.container.textContent ?? "").includes("Preview imported policy draft"),
+        false,
+      );
+    }
+
+    await act(async () => {
+      button(harness.container, "Sign and install policy").click();
+    });
+    await settle();
+    assertNoWrite(harness.fake.calls, "no invalid import reached sign or broadcast");
   } finally {
     await harness.unmount();
   }

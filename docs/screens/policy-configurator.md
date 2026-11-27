@@ -11,6 +11,8 @@ Interactive no-code form for configuring smart account guardrails:
 - **Active Execution Windows**: Restricts execution to specific ledger timestamp intervals.
 - **Pause Switch**: Global pause switch for routine maintenance.
 - **Dead-Man Grace Window**: Configures maximum allowable inactivity period in seconds.
+- **Effective Defaults**: Each optional field shows the contract-defined meaning of leaving it blank or off, linked to the [contracts SPEC](https://github.com/Stellar-Agent-Guard/stellar-agent-guard-contracts/blob/main/SPEC.md#validation-rules-and-accepted-but-inert-configurations). Examples: a blank cap encodes the zero/disabled sentinel, an empty asset or protocol list blocks that class of call, and blank active bounds impose no time restriction.
+- **Validation Summary**: Before `Review`, every invalid field is listed with a link to its input. Selecting a link focuses the input, reveals the same inline message, and announces it through the live region. Imported policy JSON and presets pass through this same draft validation before any wallet prompt.
 - **Network Context & RPC Configuration**: Shows active network and sanitized RPC hostname with credential redaction. Features role separation between read-only RPC reads and wallet write destinations, an operator-controlled read-only endpoint probe, and explicit confirmation before write network changes.
 - **Change Review**: Before the wallet is prompted, a diff modal lists every field that actually changes —
   fields identical to the installed policy are not shown, and an entirely identical policy says so instead

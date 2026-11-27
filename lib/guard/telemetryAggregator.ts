@@ -251,8 +251,19 @@ export function formatStroops(amount: bigint): string {
   return negative ? `-${grouped}` : grouped;
 }
 
-/** The one-sentence summary used as the chart's accessible name. */
-export function describeAggregate(aggregate: TelemetryAggregate): string {
+/**
+ * The one-sentence summary used as the chart's accessible name.
+ *
+ * `spendUnavailable` replaces the settled-spend clause with an explicit failure.
+ * A failed on-chain window read must not be summarised as "0 stroops settled":
+ * for a guard console, "nothing was spent" and "the read failed" are opposite
+ * facts, and the accessible name is the only place some operators will ever see
+ * the difference (issue #532).
+ */
+export function describeAggregate(
+  aggregate: TelemetryAggregate,
+  options: { spendUnavailable?: boolean } = {},
+): string {
   const { totals } = aggregate;
   const window = CHART_WINDOWS[aggregate.window].label.toLowerCase();
   const minutes = aggregate.bucketMs / MINUTE;
@@ -269,7 +280,9 @@ export function describeAggregate(aggregate: TelemetryAggregate): string {
   const parts = [
     `${window[0]!.toUpperCase()}${window.slice(1)} in ${aggregate.buckets.length} ${size} intervals`,
     `${totals.allowed} allowed and ${totals.blocked} blocked decision${totals.allowed + totals.blocked === 1 ? "" : "s"}`,
-    `${formatStroops(totals.spend)} stroops settled across ${totals.spendCount} spend${totals.spendCount === 1 ? "" : "s"}`,
+    options.spendUnavailable
+      ? "settled spend unavailable because the guard's on-chain rolling window could not be read"
+      : `${formatStroops(totals.spend)} stroops settled across ${totals.spendCount} spend${totals.spendCount === 1 ? "" : "s"}`,
   ];
   if (busiest)
     parts.push(

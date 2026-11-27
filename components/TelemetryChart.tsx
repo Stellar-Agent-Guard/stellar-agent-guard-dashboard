@@ -14,7 +14,7 @@
  * is in a real table below the chart.
  */
 
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   CHART_WINDOWS,
   aggregateTelemetry,
@@ -46,6 +46,11 @@ export function TelemetryChart() {
   const [windowKey, setWindowKey] = useState<ChartWindow>("1h");
   const [now, setNow] = useState<number>(() => Date.now());
   const [active, setActive] = useState<number | null>(null);
+  // The alternate view is a toggle rather than a <details>: an explicit button
+  // with `aria-expanded` is focusable, keyboard-operable and verifiable in the
+  // DOM, which is what the issue asks of the non-visual route into the data.
+  const [tableOpen, setTableOpen] = useState(false);
+  const tableToggleRef = useRef<HTMLButtonElement>(null);
 
   // Real time: keep the window sliding even when no new events arrive.
   useEffect(() => {
@@ -57,6 +62,15 @@ export function TelemetryChart() {
     if (!snapshot || snapshot.guard !== guard || !snapshot.window.ok) return [];
     return snapshot.window.value?.entries ?? [];
   }, [snapshot, guard]);
+
+  // A failed on-chain window read is surfaced, not rendered as zero spend: a
+  // zero the console cannot vouch for is indistinguishable from "nothing was
+  // spent", which is the one mistake a guard console must not make.
+  const spendUnavailable = snapshot != null && snapshot.guard === guard && !snapshot.window.ok;
+  const spendError =
+    snapshot != null && snapshot.guard === guard && !snapshot.window.ok
+      ? snapshot.window.error
+      : null;
 
   const aggregate = useMemo(
     () =>
@@ -77,8 +91,12 @@ export function TelemetryChart() {
   const barWidth = Math.max(2, slot * 0.62);
   const countScale = Math.max(1, maxCount);
   const countTicks = niceTicks(countScale);
-  const summary = describeAggregate(aggregate);
+  const summary = describeAggregate(aggregate, { spendUnavailable });
   const focused = active === null ? null : (buckets[active] ?? null);
+  const hasData = buckets.some(
+    (bucket) =>
+      bucket.allowed > 0 || bucket.blocked > 0 || bucket.other > 0 || bucket.spendCount > 0,
+  );
 
   const spendPoints = buckets.map((bucket, index) => {
     const x = PAD.left + slot * index + slot / 2;
@@ -149,6 +167,25 @@ export function TelemetryChart() {
           <span className="tchart-key tchart-spend" /> settled spend (stroops)
         </span>
       </div>
+
+      {spendUnavailable && (
+        <div className="notice warn" role="status" data-testid="tchart-spend-error">
+          <strong>Settled spend could not be read</strong>
+          <span className="tiny">
+            The guard&apos;s on-chain rolling window did not answer, so spend is marked unavailable
+            rather than shown as zero. Decision counts below come from the telemetry feed and are
+            unaffected.
+          </span>
+          {spendError && <span className="tiny mono">{spendError}</span>}
+        </div>
+      )}
+
+      {!hasData && (
+        <p className="tiny muted" data-testid="tchart-empty" style={{ margin: "6px 0 0" }}>
+          No guard decisions or settled spends in this window yet. Every interval is still listed in
+          the data table, as zero.
+        </p>
+      )}
 
       <div className="tchart-frame">
         <svg
@@ -251,7 +288,11 @@ export function TelemetryChart() {
             }}
             aria-hidden="true"
           >
-            <BucketReadout bucket={focused} timeZone={aggregate.timeZone} />
+            <BucketReadout
+              bucket={focused}
+              timeZone={aggregate.timeZone}
+              spendUnavailable={spendUnavailable}
+            />
           </div>
         )}
       </div>
@@ -267,13 +308,40 @@ export function TelemetryChart() {
 
       {/* Keyboard readout for screen readers, mirroring the hover tooltip. */}
       <div className="visually-hidden" role="status" aria-live="polite">
-        {focused ? readoutText(focused, aggregate.timeZone) : ""}
+        {focused ? readoutText(focused, aggregate.timeZone, spendUnavailable) : ""}
       </div>
 
-      <details style={{ marginTop: 8 }}>
-        <summary className="tiny">Data table</summary>
-        <div className="scrolly">
-          <table className="chart-data">
+      <button
+        ref={tableToggleRef}
+        type="button"
+        className="secondary"
+        style={{ marginTop: 8 }}
+        aria-expanded={tableOpen}
+        aria-controls="tchart-data-table"
+        data-testid="tchart-data-toggle"
+        onClick={() => {
+          const next = !tableOpen;
+          setTableOpen(next);
+          // Closing removes the region the focus may be inside; return focus to
+          // the control that closed it rather than dropping the operator at
+          // the top of the document.
+          if (!next) tableToggleRef.current?.focus();
+        }}
+      >
+        {tableOpen ? "Hide data table" : "Show data table"}
+      </button>
+      {/* The region is focusable so the table, and its horizontal scroll at
+          high zoom, can be reached without a mouse. */}
+      {tableOpen && (
+        <div
+          id="tchart-data-table"
+          className="scrolly"
+          role="region"
+          aria-label="Chart data table, every interval in this window"
+          tabIndex={0}
+          data-testid="tchart-data-view"
+        >
+          <table className="chart-data" data-spend-state={spendUnavailable ? "unavailable" : "ok"}>
             <caption className="visually-hidden">{summary}</caption>
             <thead>
               <tr>
@@ -294,19 +362,29 @@ export function TelemetryChart() {
                   <td>{bucket.allowed}</td>
                   <td>{bucket.blocked}</td>
                   <td>{bucket.other}</td>
-                  <td className="mono tiny">{formatStroops(bucket.spend)}</td>
-                  <td>{bucket.spendCount}</td>
+                  <td className="mono tiny">
+                    {spendUnavailable ? "unavailable" : formatStroops(bucket.spend)}
+                  </td>
+                  <td>{spendUnavailable ? "unavailable" : bucket.spendCount}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </details>
+      )}
     </section>
   );
 }
 
-function BucketReadout({ bucket, timeZone }: { bucket: ChartBucket; timeZone: string }) {
+function BucketReadout({
+  bucket,
+  timeZone,
+  spendUnavailable,
+}: {
+  bucket: ChartBucket;
+  timeZone: string;
+  spendUnavailable: boolean;
+}) {
   return (
     <>
       <div className="mono tiny">
@@ -320,18 +398,27 @@ function BucketReadout({ bucket, timeZone }: { bucket: ChartBucket; timeZone: st
       </div>
       <div>
         <span className="tchart-key tchart-spend" />{" "}
-        <span className="mono">{formatStroops(bucket.spend)}</span> stroops
-        {bucket.spendCount > 0 &&
-          ` (${bucket.spendCount} spend${bucket.spendCount === 1 ? "" : "s"})`}
+        {spendUnavailable ? (
+          "settled spend unavailable"
+        ) : (
+          <>
+            <span className="mono">{formatStroops(bucket.spend)}</span> stroops
+            {bucket.spendCount > 0 &&
+              ` (${bucket.spendCount} spend${bucket.spendCount === 1 ? "" : "s"})`}
+          </>
+        )}
       </div>
     </>
   );
 }
 
-function readoutText(bucket: ChartBucket, timeZone: string): string {
+function readoutText(bucket: ChartBucket, timeZone: string, spendUnavailable: boolean): string {
   return (
     `${formatInstant(bucket.start, timeZone)} to ${formatInstant(bucket.end, timeZone)}: ` +
-    `${bucket.allowed} allowed, ${bucket.blocked} blocked, ${formatStroops(bucket.spend)} stroops settled.`
+    `${bucket.allowed} allowed, ${bucket.blocked} blocked, ` +
+    (spendUnavailable
+      ? "settled spend unavailable because the on-chain window could not be read."
+      : `${formatStroops(bucket.spend)} stroops settled.`)
   );
 }
 

@@ -117,6 +117,18 @@ async function getNetworkPassphrase(): Promise<{ network: string; passphrase: st
 export function freighterSigner(address: string, networkPassphrase: string): WalletSigner {
   return {
     address,
+    // Both halves of the write binding are exposed: the passphrase the review
+    // was built for, and a silent live read of the one the wallet reports now
+    // (issue #519). `null` means the extension is gone, which the write
+    // boundary maps to a recoverable disconnect.
+    networkPassphrase,
+    currentNetwork: async (): Promise<string | null> => {
+      try {
+        return (await getNetworkPassphrase()).passphrase;
+      } catch {
+        return null;
+      }
+    },
     // Freighter answers `getAddress` silently once access was granted, so the
     // write path can re-check who is active without raising a prompt (#340).
     // `null` means the extension is gone, which submit.ts treats as a

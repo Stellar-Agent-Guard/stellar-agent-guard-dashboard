@@ -91,6 +91,20 @@ export interface WalletSigner {
    * account it was built for (issue #340).
    */
   currentAddress?: () => Promise<string | null>;
+  /**
+   * The network passphrase this signer was built for, when it knows one.
+   *
+   * Browser signers set it so a write boundary can prove the wallet is still on
+   * the reviewed network; a headless keypair signer omits it and the check is
+   * skipped, because nothing can move underneath it (issue #519).
+   */
+  networkPassphrase?: string;
+  /**
+   * Read the wallet's *live* network passphrase, or null when the provider is
+   * gone. An empty string means the provider answered without a network, which
+   * the boundary treats as a mismatch rather than as agreement.
+   */
+  currentNetwork?: () => Promise<string | null>;
 }
 
 export type InvokeResult =
@@ -612,6 +626,8 @@ export async function writeBoundary(
       boundAddress: signer.address,
       phase,
       readAddress: signer.currentAddress,
+      ...(signer.networkPassphrase === undefined ? {} : { boundNetwork: signer.networkPassphrase }),
+      ...(signer.currentNetwork === undefined ? {} : { readNetwork: signer.currentNetwork }),
     });
     return null;
   } catch (error) {

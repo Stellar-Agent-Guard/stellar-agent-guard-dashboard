@@ -32,6 +32,7 @@
   - [Evaluating Third-Party Endpoints](guides/evaluating-rpc-endpoints.md)
   - [Keyboard & Screen-Reader Guide](guides/keyboard-and-screen-reader.md)
   - [Registry Backups vs. On-Chain State](guides/registry-backups.md)
+  - [Wallet Update Recovery](guides/wallet-recovery.md)
 - [Architecture](architecture.md)
 - [Glossary](glossary.md)
 - [Testnet Verification](verification.md)

@@ -663,7 +663,7 @@ export function PanicPanel({ ops }: { ops?: Partial<PanicPanelOps> }) {
       )}
 
       {phase !== "confirming" && (
-        <div className="row" style={{ marginTop: 12 }}>
+        <div className="row critical-actions" style={{ marginTop: 12 }}>
           <button
             className="danger"
             ref={triggerRef}

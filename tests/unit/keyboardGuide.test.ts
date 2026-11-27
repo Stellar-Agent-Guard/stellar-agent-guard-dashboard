@@ -342,7 +342,11 @@ describe("keyboard guide: scope statements stay true", () => {
 
   test("the chart's non-visual alternative exists where the guide points", () => {
     const chart = read("components/TelemetryChart.tsx");
-    assert.match(chart, /<summary className="tiny">Data table<\/summary>/);
+    // The alternative is a labelled toggle button, not a <details> disclosure:
+    // it is focusable, keyboard-operable and exposes its own expanded state.
+    assert.match(chart, /data-testid="tchart-data-toggle"/);
+    assert.match(chart, /aria-expanded=\{tableOpen\}/);
+    assert.match(chart, /role="region"/);
     assert.match(chart, /role="status" aria-live="polite"/);
     assert.match(chart, /tabIndex=\{0\}/);
   });

@@ -35,6 +35,14 @@ export type WriteInterruption =
       expected: string;
       /** The address the wallet is on now. */
       actual: string;
+    }
+  | {
+      kind: "network-changed";
+      phase: WritePhase;
+      /** The network passphrase the review was built for. */
+      expected: string;
+      /** The network passphrase the wallet reports now (empty when unknown). */
+      actual: string;
     };
 
 /** Only the last four characters of an address ever appear in UI copy. */
@@ -88,25 +96,62 @@ export async function revalidateWallet(params: {
   boundAddress: string;
   phase: WritePhase;
   readAddress?: (() => Promise<string | null>) | undefined;
+  /**
+   * The network passphrase the review was built for. Headless signers do not
+   * carry one, and omitting it skips the network half of the check.
+   */
+  boundNetwork?: string | undefined;
+  /**
+   * The signer's live network reader. Omitted for a provider that cannot report
+   * one without a prompt; the address check still applies.
+   */
+  readNetwork?: (() => Promise<string | null>) | undefined;
 }): Promise<void> {
   const readAddress = params.readAddress;
-  if (!readAddress) return;
+  const readNetwork = params.readNetwork;
+  if (!readAddress && !readNetwork) return;
 
-  let actual: string | null;
+  if (readAddress) {
+    let actual: string | null;
+    try {
+      actual = await readAddress();
+    } catch {
+      throw new WriteInterruptionError({ kind: "wallet-disconnected", phase: params.phase });
+    }
+    if (!actual) {
+      throw new WriteInterruptionError({ kind: "wallet-disconnected", phase: params.phase });
+    }
+    if (actual !== params.boundAddress) {
+      throw new WriteInterruptionError({
+        kind: "account-changed",
+        phase: params.phase,
+        expected: params.boundAddress,
+        actual,
+      });
+    }
+  }
+
+  // The account and the network are the two inputs that make a signature mean
+  // what the review said it meant (issue #519). An extension update can move
+  // the wallet to another network while the address stays the same, so both are
+  // re-read at every write boundary. Unknown is never treated as agreement.
+  if (!readNetwork || params.boundNetwork === undefined) return;
+  let actualNetwork: string | null;
   try {
-    actual = await readAddress();
+    actualNetwork = await readNetwork();
   } catch {
     throw new WriteInterruptionError({ kind: "wallet-disconnected", phase: params.phase });
   }
-  if (!actual) {
+  if (actualNetwork === null) {
     throw new WriteInterruptionError({ kind: "wallet-disconnected", phase: params.phase });
   }
-  if (actual !== params.boundAddress) {
+  const expectedNetwork = params.boundNetwork.trim();
+  if (actualNetwork.trim() !== expectedNetwork) {
     throw new WriteInterruptionError({
-      kind: "account-changed",
+      kind: "network-changed",
       phase: params.phase,
-      expected: params.boundAddress,
-      actual,
+      expected: expectedNetwork,
+      actual: actualNetwork.trim(),
     });
   }
 }
@@ -187,6 +232,12 @@ export function describeInterruption(interruption: WriteInterruption): string {
   if (interruption.kind === "wallet-disconnected") {
     return `the wallet disconnected during ${PHASE_LABEL[interruption.phase]}`;
   }
+  if (interruption.kind === "network-changed") {
+    return (
+      `the wallet network changed from ${interruption.expected || "an unknown network"} to ` +
+      `${interruption.actual || "an unknown network"} during ${PHASE_LABEL[interruption.phase]}`
+    );
+  }
   return (
     `the wallet account changed from ${shortAddress(interruption.expected)} to ` +
     `${shortAddress(interruption.actual)} during ${PHASE_LABEL[interruption.phase]}`
@@ -203,6 +254,29 @@ export function describeInterruption(interruption: WriteInterruption): string {
 export function recoveryGuidance(interruption: WriteInterruption): RecoveryGuidance {
   const base = { interruption, autoResubmit: false, persistEnvelope: false } as const;
   const phase = interruption.phase;
+
+  if (interruption.kind === "network-changed") {
+    const from = interruption.expected || "an unknown network";
+    const to = interruption.actual || "an unknown network";
+    if (phase === "submission") {
+      return {
+        ...base,
+        headline: `The wallet network changed from ${from} to ${to} as the write was submitted.`,
+        detail:
+          "The transaction was already handed to the network, so it may be on chain — but it was built for the original network, and this console cannot confirm from here whether it was accepted.",
+        nextStep: `Check Transaction history (or the chain) before doing anything else, then switch the wallet back to ${from} and run a fresh review.`,
+        writeMayHaveLanded: true,
+      };
+    }
+    return {
+      ...base,
+      headline: `The wallet network changed from ${from} to ${to} during ${PHASE_LABEL[phase]}.`,
+      detail:
+        "The review was cancelled, so nothing was signed and nothing was broadcast. A signature for another network cannot authorize a call on this one.",
+      nextStep: `Switch the wallet back to ${from} and run a fresh review — the account and the network must both be the ones the review was built for.`,
+      writeMayHaveLanded: false,
+    };
+  }
 
   if (interruption.kind === "account-changed") {
     const from = shortAddress(interruption.expected);

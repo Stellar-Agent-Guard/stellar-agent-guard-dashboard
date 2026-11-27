@@ -777,11 +777,16 @@ export function connectorSigner(
   address: string;
   /** Present only when the provider has a silent live-address read. */
   currentAddress?: () => Promise<string | null>;
+  /** The network the review was built for; re-checked at every write boundary. */
+  networkPassphrase: string;
+  /** The provider's live network read, so a mid-flight switch is caught (#519). */
+  currentNetwork: () => Promise<string | null>;
   signTransaction(transactionXdr: string): Promise<string>;
   signAuthEntry(entryXdr: string): Promise<string>;
 } {
   return {
     address,
+    networkPassphrase,
     ...(connector.currentAddress
       ? {
           // A reader that throws means the provider is gone; submit.ts maps that
@@ -795,6 +800,16 @@ export function connectorSigner(
           },
         }
       : {}),
+    // `getNetwork` is a silent read for all three providers, so the write path
+    // can prove the wallet has not been moved to another network since review.
+    // An empty passphrase is returned as-is: unknown must never look like a match.
+    currentNetwork: async (): Promise<string | null> => {
+      try {
+        return (await connector.getNetwork()).passphrase ?? "";
+      } catch {
+        return null;
+      }
+    },
     async signTransaction(transactionXdr: string): Promise<string> {
       try {
         return await connector.signTransaction(transactionXdr, { networkPassphrase, address });

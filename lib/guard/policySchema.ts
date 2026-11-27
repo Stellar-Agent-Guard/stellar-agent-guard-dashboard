@@ -164,6 +164,21 @@ function formatPath(path: ReadonlyArray<PropertyKey>): string {
   }, "");
 }
 
+const IMPORT_PATHS: Readonly<Record<keyof PolicyDraft, string>> = {
+  perTxCap: "max_amount_per_tx",
+  windowCap: "window_cap",
+  windowSecs: "window_seconds",
+  assets: "assets",
+  assetCaps: "per_asset_caps",
+  recipients: "denied_recipients",
+  allowAnyRecipient: "allow_any_recipient",
+  protocols: "allowed_protocols",
+  activeFrom: "active_from",
+  activeUntil: "active_until",
+  paused: "paused",
+  dmsGraceSecs: "dead_man_switch_seconds",
+};
+
 // ---------------------------------------------------------------------------
 // Export: PolicyConfig + asset caps + network -> PolicyExportV2 -> JSON text
 // ---------------------------------------------------------------------------
@@ -319,6 +334,17 @@ export function importPolicyFromJson(
     maxCapStroops: row.max_cap_stroops,
     symbol: row.symbol,
   }));
+
+  const built = buildPolicyConfig(draft);
+  if (!built.ok) {
+    return {
+      ok: false,
+      issues: built.issues.map((issue) => ({
+        path: IMPORT_PATHS[issue.field],
+        message: issue.message,
+      })),
+    };
+  }
 
   return { ok: true, draft };
 }

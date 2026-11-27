@@ -33,6 +33,14 @@ import {
   type NetworkSwitchOutcome,
 } from "../lib/guard/networkSwitch.ts";
 import { OBSERVER_BADGE_LABEL, WRITE_DISABLED_HINT } from "../lib/guard/observerMode.ts";
+import {
+  WALLET_EXTENSION_UPDATE_GUIDE,
+  WALLET_RECOVERY_ANCHOR,
+  WALLET_RECOVERY_LINK_LABEL,
+  WALLET_VS_CHAIN,
+  recoveryAnchorHref,
+  walletRecoveryFor,
+} from "../lib/guard/walletRecovery.ts";
 import { usePrivacy } from "../lib/guard/privacyStore.ts";
 import {
   clearWriteInterruption,
@@ -307,6 +315,9 @@ export function WalletBar() {
                 Nothing is resubmitted automatically. Review the call again once the wallet is back
                 on the original account.
               </span>
+              <a className="tiny" href={recoveryAnchorHref()}>
+                {WALLET_RECOVERY_LINK_LABEL}
+              </a>
             </div>
           )}
 
@@ -314,7 +325,7 @@ export function WalletBar() {
             <div className="notice warn" role="alert" data-testid="network-mismatch">
               <strong>{describeMismatch(networkMismatch)}</strong>
               <span className="tiny">{mismatchExplanation(networkMismatch)}</span>
-              <div className="row" style={{ marginTop: 8 }}>
+              <div className="row critical-actions" style={{ marginTop: 8 }}>
                 <button onClick={() => void switchNetwork().then(setSwitchOutcome)}>
                   {switchButtonLabel(networkMismatch)}
                 </button>
@@ -357,7 +368,57 @@ export function WalletBar() {
                 : `The wallet disconnects after ${Math.round(session.timeoutMs / 60000)} minute(s) of inactivity, with a 60s warning first.`}
             </span>
           </label>
-          {walletError && <ErrorBlock title="Wallet connection" detail={walletError} />}
+          {walletError && (
+            <>
+              <ErrorBlock title="Wallet connection" detail={walletError} />
+              {walletRecoveryFor(walletError) && (
+                <a className="tiny" href={recoveryAnchorHref()} data-testid="wallet-error-recovery">
+                  {WALLET_RECOVERY_LINK_LABEL}
+                </a>
+              )}
+            </>
+          )}
+
+          {/*
+           * Wallet recovery (issue #518): reachable from every wallet error, and
+           * open to anyone whose extension updated while this tab was open. The
+           * steps never ask for a secret, and the wallet/chain table exists so a
+           * stale local state is not mistaken for a chain fact.
+           */}
+          <details
+            id={WALLET_RECOVERY_ANCHOR}
+            className="notice info"
+            style={{ marginTop: 12 }}
+            data-testid="wallet-recovery"
+          >
+            <summary className="tiny" style={{ cursor: "pointer" }}>
+              {WALLET_EXTENSION_UPDATE_GUIDE.headline} — safe reconnect and verification
+            </summary>
+            <span className="tiny">{WALLET_EXTENSION_UPDATE_GUIDE.why}</span>
+            <ol className="tiny" style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+              {WALLET_EXTENSION_UPDATE_GUIDE.reconnect.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+            <strong className="tiny" style={{ marginTop: 10 }}>
+              Verify before you sign anything
+            </strong>
+            <ul className="tiny" style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+              {WALLET_EXTENSION_UPDATE_GUIDE.verification.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ul>
+            <strong className="tiny" style={{ marginTop: 10 }}>
+              Wallet state is not chain state
+            </strong>
+            <ul className="tiny" style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+              {WALLET_VS_CHAIN.map((row) => (
+                <li key={row.label}>
+                  <strong>{row.label}:</strong> {row.detail}
+                </li>
+              ))}
+            </ul>
+          </details>
         </div>
       </div>
 

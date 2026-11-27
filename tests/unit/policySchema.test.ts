@@ -276,6 +276,47 @@ test("importPolicyFromJson accepts a valid large positive whole number", () => {
   assert.equal(result.draft.perTxCap, "999999999999");
 });
 
+test("importPolicyFromJson accepts the exact i128 boundary for a cap", () => {
+  const parsed = JSON.parse(exportPolicyToJson(fullConfig, assetCaps));
+  parsed.max_amount_per_tx = "170141183460469231731687303715884105727";
+  const result = importPolicyFromJson(JSON.stringify(parsed));
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.draft.perTxCap, "170141183460469231731687303715884105727");
+});
+
+test("importPolicyFromJson rejects a cap one unit past the i128 boundary through draft validation", () => {
+  const parsed = JSON.parse(exportPolicyToJson(fullConfig, assetCaps));
+  parsed.max_amount_per_tx = "170141183460469231731687303715884105728";
+  const result = importPolicyFromJson(JSON.stringify(parsed));
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  const capIssue = result.issues.find((issue) => issue.path === "max_amount_per_tx");
+  assert.ok(capIssue, 'expected a validation issue at path "max_amount_per_tx"');
+  assert.match(capIssue!.message, /maximum supported/);
+});
+
+test("importPolicyFromJson rejects cross-field draft errors with their JSON paths", () => {
+  const parsed = JSON.parse(exportPolicyToJson(fullConfig, assetCaps));
+  parsed.window_seconds = "";
+  const result = importPolicyFromJson(JSON.stringify(parsed));
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  const windowIssue = result.issues.find((issue) => issue.path === "window_seconds");
+  assert.ok(windowIssue, 'expected a validation issue at path "window_seconds"');
+  assert.match(windowIssue!.message, /non-zero window length/);
+});
+
+test("importPolicyFromJson rejects a recipient lockout instead of staging an unusable draft", () => {
+  const parsed = JSON.parse(exportPolicyToJson(fullConfig, assetCaps));
+  parsed.denied_recipients = [];
+  parsed.allow_any_recipient = false;
+  const result = importPolicyFromJson(JSON.stringify(parsed));
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.ok(result.issues.some((issue) => issue.path === "denied_recipients"));
+});
+
 test("importPolicyFromJson rejects a file for a different network", () => {
   const result = importPolicyFromJson(
     exportPolicyToJson(fullConfig, assetCaps, "mainnet"),

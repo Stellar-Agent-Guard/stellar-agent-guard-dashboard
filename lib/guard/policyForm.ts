@@ -54,6 +54,130 @@ export const EMPTY_DRAFT: PolicyDraft = {
 const MAX_POLICY_CAP = (1n << 127n) - 1n;
 const MAX_POLICY_SECONDS = (1n << 64n) - 1n;
 
+const CONTRACT_SPEC_URL =
+  "https://github.com/Stellar-Agent-Guard/stellar-agent-guard-contracts/blob/main/SPEC.md";
+
+export const CONTRACT_SOURCE_URLS = {
+  storage: `${CONTRACT_SPEC_URL}#3-storage-model`,
+  decision: `${CONTRACT_SPEC_URL}#4-policy-semantics--decision-table`,
+  dms: `${CONTRACT_SPEC_URL}#5-dead-man-switch--precise-definition`,
+  sac: `${CONTRACT_SPEC_URL}#62-asset-sac-calls--fully-enforced`,
+  protocol: `${CONTRACT_SPEC_URL}#63-protocol-calls--allowlist-only-windowpause-state-still-enforced`,
+  anythingElse: `${CONTRACT_SPEC_URL}#64-anything-else--blocked`,
+  validation: `${CONTRACT_SPEC_URL}#validation-rules-and-accepted-but-inert-configurations`,
+} as const;
+
+export const POLICY_FIELD_LABELS: Readonly<Record<keyof PolicyDraft, string>> = {
+  perTxCap: "Per-transaction cap",
+  windowCap: "Rolling-window cap",
+  windowSecs: "Rolling-window length",
+  assets: "Assets",
+  assetCaps: "Per-asset cap overrides",
+  recipients: "Recipients",
+  allowAnyRecipient: "Allow any recipient",
+  protocols: "Protocols",
+  activeFrom: "Active from",
+  activeUntil: "Active until",
+  paused: "Start paused",
+  dmsGraceSecs: "Dead-man grace",
+};
+
+export function policyFieldInputId(field: keyof PolicyDraft): string {
+  return `policy-input-${field}`;
+}
+
+export interface PolicyDefaultNote {
+  field: keyof PolicyDraft;
+  meaning: string;
+  sourceLabel: string;
+  sourceUrl: string;
+}
+
+export const POLICY_DEFAULT_NOTES: readonly PolicyDefaultNote[] = [
+  {
+    field: "perTxCap",
+    meaning: "Blank encodes per_tx_cap = 0: the contract enforces no per-transfer ceiling.",
+    sourceLabel: "contract §3 / §8",
+    sourceUrl: CONTRACT_SOURCE_URLS.validation,
+  },
+  {
+    field: "windowCap",
+    meaning:
+      "Blank encodes window_cap = 0: the contract enforces no global rolling spend cap; this build does not encode per-asset cap overrides into the policy it writes.",
+    sourceLabel: "contract §3 / §8",
+    sourceUrl: CONTRACT_SOURCE_URLS.validation,
+  },
+  {
+    field: "windowSecs",
+    meaning:
+      "86400 is the contract-model default. Blank encodes 0, which the contract accepts only while no rolling cap needs a window.",
+    sourceLabel: "contract §3 / §8",
+    sourceUrl: CONTRACT_SOURCE_URLS.validation,
+  },
+  {
+    field: "dmsGraceSecs",
+    meaning:
+      "Blank encodes dms_grace_secs = 0: the dead-man switch is disabled, so agent silence never freezes the account.",
+    sourceLabel: "contract §5",
+    sourceUrl: CONTRACT_SOURCE_URLS.dms,
+  },
+  {
+    field: "activeFrom",
+    meaning: "Blank encodes active_from = 0: the contract applies no lower time bound.",
+    sourceLabel: "contract §3 / §4",
+    sourceUrl: CONTRACT_SOURCE_URLS.decision,
+  },
+  {
+    field: "activeUntil",
+    meaning:
+      "Blank encodes active_until = 0: the contract applies no upper time bound, so the policy does not expire.",
+    sourceLabel: "contract §3 / §4",
+    sourceUrl: CONTRACT_SOURCE_URLS.decision,
+  },
+  {
+    field: "assets",
+    meaning:
+      "No SAC assets are allowlisted: the contract classifies SAC transfers as unknown and blocks them, so this is a transfer lock.",
+    sourceLabel: "contract §6.4 / §8",
+    sourceUrl: CONTRACT_SOURCE_URLS.validation,
+  },
+  {
+    field: "assetCaps",
+    meaning:
+      "No overrides are exported. This build does not encode asset_caps into the policy it writes; in the contract model an empty list means allowlisted assets use the global cap.",
+    sourceLabel: "contract §3 / §8",
+    sourceUrl: CONTRACT_SOURCE_URLS.validation,
+  },
+  {
+    field: "recipients",
+    meaning:
+      "With the allowlist on and the list empty, the contract refuses every SAC transfer. With Allow any recipient on, the allowlist is skipped and caps still apply.",
+    sourceLabel: "contract §6.2 / §8",
+    sourceUrl: CONTRACT_SOURCE_URLS.sac,
+  },
+  {
+    field: "allowAnyRecipient",
+    meaning:
+      "Checked encodes allow_any_recipient = true: the contract skips the recipient allowlist, but spend caps still apply.",
+    sourceLabel: "contract §3 / §6.2",
+    sourceUrl: CONTRACT_SOURCE_URLS.sac,
+  },
+  {
+    field: "protocols",
+    meaning:
+      "No protocol contracts are allowlisted: the contract blocks non-asset external calls. Window and pause state still apply to calls that are allowlisted.",
+    sourceLabel: "contract §6.3 / §6.4",
+    sourceUrl: CONTRACT_SOURCE_URLS.protocol,
+  },
+  {
+    field: "paused",
+    meaning:
+      "Checked encodes paused = true: the contract refuses every call until an authorized resume.",
+    sourceLabel: "contract §3 / §4",
+    sourceUrl: CONTRACT_SOURCE_URLS.decision,
+  },
+];
+
 export interface FieldIssue {
   field: keyof PolicyDraft;
   message: string;
