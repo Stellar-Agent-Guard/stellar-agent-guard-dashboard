@@ -4,6 +4,7 @@ import { HeaderRefreshStatus } from "../components/HeaderRefreshStatus.tsx";
 import { SecretKeyGuard } from "../components/SecretKeyGuard.tsx";
 import { Tabs } from "../components/bits.tsx";
 import { AriaAnnouncer } from "../components/AriaAnnouncer.tsx";
+import { TxProgressStatus } from "../components/TxProgressStatus.tsx";
 import { PwaRegistrar } from "../components/PwaRegistrar.tsx";
 import { ThemeProvider } from "../components/ThemeProvider.tsx";
 import { ThemeToggle } from "../components/ThemeToggle.tsx";
@@ -68,6 +69,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <ThemeProvider>
           <PwaRegistrar />
           <AriaAnnouncer />
+          <TxProgressStatus />
           <ToastContainer />
           <SecretKeyGuard />
           <UnsavedChangesProvider>

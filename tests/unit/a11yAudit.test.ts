@@ -12,10 +12,12 @@ import { StatusPanel } from "../../components/StatusPanel.tsx";
 import { TxHistoryTable } from "../../components/TxHistoryTable.tsx";
 import { TelemetryFeed } from "../../components/TelemetryFeed.tsx";
 import { TelemetryChart } from "../../components/TelemetryChart.tsx";
+import { TxProgressStatus } from "../../components/TxProgressStatus.tsx";
 import { GuardContext, GuardEventsContext } from "../../components/GuardProvider.tsx";
 import { POLL_OFF } from "../../lib/guard/feedHealth.ts";
 import { TX_HISTORY_STORAGE_KEY, type TxHistoryEntry } from "../../lib/guard/txHistory.ts";
 import type { GuardSnapshot } from "../../lib/guard/guardOps.ts";
+import { beginTxProgress, resetTxProgress } from "../../lib/guard/txProgress.ts";
 
 type GuardEventsContextValue = NonNullable<ContextType<typeof GuardEventsContext>>;
 
@@ -465,6 +467,26 @@ test("TxHistoryTable passes automated axe-core WCAG 2.1 AA checks", async () => 
     await assertCleanScan(renderGuarded(react.createElement(TxHistoryTable)), "TxHistoryTable");
   } finally {
     window.localStorage.removeItem(TX_HISTORY_STORAGE_KEY);
+  }
+});
+
+test("the transaction status region passes axe-core in every tone (issue #539)", async () => {
+  resetTxProgress();
+  const rendered = await renderPanel(react.createElement(TxProgressStatus));
+  try {
+    assert.deepEqual(await axeViolations(rendered.container), [], "idle region");
+    const run = beginTxProgress("set_policy");
+    await act(async () => {
+      run.stage("signing");
+    });
+    assert.deepEqual(await axeViolations(rendered.container), [], "in-flight region");
+    await act(async () => {
+      run.finish({ kind: "refused", stage: "enforcement" });
+    });
+    assert.deepEqual(await axeViolations(rendered.container), [], "failure region");
+  } finally {
+    await rendered.unmount();
+    resetTxProgress();
   }
 });
 

@@ -10,6 +10,7 @@ derived from [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.
 
 ### Features
 
+- **a11y**: expose transaction progress as a concise status region — each stage spoken once, every line names the operation and the final outcome, envelope contents never announced (Closes #539)
 - **policy**: include network identity and preview imports before applying a draft (Closes #298)
 
 - **guard**: add rotateAgentKey operation function (`552f76b`)

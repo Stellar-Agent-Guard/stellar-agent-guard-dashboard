@@ -437,6 +437,27 @@ export function ExportButton() {
 - Use `"polite"` (default) for routine status changes.
 - Use `"assertive"` exclusively for critical alerts (e.g., emergency freeze confirmation).
 
+#### Transaction progress (`TxProgressStatus`)
+
+Wallet-authorized writes do **not** call `announce()` for their progress. `invokeWithWallet` (in [`lib/guard/submit.ts`](../../lib/guard/submit.ts)) reports through [`lib/guard/txProgress.ts`](../../lib/guard/txProgress.ts), and [`components/TxProgressStatus.tsx`](../../components/TxProgressStatus.tsx) — mounted once in the root layout, next to the announcer — renders it as one concise line:
+
+| When                                                | Region          | Example                                                                       |
+| --------------------------------------------------- | --------------- | ----------------------------------------------------------------------------- |
+| Simulation starts                                   | `role="status"` | `Policy install: simulating`                                                  |
+| First wallet prompt                                 | `role="status"` | `Policy install: waiting for wallet approval`                                 |
+| Broadcast accepted                                  | `role="status"` | `Policy install: submitted, waiting for confirmation`                         |
+| Confirmed / exported                                | `role="status"` | `Policy install confirmed on ledger 201`                                      |
+| Refused / failed / declined / interrupted / errored | `role="alert"`  | `Freeze refused during the guard's enforcement check — nothing was broadcast` |
+
+The rules the tracker enforces (and `tests/unit/txProgress.test.ts` pins):
+
+- **Each stage is spoken once.** Stages only move forward within a run, so a second wallet prompt (authorization entry, then envelope) or a retried simulation stays silent.
+- **Every line names the operation, and every run ends with an outcome** — including a write that throws, so the region never sits on "waiting for wallet approval".
+- **Envelope contents are never spoken.** Lines are built from a fixed vocabulary plus the contract function name, which is used only when it is a plain Soroban symbol. XDR, signatures, arguments, hashes, contract addresses and raw network errors stay on screen in the panel that started the write.
+- A newer write supersedes an older one; the older run's late updates are ignored.
+
+Component-level outcomes that need a chain re-read (for example "Account frozen") are still announced through `announce()` by the panel that verified them.
+
 ### 4. Color-Independent Communication
 
 Never rely on color alone to communicate state:
