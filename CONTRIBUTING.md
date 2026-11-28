@@ -397,3 +397,21 @@ bumps for both `github-actions` and `npm`.
 - Backlog: <https://github.com/aigbagbobila/stellar-agent-guard-dashboard/issues>
 - The org-wide `tier:` / `scope:` label taxonomy is described in the shared
   CONTRIBUTING.md linked above; this repo's scope label is `scope:dashboard`.
+
+## CI: e2e and visual jobs
+
+- Two Playwright jobs run on every push and pull request, on `ubuntu-latest`
+  with Chromium:
+  - **e2e**, the last step of the `ci` job in `.github/workflows/ci.yml`, which runs
+    `npm run test:e2e` (`tests/e2e/`).
+  - **visual regression** (`.github/workflows/visual-tests.yml`), which runs
+    `npm run test:visual` (`tests/visual/`) against the production build.
+- On failure, both jobs upload the Playwright HTML report and `test-results`
+  (traces, screenshots and diffs) as a workflow artifact for triage.
+- Visual baselines are generated in CI only. Do not commit the output of
+  `npm run test:visual:update`; see
+  [Visual regression baselines](#visual-regression-baselines) for the
+  `update-screenshots` flow.
+- Neither job is a required branch-protection check yet. Maintainers should
+  make them required once the suite has shown it is stable (recommended: three
+  consecutive green runs on `main`), as tracked in issue #43.
