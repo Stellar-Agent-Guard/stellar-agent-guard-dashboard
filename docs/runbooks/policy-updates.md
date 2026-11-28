@@ -174,7 +174,25 @@ Do not work around a validation error by leaving a field blank: blank means
 
 ## 6. Pre-flight security checklist
 
+The console screens every address in **Assets**, **Recipients**, **Protocols** and
+**Per-asset cap overrides** against an embedded warning registry of known
+malicious Stellar addresses, and shows a red panel naming any hit while you are
+still editing. See
+[Policy configurator → Flagged-address screening](../screens/policy-configurator.md#flagged-address-screening).
+
+> ⚠️ **A clear screen is not a clean bill.** The registry is a small, dated
+> snapshot compiled into the build, not a live reputation feed. An address it
+> does not list is _unknown here_, not verified — so the checklist below still
+> applies in full.
+
 Tick every box that applies before signing.
+
+- [ ] **The registry check passed, or you know why you are overriding it.** If a
+      red warning appears, open each **verify the report** link and read it. To
+      proceed you must tick the acknowledgement _and_ type `PROCEED`. Overriding is
+      a deliberate, recorded act — do it only because you have verified the
+      address, never because you are in a hurry. Editing the address list after
+      overriding re-arms the gate.
 
 - [ ] **Asset contract IDs verified on Stellar Expert.** For each address in
       **Assets**, open
